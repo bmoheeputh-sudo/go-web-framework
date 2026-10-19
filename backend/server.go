@@ -152,7 +152,12 @@ func newServer(getenv func(string) string) (*application, error) {
 		closeResources()
 		return nil, err
 	}
-	handler, err := newHandlerWithModules(provider, authorization, origin, registry)
+	runtime, err := auth.NewEnvironmentRuntime(provider, getenv("AUTH_CONFIG_DEPLOYMENT"), getenv("APP_ENV"))
+	if err != nil {
+		closeResources()
+		return nil, err
+	}
+	handler, err := newHandlerWithModules(runtime, authorization, origin, registry)
 	if err != nil {
 		closeResources()
 		return nil, err
@@ -161,7 +166,7 @@ func newServer(getenv func(string) string) (*application, error) {
 	// Missing/invalid management configuration yields protected 503 responses;
 	// it must not disable the existing environment-configured login provider.
 	configRepository, _ := authconfig.RepositoryFromEnv(authorization, getenv)
-	authconfig.Register(handler, provider, authorization, origin, configRepository, auth.Provider(getenv("AUTH_PROVIDER")))
+	authconfig.Register(handler.ServeMux, runtime, authorization, origin, configRepository, runtime.Status)
 	return &application{closeResources: closeResources, Server: &http.Server{
 		Addr: address, Handler: handler,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -170,51 +175,32 @@ func newServer(getenv func(string) string) (*application, error) {
 	}}, nil
 }
 
-func newHandler(provider auth.Authenticator) http.Handler {
-	return newHandlerWithAccess(provider, nil, "")
+// The outer wrapper captures authentication once, before any router/middleware.
+// Embedding the mux lets the composition root register management routes too.
+type applicationRouter struct {
+	*http.ServeMux
+	captured http.Handler
 }
 
-func newHandlerWithAccess(provider auth.Authenticator, authorization *access.Store, origin string) *http.ServeMux {
+func (r *applicationRouter) ServeHTTP(w http.ResponseWriter, request *http.Request) {
+	r.captured.ServeHTTP(w, request)
+}
+
+func newHandlerWithAccess(runtime *auth.Runtime, authorization *access.Store, origin string) *applicationRouter {
 	mux := http.NewServeMux()
-	access.Register(mux, provider, authorization, origin)
-	var providerName auth.Provider
-	switch selected := provider.(type) {
-	case *auth.OIDCAuthenticator:
-		providerName = auth.OIDC
-		mux.HandleFunc("GET /api/auth/login", selected.Login)
-		mux.HandleFunc("GET /api/auth/callback", selected.Callback)
-		mux.HandleFunc("POST /api/auth/logout", selected.Logout)
-	case *auth.LocalDevAuthenticator:
-		providerName = auth.LocalDev
-	case *auth.IAPAuthenticator:
-		providerName = auth.GoogleIAP
-	}
-	// Only the provider name is public; no issuer, client configuration or tokens.
-	mux.HandleFunc("GET /api/auth/config", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "no-store")
-		_ = json.NewEncoder(w).Encode(map[string]auth.Provider{"provider": providerName})
-	})
+	access.Register(mux, runtime, authorization, origin)
+	runtime.RegisterRoutes(mux)
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"status": "ok", "service": "go-web-framework",
 		})
 	})
-	mux.Handle("GET /api/auth/me", auth.Require(provider, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		identity, ok := auth.IdentityFromContext(r.Context())
-		if !ok {
-			http.Error(w, "unauthenticated", http.StatusUnauthorized)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(identity)
-	})))
-	return mux
+	return &applicationRouter{ServeMux: mux, captured: runtime.Capture(mux)}
 }
 
 // The core composition root owns both namespaces; modules never receive this mux.
-func newHandlerWithModules(provider auth.Authenticator, authorization *access.Store, origin string, registry *modules.Registry) (*http.ServeMux, error) {
+func newHandlerWithModules(runtime *auth.Runtime, authorization *access.Store, origin string, registry *modules.Registry) (*applicationRouter, error) {
 	if authorization != nil {
 		var err error
 		authorization, err = authorization.WithPermissionDefinitions(registry.PermissionDefinitions())
@@ -222,11 +208,11 @@ func newHandlerWithModules(provider auth.Authenticator, authorization *access.St
 			return nil, err
 		}
 	}
-	moduleHandler, err := registry.Handler(provider, authorization, origin)
+	moduleHandler, err := registry.Handler(runtime, authorization, origin)
 	if err != nil {
 		return nil, err
 	}
-	handler := newHandlerWithAccess(provider, authorization, origin)
+	handler := newHandlerWithAccess(runtime, authorization, origin)
 	handler.Handle("/api/modules", moduleHandler)
 	handler.Handle("/api/modules/", moduleHandler)
 	return handler, nil

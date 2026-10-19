@@ -1,5 +1,7 @@
 {
-  "appName": "Go Web Framework",
+  "appName": "Vopak Enterprise Security",
+  "appShortName": "Enterprise Security",
+  "brandCopyright": "© {{year}} Vopak",
   "dashboard": "لوحة المعلومات",
   "backendStatus": "حالة الخادم",
   "checkingConnection": "جارٍ التحقق من الاتصال بالخادم",

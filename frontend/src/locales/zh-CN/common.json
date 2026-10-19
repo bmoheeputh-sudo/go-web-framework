@@ -1,5 +1,7 @@
 {
-  "appName": "Go Web Framework",
+  "appName": "Vopak Enterprise Security",
+  "appShortName": "Enterprise Security",
+  "brandCopyright": "© {{year}} Vopak",
   "dashboard": "仪表板",
   "backendStatus": "后端状态",
   "checkingConnection": "正在检查后端连接",

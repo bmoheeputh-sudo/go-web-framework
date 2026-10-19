@@ -1,6 +1,7 @@
 package authconfig
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -47,10 +48,10 @@ func httpError(w http.ResponseWriter, err error) {
 	reply(w, status, map[string]string{"error": code})
 }
 
-// Register accepts only server-owned scope/repository and runtime provider name.
+// Register accepts server-owned scope/repository and a request-snapshot status reader.
 // Every repository call rechecks administrator authorization inside AdminTransaction.
 // There is deliberately no HTTP path to ReadSecretPrivileged or activation.
-func Register(mux *http.ServeMux, provider auth.Authenticator, store *access.Store, origin string, repo *Repository, runtimeProvider auth.Provider) {
+func Register(mux *http.ServeMux, provider auth.Authenticator, store *access.Store, origin string, repo *Repository, runtimeStatus func(context.Context) (auth.RuntimeStatus, bool)) {
 	route := func(pattern string, h http.HandlerFunc) {
 		available := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if repo == nil {
@@ -142,6 +143,11 @@ func Register(mux *http.ServeMux, provider auth.Authenticator, store *access.Sto
 		})
 	}
 	route("GET /api/admin/auth/status", func(w http.ResponseWriter, r *http.Request) {
+		status, ok := runtimeStatus(r.Context())
+		if !ok {
+			httpError(w, ErrUnavailable)
+			return
+		}
 		latest, err := repo.List(r.Context(), 0, 1)
 		if err != nil {
 			httpError(w, err)
@@ -166,7 +172,7 @@ func Register(mux *http.ServeMux, provider auth.Authenticator, store *access.Sto
 			ValidationMode  string        `json:"validation_mode"`
 			LatestRevision  *Metadata     `json:"latest_revision"`
 			ActiveRevision  *Metadata     `json:"database_active_revision"`
-		}{runtimeProvider, "environment", true, "offline_static", latestRevision, activeRevision})
+		}{status.Provider, status.Source, true, "offline_static", latestRevision, activeRevision})
 	})
 }
 

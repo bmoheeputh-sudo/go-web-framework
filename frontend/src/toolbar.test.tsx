@@ -259,12 +259,12 @@ describe('floating and bottom sidebar toggles', () => {
       const bottom = document.getElementById('sidebar-toggle-bottom')!
       if (expanded) {
         expect(bottom.textContent).toBe(label)
-        expect(within(header).getByText(resources[language].common.appName)).toBeTruthy()
+        expect(within(header).getByText(resources[language].common.appShortName)).toBeTruthy()
       } else {
         expect(bottom.textContent).toBe('')
-        expect(header.querySelectorAll('svg')).toHaveLength(1)
+        expect(within(header).getByRole('img', { name: resources[language].common.appName })).toBeTruthy()
         expect(header.querySelector('button')).toBeNull()
-        expect(within(header).queryByText(resources[language].common.appName)).toBeNull()
+        expect(within(header).queryByText(resources[language].common.appShortName)).toBeNull()
       }
       // The edge collapses; the bottom control expands the same state.
       const trigger = expanded ? edge : bottom

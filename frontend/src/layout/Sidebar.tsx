@@ -5,7 +5,7 @@ import { alpha, styled, useTheme } from '@mui/material/styles'
 import ChevronLeftRounded from '@mui/icons-material/ChevronLeftRounded'
 import ChevronRightRounded from '@mui/icons-material/ChevronRightRounded'
 import CloseRounded from '@mui/icons-material/CloseRounded'
-import DashboardRounded from '@mui/icons-material/DashboardRounded'
+import ShieldOutlined from '@mui/icons-material/ShieldOutlined'
 import { NavLink, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import type { NavItem } from '../navigation/NavigationRegistry'
@@ -73,8 +73,17 @@ export default function Sidebar({ items, desktop, expanded, mobileOpen, onToggle
     }}>
     <Toolbar sx={{ px: '12px !important', gap: 1, minHeight: '80px !important', height: 80, flexShrink: 0,
       flexWrap: 'nowrap', justifyContent: showLabels ? 'space-between' : 'center' }}>
-      <DashboardRounded color="primary" aria-hidden sx={{ flexShrink: 0 }} />
-      {showLabels && <Typography variant="subtitle2" noWrap sx={{ flex: 1, minWidth: 0 }}>{t('appName')}</Typography>}
+      <Box aria-label={t('appName')} sx={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 0.5,
+        alignItems: showLabels ? 'flex-start' : 'center' }}>
+        {/* Keep the original wide wordmark intact; a white backing preserves contrast in dark mode. */}
+        {showLabels ? <Box sx={{ width: 140, maxWidth: '100%', p: 0.5, bgcolor: 'common.white', borderRadius: 0.5 }}>
+          <Box component="img" src={`${import.meta.env.BASE_URL}assets/vopak-logo.png`} alt="Vopak"
+            width={1182} height={265} sx={{ display: 'block', width: '100%', height: 'auto', objectFit: 'contain' }} />
+        </Box> : <Tooltip title={t('appName')} placement={placement}>
+          <ShieldOutlined color="primary" titleAccess={t('appName')} sx={{ fontSize: 28 }} />
+        </Tooltip>}
+        {showLabels && <Typography variant="subtitle2" noWrap>{t('appShortName')}</Typography>}
+      </Box>
       {!desktop && <Tooltip title={t('closeMenu')} placement={placement}>
         <IconButton aria-label={t('closeMenu')} aria-expanded={mobileOpen} onClick={onClose}
           sx={{ width: 40, height: 40, flexShrink: 0 }}><CloseRounded /></IconButton>
@@ -96,6 +105,11 @@ export default function Sidebar({ items, desktop, expanded, mobileOpen, onToggle
         })}
       </List>
     </Box>
+    {showLabels && <Box data-testid="sidebar-brand-footer" sx={{ flexShrink: 0, px: 2, py: desktop ? 1.5 : 1,
+      borderTop: 1, borderColor: 'divider', color: 'text.secondary' }}>
+      <Typography variant="caption" component="div" noWrap><bdi dir="ltr">{t('brandCopyright', { year: new Date().getFullYear() })}</bdi></Typography>
+      {desktop && <Typography variant="caption" component="div" noWrap>{t('appShortName')}</Typography>}
+    </Box>}
     {desktop && <Box sx={{ flexShrink: 0, p: 1.5, borderTop: 1, borderColor: 'divider', bgcolor: 'background.paper',
       display: 'flex', justifyContent: expanded ? 'flex-end' : 'center' }}>
       <Tooltip title={toggleLabel} placement={placement}>

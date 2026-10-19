@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -56,7 +57,7 @@ func TestDisabledModuleRoutesInApplication(t *testing.T) {
 			if path == "/api/modules" && !authenticated {
 				expected = 401
 			}
-			r := httptest.NewRequest("GET", path, nil)
+			r := moduleRequest("GET", path, nil)
 			r.RemoteAddr = "127.0.0.1:1234"
 			w := httptest.NewRecorder()
 			app.Handler.ServeHTTP(w, r)
@@ -74,16 +75,15 @@ func TestModuleCompositionPreservesExistingRoutes(t *testing.T) {
 	pool, _ := testdb.New(t)
 	testdb.Migrations(t, pool, "up")
 	store := access.New(pool)
-	identity := auth.Identity{Issuer: "https://issuer.test", Subject: "example-user", Provider: auth.OIDC}
+	runtime, identity := moduleTestRuntime(t, "example-user")
 	if _, err := store.Resolve(context.Background(), identity); err != nil {
 		t.Fatal(err)
 	}
-	provider := authenticatorFunc(func(*http.Request) (auth.Identity, error) { return identity, nil })
 	registry, err := modules.New([]module.Module{example.Module{}}, "example")
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := newHandlerWithModules(provider, store, "https://app.example.test", registry)
+	handler, err := newHandlerWithModules(runtime, store, "https://app.example.test", registry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestModuleCompositionPreservesExistingRoutes(t *testing.T) {
 		"/api/modules": 200, "/api/modules/example/info": 403, "/api/modules/disabled/info": 404,
 	} {
 		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+		handler.ServeHTTP(w, moduleRequest("GET", path, nil))
 		if w.Code != expected {
 			t.Fatalf("%s: got %d want %d", path, w.Code, expected)
 		}
@@ -105,25 +105,24 @@ func TestSettingsUsesCompiledModuleCatalog(t *testing.T) {
 	testdb.Migrations(t, pool, "up")
 	ctx := context.Background()
 	store := access.New(pool)
-	identity := auth.Identity{Issuer: "https://issuer.test", Subject: "settings-admin", Provider: auth.OIDC}
+	runtime, identity := moduleTestRuntime(t, "settings-admin")
 	if _, err := store.Resolve(ctx, identity); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Bootstrap(ctx, identity.Issuer, identity.Subject, "development"); err != nil {
 		t.Fatal(err)
 	}
-	provider := authenticatorFunc(func(*http.Request) (auth.Identity, error) { return identity, nil })
 	for _, enabled := range []string{"", "example"} {
 		registry, err := modules.New([]module.Module{example.Module{}}, enabled)
 		if err != nil {
 			t.Fatal(err)
 		}
-		handler, err := newHandlerWithModules(provider, store, "https://app.example.test", registry)
+		handler, err := newHandlerWithModules(runtime, store, "https://app.example.test", registry)
 		if err != nil {
 			t.Fatal(err)
 		}
 		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, httptest.NewRequest("GET", "/api/admin/permissions", nil))
+		handler.ServeHTTP(response, moduleRequest("GET", "/api/admin/permissions", nil))
 		if response.Code != 200 {
 			t.Fatal(response.Code, response.Body.String())
 		}
@@ -143,7 +142,7 @@ func TestSettingsUsesCompiledModuleCatalog(t *testing.T) {
 		if !found {
 			t.Fatal("compiled permission not exposed")
 		}
-		request := httptest.NewRequest("POST", "/api/admin/permissions", strings.NewReader(`{"permission":"example.read"}`))
+		request := moduleRequest("POST", "/api/admin/permissions", strings.NewReader(`{"permission":"example.read"}`))
 		request.Header.Set("Origin", "https://app.example.test")
 		request.Header.Set("Content-Type", "application/json")
 		response = httptest.NewRecorder()
@@ -161,10 +160,34 @@ func TestSettingsUsesCompiledModuleCatalog(t *testing.T) {
 				t.Fatal("registration must return JSON", err)
 			}
 			response = httptest.NewRecorder()
-			handler.ServeHTTP(response, httptest.NewRequest("GET", "/api/modules/example/info", nil))
+			handler.ServeHTTP(response, moduleRequest("GET", "/api/modules/example/info", nil))
 			if response.Code != 403 {
 				t.Fatal("registration granted access to Admin", response.Code)
 			}
 		}
 	}
+}
+
+// Exercise real Local DEV through the dispatcher; identities remain synthetic.
+func moduleTestRuntime(t *testing.T, subject string) (*auth.Runtime, auth.Identity) {
+	t.Helper()
+	provider, err := auth.NewLocalDev("development", auth.LocalDevConfig{Subject: subject, Email: "test@example.invalid", DisplayName: "Test User"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := auth.NewEnvironmentRuntime(provider, "test", "development")
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := provider.Authenticate(moduleRequest("GET", "/", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runtime, identity
+}
+
+func moduleRequest(method, path string, body io.Reader) *http.Request {
+	r := httptest.NewRequest(method, path, body)
+	r.RemoteAddr = "127.0.0.1:1234"
+	return r
 }

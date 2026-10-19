@@ -26,8 +26,20 @@ const apiSecret = "fake-api-secret-not-a-real-credential"
 
 func configHandler(f *fixture, repo *Repository, provider auth.Authenticator) http.Handler {
 	mux := http.NewServeMux()
-	Register(mux, provider, f.store, apiOrigin, repo, auth.LocalDev)
-	return mux
+	// Repository authorization uses the fixture's verified synthetic identity;
+	// runtime status uses the real request-capture path, never database revisions.
+	local, err := auth.NewLocalDev("development", auth.LocalDevConfig{
+		Subject: "status-only", Email: "status@example.invalid", DisplayName: "Status Fixture",
+	})
+	if err != nil {
+		panic(err)
+	}
+	runtime, err := auth.NewEnvironmentRuntime(local, "installation-a", "development")
+	if err != nil {
+		panic(err)
+	}
+	Register(mux, provider, f.store, apiOrigin, repo, runtime.Status)
+	return runtime.Capture(mux)
 }
 func apiRequest(t *testing.T, handler http.Handler, method, path string, body any, want int) *httptest.ResponseRecorder {
 	t.Helper()

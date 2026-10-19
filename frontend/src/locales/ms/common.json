@@ -1,5 +1,7 @@
 {
-  "appName": "Go Web Framework",
+  "appName": "Vopak Enterprise Security",
+  "appShortName": "Enterprise Security",
+  "brandCopyright": "© {{year}} Vopak",
   "dashboard": "Papan pemuka",
   "backendStatus": "Status pelayan",
   "checkingConnection": "Menyemak sambungan pelayan",

@@ -1,5 +1,5 @@
 import { Suspense, useState } from 'react'
-import { Alert, Box, CircularProgress, Stack, useMediaQuery } from '@mui/material'
+import { Alert, Box, CircularProgress, Stack, Typography, useMediaQuery } from '@mui/material'
 import { useTheme } from '@mui/material/styles'
 import { Outlet, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
@@ -37,15 +37,18 @@ export default function AdminLayout({ items, moduleWarning = false }: { items: r
   }
   return <Box sx={{ display: 'flex', minHeight: '100dvh', width: '100%', minWidth: 0 }}>
     <Sidebar items={visible} desktop={desktop} expanded={expanded} mobileOpen={mobileOpen} onToggle={toggleExpanded} onClose={() => setMenu({ key: location.key, open: false })} />
-    <Box sx={{ flex: 1, minWidth: 0 }}>
+    <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
       <TopBar titleKey={titleKey} desktop={desktop} mobileOpen={mobileOpen} onMenu={() => setMenu({ key: location.key, open: !mobileOpen })} />
-      <Box component="main" sx={{ p: { xs: 2, sm: 3, xl: 4 }, maxWidth: 1600, mx: 'auto', overflowWrap: 'anywhere' }}>
+      <Box component="main" sx={{ flex: 1, width: '100%', p: { xs: 2, sm: 3, xl: 4 }, maxWidth: 1600, mx: 'auto', overflowWrap: 'anywhere' }}>
         <Stack spacing={2} sx={{ mb: loginFailed || logoutFailed || moduleWarning ? 2 : 0 }}>
           {loginFailed && authentication.status !== 'authenticated' && <Alert severity="error">{t('auth:loginFailed')}</Alert>}
           {logoutFailed && <Alert severity="error">{t('auth:logoutFailed')}</Alert>}
           {moduleWarning && <Alert severity="warning">{t('common:modulesUnavailable')}</Alert>}
         </Stack>
         <Suspense fallback={<CircularProgress size={28} aria-label={t('loading')} />}><Outlet /></Suspense>
+      </Box>
+      <Box component="footer" sx={{ flexShrink: 0, px: 2, py: 1.5, textAlign: 'center', color: 'text.secondary', borderTop: 1, borderColor: 'divider' }}>
+        <Typography variant="caption"><bdi dir="ltr">{t('brandCopyright', { year: new Date().getFullYear() })} · {t('appShortName')}</bdi></Typography>
       </Box>
     </Box>
   </Box>

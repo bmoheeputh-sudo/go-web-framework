@@ -1,5 +1,7 @@
 {
-  "appName": "Go Web Framework",
+  "appName": "Vopak Enterprise Security",
+  "appShortName": "Enterprise Security",
+  "brandCopyright": "© {{year}} Vopak",
   "dashboard": "แดชบอร์ด",
   "backendStatus": "สถานะระบบหลังบ้าน",
   "checkingConnection": "กำลังตรวจสอบการเชื่อมต่อระบบหลังบ้าน",

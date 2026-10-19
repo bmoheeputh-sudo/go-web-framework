@@ -85,7 +85,7 @@ func TestIAPStartupAndRoutesWithoutDatabase(t *testing.T) {
 			for path, status := range map[string]int{
 				"/api/health": http.StatusOK, "/api/auth/config": http.StatusOK,
 				"/api/auth/me": http.StatusUnauthorized, "/api/auth/login": http.StatusNotFound,
-				"/api/auth/callback": http.StatusNotFound, "/api/auth/logout": http.StatusNotFound,
+				"/api/auth/callback": http.StatusNotFound, "/api/auth/logout": http.StatusMethodNotAllowed,
 			} {
 				request := httptest.NewRequest("GET", path, nil)
 				request.Header.Set("X-Goog-Authenticated-User-Email", "forged@example.invalid")
@@ -107,11 +107,16 @@ func TestIAPStartupAndRoutesWithoutDatabase(t *testing.T) {
 	}
 }
 
-func TestPublicAuthConfigAndOIDCRouteMethods(t *testing.T) {
-	handler := newHandler(&auth.OIDCAuthenticator{})
+func TestPublicAuthConfigAndStableRouteMethods(t *testing.T) {
+	server, err := newServer(envReader(developmentEnvironment()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.closeResources()
+	handler := server.Handler
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest("GET", "/api/auth/config", nil))
-	if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{"provider":"oidc"}` {
+	if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{"provider":"local_dev"}` {
 		t.Fatal("public auth configuration must contain only the provider name")
 	}
 	for _, request := range []*http.Request{

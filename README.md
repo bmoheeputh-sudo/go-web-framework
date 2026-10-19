@@ -2031,6 +2031,10 @@ forward-only version-5 history is never discarded.
 
 ## Authentication activation persistence (Phase 9.2.5B)
 
+Phase 9.2.5C adds a [request-consistent runtime dispatcher](docs/auth-runtime-dispatcher.md).
+Runtime authentication remains environment-driven; no provider activation,
+switching or multi-instance synchronization is enabled.
+
 Migration 000006 adds deployment activation heads, immutable transition history,
 durable test evidence and explicit session/flow bindings. It creates no active
 provider, enrolls no deployment and leaves environment-driven authentication
