@@ -243,3 +243,58 @@ func TestCapabilitiesDirectResponse(t *testing.T) {
 		}
 	}
 }
+
+func TestMutationRegistration(t *testing.T) {
+	policy := module.AuditPolicy{Action: "example.item.updated"}
+	handler := func(http.ResponseWriter, *http.Request, module.TransactionManager) {}
+	for _, tc := range []struct {
+		name, method string
+		permission   module.Permission
+		policy       module.AuditPolicy
+		handler      module.MutationHandler
+	}{
+		{"unknown permission", "POST", "example.unknown", policy, handler},
+		{"core permission", "POST", "admin.manage", policy, handler},
+		{"read method", "GET", "example.read", policy, handler},
+		{"head method", "HEAD", "example.read", policy, handler},
+		{"nil handler", "POST", "example.read", policy, nil},
+		{"foreign action", "POST", "example.read", module.AuditPolicy{Action: "other.item.updated"}, handler},
+		{"invalid action", "POST", "example.read", module.AuditPolicy{Action: "example.updated"}, handler},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := candidate("example", func(r module.Registrar) error {
+				return r.AccountMutation(tc.method, "/items", tc.permission, tc.policy, tc.handler)
+			})
+			if _, err := New([]module.Module{m}, "example"); err == nil {
+				t.Fatal("unsafe mutation registered")
+			}
+		})
+	}
+	t.Run("disabled registration is not invoked", func(t *testing.T) {
+		m := candidate("example", func(module.Registrar) error { t.Fatal("disabled module executed"); return nil })
+		r, err := New([]module.Module{m}, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, err := r.Handler(fixedAuth{identity: verified("user")}, nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("POST", "/api/modules/example/items", nil))
+		if w.Code != 404 {
+			t.Fatal(w.Code)
+		}
+	})
+	t.Run("mutation conflicts with existing route", func(t *testing.T) {
+		m := candidate("example", func(r module.Registrar) error {
+			if err := r.GlobalRoute("POST", "/items", "example.read", noContent); err != nil {
+				return err
+			}
+			return r.GlobalMutation("POST", "/items", "example.read", policy, handler)
+		})
+		if _, err := New([]module.Module{m}, "example"); err == nil {
+			t.Fatal("conflicting mutation accepted")
+		}
+	})
+}

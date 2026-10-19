@@ -183,15 +183,26 @@ func dbError(err error) error {
 // Serializing mutations makes permission revocation, last-admin guards and writes
 // atomic relative to each other. Authorization is rechecked after acquiring the lock.
 func (s *Store) mutate(ctx context.Context, actor, permission, accountID string, fn func(pgx.Tx) error) error {
+	return s.withMutation(ctx, func(tx pgx.Tx) error {
+		return s.allowed(ctx, tx, actor, permission, accountID)
+	}, fn)
+}
+
+// withMutation is shared by core and module writes, including revocations.
+func (s *Store) withMutation(ctx context.Context, authorize func(pgx.Tx) error, fn func(pgx.Tx) error) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return ErrUnavailable
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(cleanup)
+	}()
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, mutationLock); err != nil {
 		return ErrUnavailable
 	}
-	if err = s.allowed(ctx, tx, actor, permission, accountID); err != nil {
+	if err = authorize(tx); err != nil {
 		return err
 	}
 	if err = fn(tx); err != nil {

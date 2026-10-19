@@ -25,6 +25,8 @@ func validID(id string) bool {
 type route struct {
 	pattern, permission, accountParameter string
 	handler                               http.HandlerFunc
+	mutation                              module.MutationHandler
+	audit                                 module.AuditPolicy
 }
 
 // Registry is immutable after New; callers receive copies of its enabled IDs.
@@ -134,7 +136,34 @@ func (r *registrar) add(method, path string, permission module.Permission, handl
 		r.err = err
 		return err
 	}
-	r.routes = append(r.routes, route{pattern, string(permission), parameter, handler})
+	r.routes = append(r.routes, route{pattern: pattern, permission: string(permission), accountParameter: parameter, handler: handler})
+	return nil
+}
+
+// Mutation routes bind their permission, scope and audit schema at registration.
+func (r *registrar) GlobalMutation(method, path string, permission module.Permission, policy module.AuditPolicy, handler module.MutationHandler) error {
+	return r.mutation(method, path, permission, policy, handler, false)
+}
+func (r *registrar) AccountMutation(method, path string, permission module.Permission, policy module.AuditPolicy, handler module.MutationHandler) error {
+	return r.mutation(method, path, permission, policy, handler, true)
+}
+func (r *registrar) mutation(method, path string, permission module.Permission, policy module.AuditPolicy, handler module.MutationHandler, account bool) error {
+	if r.closed {
+		return errors.New("module registration is closed")
+	}
+	if r.err != nil {
+		return r.err
+	}
+	frozen, err := access.CopyAuditPolicy(r.id, policy)
+	if err != nil || handler == nil || method == "GET" {
+		r.err = errors.New("invalid module mutation or audit policy")
+		return r.err
+	}
+	if err := r.add(method, path, permission, func(http.ResponseWriter, *http.Request) {}, account); err != nil {
+		return err
+	}
+	entry := &r.routes[len(r.routes)-1]
+	entry.mutation, entry.audit = handler, frozen
 	return nil
 }
 
@@ -164,8 +193,12 @@ func (r *Registry) Handler(provider auth.Authenticator, store *access.Store, ori
 	}
 	mux := http.NewServeMux()
 	for _, route := range r.routes {
+		var endpoint http.Handler = route.handler
+		if route.mutation != nil {
+			endpoint = store.BindMutation(route.permission, route.accountParameter, route.audit, route.mutation)
+		}
 		handler := auth.Require(provider, access.ProtectWrites(origin,
-			store.Require(route.permission, route.accountParameter, route.handler)))
+			store.Require(route.permission, route.accountParameter, endpoint)))
 		if err := mount(mux, route.pattern, handler); err != nil {
 			return nil, err
 		}

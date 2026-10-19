@@ -1095,11 +1095,9 @@ listener or using credentials directly. Future domain handlers must constrain
 resource queries by the authorized account ID as well as the resource ID; a URL
 membership check alone is not sufficient for arbitrary stored resources.
 
-This phase does not add a shared module mutation/audit transaction API. Existing
-core mutations retain their transaction-time checks, revocation lock, last-Admin
-protection, and audit behavior. The example performs no writes. Before adding real
-module mutations, preserve those same transaction-time authorization and atomic
-audit requirements; route middleware alone does not solve revocation races.
+Phase 8.2 adds the shared mutation/audit adapter described below. Existing core
+mutations retain their transaction-time checks, revocation lock, last-Admin
+protection, and audit behavior. The shipped example still performs no writes.
 There are no module migrations, automatic permission provisioning, per-module
 roles, background workers, or frontend module routes in this phase.
 
@@ -1111,6 +1109,130 @@ revocation, write-origin protection, database outages, unchanged records on deni
 and composition with existing core routes. Integration tests use the existing
 disposable PostgreSQL harness and the `go_web_app` runtime role, never root `.env`
 settings or the actual development database.
+
+## Shared module transactions and audit (Phase 8.2)
+
+Register writes with `Registrar.AccountMutation` or `Registrar.GlobalMutation`.
+These use the same paths, permissions, origin/JSON protections and authentication
+as `AccountRoute`/`GlobalRoute`, which remain available unchanged. Mutation routes
+accept POST, PUT, PATCH or DELETE, and a registration-time `module.AuditPolicy`.
+They receive a `module.TransactionManager` as the third handler argument.
+Only enabled modules receive managers; registration never provisions permissions
+or grants them to any role, including Admin. `/api/modules` remains unchanged.
+
+The public contract in `backend/module/transaction.go` deliberately removes
+caller-selected permission, action, actor and account parameters:
+
+```go
+type TransactionManager interface {
+    MutateAccount(context.Context, AccountMutateFunc) error
+    MutateGlobal(context.Context, MutateFunc) error
+}
+// AccountMutateFunc receives the validated, route-bound account ID.
+type AccountMutateFunc func(context.Context, Transaction, string) (string, AuditDetails, error)
+type MutateFunc func(context.Context, Transaction) (string, AuditDetails, error)
+```
+
+`Transaction` exposes `Exec`, `Query`, and `QueryRow` methods. Query results use
+a minimal `module.Rows` interface that also omits pgx's connection accessor.
+Use positional scan targets; pgx `RowScanner` callbacks are rejected because they
+receive raw connection-capable rows.
+It does not expose `Commit`, `Rollback`, `Begin`, or the underlying connection.
+The framework captures the verified issuer/subject and framework principal before
+calling the handler, binds the registered permission/action/schema and path account,
+and expires the manager when the request handler returns. Use `r.Context()` or a
+derived context; an unrelated context or another request's manager is rejected.
+A global manager cannot mutate accounts, and an account manager cannot mutate globally.
+The callback receives the authorized account directly, even if request path values,
+query parameters, or bodies are subsequently changed. No new UUID dependency is
+needed: identifiers use the project's existing pgx UUID validation conventions.
+
+For example, after declaring `example.items.write` in the module manifest:
+
+```go
+return routes.AccountMutation("POST", "/items/{item}", "example.items.write",
+    module.AuditPolicy{
+        Action: "example.item.updated",
+        Fields: map[string]module.AuditField{
+            "changed": {Kind: module.AuditBool},
+        },
+    }, updateItem)
+```
+
+Inside `updateItem`, validate and prepare `itemID` and `newValue`, then call:
+
+```go
+err := manager.MutateAccount(r.Context(),
+    func(ctx context.Context, tx module.Transaction, accountID string) (string, module.AuditDetails, error) {
+        tag, err := tx.Exec(ctx,
+            `UPDATE example.items SET value=$1 WHERE id=$2 AND account_id=$3`,
+            newValue, itemID, accountID)
+        if err != nil { return "", nil, err }
+        if tag.RowsAffected() != 1 { return "", nil, errors.New("target not found") }
+        return itemID, module.AuditDetails{"changed": true}, nil
+    })
+```
+
+Handle `err` using `errors.Is` and return the corresponding sanitized HTTP error,
+or return 204 on success. Permission/account denials map to 403; missing identity
+to 401; invalid account input to 400; timeouts to 504; database unavailability to
+503; unexpected callback/audit failures to 500. Do not return raw SQL/callback
+errors or log credentials/payloads.
+
+This is an integration sketch, not an enabled business endpoint or migration.
+For a global operation use `GlobalMutation`, a separately declared permission
+such as `example.settings.write`, action `example.settings.updated`, and
+`MutateGlobal`. Runnable account/global examples are in
+`backend/internal/modules/transaction_integration_test.go`, using disposable test
+tables, prepared parameters, and the `go_web_app` role.
+
+Each call starts a five-second bounded transaction, takes the existing framework
+advisory transaction lock, verifies the active actor against the captured identity,
+and rechecks its explicit permission and (where applicable) active account link.
+This shares the core mutation transaction helper and lock with administrative
+revocations. Business writes and `framework.audit_log` insertion commit together;
+callback errors, audit validation/insertion errors, cancellations and timeouts roll
+back. Rollback cleanup has its own bounded context so a canceled request cannot
+prevent cleanup. There are no automatic mutation retries. Statement execution respects the adapter's deadline even if a callback passes
+`context.Background()`, as well as shorter statement deadlines/cancellation.
+
+Audit actions must be namespaced to the registered module and contain at least
+three segments, such as `example.item.updated`. Targets are required UUIDs.
+Policies are copied at registration. Every approved field is required, and extra
+fields are rejected. Allowed values are UUIDs, booleans, `int`/`int64`, or explicit
+static enum labels. Free-form strings, nested objects, custom serializers, arbitrary
+request bodies and complete external responses are not accepted. Field names and
+enum labels must be reviewed as non-sensitive configuration; a generic map is not
+assumed safe. Secret-bearing field names are rejected. The framework supplies
+`account_id` for account events. Serialized details are limited to 4096 bytes and
+are rejected rather than truncated. Raw database/callback errors are replaced with
+stable `module.TransactionError` values (`errors.Is` works):
+
+- `ErrUnauthenticated`, `ErrPermissionDenied`, `ErrAccountDenied`, `ErrInvalidAccount`
+- `ErrScope`, `ErrTimeout`, `ErrCanceled`, `ErrUnavailable`, `ErrMutation`, `ErrAudit`
+
+Perform external API calls, validation and data preparation **outside** the
+transaction. Keep callbacks **inside** the transaction limited to prepared database
+work; close query rows before returning. A context deadline cannot forcibly stop
+arbitrary blocking Go code or external operations. Do not retain the transaction,
+manager or context, spawn asynchronous callback work, or perform nested mutations.
+
+Modules remain trusted compiled SQL authors. The adapter cannot parse arbitrary
+SQL to prove tenant isolation or sandbox malicious code: every account-owned query
+must explicitly constrain the supplied account ID, including INSERT ownership and
+UPDATE/DELETE predicates. Never issue transaction-control SQL, access framework
+security tables from callbacks, or bypass the adapter via another database pool.
+The single database role is not a per-module isolation boundary. Registration and
+code review must enforce these rules. Core and adapter mutations coordinate through
+the advisory lock; direct operator SQL must also coordinate if concurrent with
+application writes. A connection loss during COMMIT can leave the outcome unknown;
+reconcile business/audit records before considering a retry.
+
+No database changes are required for this adapter. Migrations 000001–000004 are
+unchanged, and no module business tables are installed. Future modules need reviewed,
+version-controlled migrations for their own data tables and explicit permission
+rows/grants, applied manually after approval. Use the existing `framework.audit_log`
+and existing `go_web_app` role; never introduce a second audit table.
 
 ## Backup to GitHub and Google Drive
 
