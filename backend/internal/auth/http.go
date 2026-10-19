@@ -12,7 +12,7 @@ var ErrUnauthenticated = errors.New("unauthenticated")
 // Authenticator resolves the identity for a protected request. It does not impose
 // a shared credential format: IAP can verify its assertion, while OIDC can resolve
 // a session established by separate login/callback handlers. Those flows and
-// session storage are intentionally outside this Phase 1 interface.
+// session storage are intentionally outside this request-authentication interface.
 type Authenticator interface {
 	Authenticate(*http.Request) (Identity, error)
 }

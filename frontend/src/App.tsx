@@ -9,6 +9,7 @@ import {
   Chip,
   CircularProgress,
   Alert,
+  Button,
 } from '@mui/material'
 
 type Identity = {
@@ -46,10 +47,33 @@ function isIdentity(value: unknown): value is Identity {
 function App() {
   const [status, setStatus] = useState('Checking...')
   const [authentication, setAuthentication] = useState<Authentication>({ status: 'loading' })
+  const [oidcEnabled, setOidcEnabled] = useState(false)
+  const [loggingOut, setLoggingOut] = useState(false)
+  const [logoutFailed, setLogoutFailed] = useState(false)
+  const [loginFailed] = useState(() => new URLSearchParams(window.location.search).get('auth_error') === 'login_failed')
 
   useEffect(() => {
     const controller = new AbortController()
     const options = { signal: controller.signal, cache: 'no-store' as const }
+
+    // Callback failures contain only a fixed error marker, never provider details.
+    if (new URLSearchParams(window.location.search).has('auth_error')) {
+      const location = new URL(window.location.href)
+      location.searchParams.delete('auth_error')
+      window.history.replaceState(null, '', location.pathname + location.search + location.hash)
+    }
+
+    fetch('/api/auth/config', options)
+      .then((response) => {
+        if (!response.ok) throw new Error('Authentication configuration unavailable')
+        return response.json()
+      })
+      .then((config) => {
+        if (!controller.signal.aborted) setOidcEnabled(config.provider === 'oidc')
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setOidcEnabled(false)
+      })
 
     fetch('/api/health', options)
       .then((response) => {
@@ -85,6 +109,20 @@ function App() {
     void loadIdentity()
     return () => controller.abort()
   }, [])
+
+  async function logout() {
+    setLoggingOut(true)
+    setLogoutFailed(false)
+    try {
+      const response = await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' })
+      if (!response.ok) throw new Error('Logout failed')
+      setAuthentication({ status: 'unauthenticated' })
+    } catch {
+      setLogoutFailed(true)
+    } finally {
+      setLoggingOut(false)
+    }
+  }
 
   return (
     <>
@@ -122,6 +160,12 @@ function App() {
           </Typography>
 
           <Box aria-live="polite">
+            {loginFailed && authentication.status !== 'authenticated' && (
+              <Alert severity="error" sx={{ mb: 2 }}>Sign-in could not be completed. Please try again.</Alert>
+            )}
+            {logoutFailed && (
+              <Alert severity="error" sx={{ mb: 2 }}>Sign-out failed. Please try again.</Alert>
+            )}
             {authentication.status === 'loading' && (
               <CircularProgress size={24} aria-label="Checking authentication" />
             )}
@@ -146,6 +190,14 @@ function App() {
                   {authentication.identity.email || 'Not provided'}
                 </Typography>
               </Box>
+            )}
+            {oidcEnabled && authentication.status === 'unauthenticated' && (
+              <Button variant="contained" href="/api/auth/login" sx={{ mt: 2 }}>Sign in</Button>
+            )}
+            {authentication.status === 'authenticated' && authentication.identity.provider === 'oidc' && (
+              <Button variant="outlined" onClick={() => void logout()} disabled={loggingOut} sx={{ mt: 2 }}>
+                {loggingOut ? 'Signing out…' : 'Sign out'}
+              </Button>
             )}
           </Box>
         </Paper>

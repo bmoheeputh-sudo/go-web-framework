@@ -58,12 +58,32 @@ func TestLocalDevStartupGuards(t *testing.T) {
 	}
 }
 
-func TestProviderSelectionFailsClosed(t *testing.T) {
+func TestInvalidProviderConfigurationFailsClosed(t *testing.T) {
 	for _, provider := range []string{"oidc", "google_iap", "iap", "LOCAL_DEV", "local_dev ", "unknown"} {
 		values := developmentEnvironment()
 		values["AUTH_PROVIDER"] = provider
 		if _, err := newServer(envReader(values)); err == nil {
 			t.Errorf("unsupported provider %q accepted", provider)
+		}
+	}
+}
+
+func TestPublicAuthConfigAndOIDCRouteMethods(t *testing.T) {
+	handler := newHandler(&auth.OIDCAuthenticator{})
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest("GET", "/api/auth/config", nil))
+	if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{"provider":"oidc"}` {
+		t.Fatal("public auth configuration must contain only the provider name")
+	}
+	for _, request := range []*http.Request{
+		httptest.NewRequest("GET", "/api/auth/logout", nil),
+		httptest.NewRequest("POST", "/api/auth/login", nil),
+		httptest.NewRequest("POST", "/api/auth/callback", nil),
+	} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusMethodNotAllowed {
+			t.Fatal("incorrect method accepted")
 		}
 	}
 }

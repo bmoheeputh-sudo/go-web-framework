@@ -28,3 +28,6 @@ __pycache__/
 # Local credentials
 secure/
 *service-account*.json
+
+# Go Air build artifacts
+backend/tmp/

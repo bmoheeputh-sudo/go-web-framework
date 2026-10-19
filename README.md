@@ -6,7 +6,7 @@ Reusable web application framework.
 - Backend: Go
 - Frontend: React + Material UI
 - Database: PostgreSQL
-- Authentication: Local DEV; OIDC (including Okta) and Google IAP planned
+- Authentication: generic OIDC and Local DEV; Google IAP planned
 - Authorization: RBAC
 - Deployment: Manual
 
@@ -14,7 +14,7 @@ Reusable web application framework.
 - WSL Ubuntu
 - DEV, TEST, PRD environments
 
-## Run locally (authentication Phase 1)
+## Run locally with Local DEV
 
 Requirements: Go matching `backend/go.mod`, and Node/npm compatible with the
 frontend lockfile (the current setup uses Node 20.20 and npm 11). No external
@@ -66,7 +66,7 @@ curl http://127.0.0.1:8080/api/auth/me
 
 | Variable | Purpose |
 | --- | --- |
-| `AUTH_PROVIDER` | Must explicitly be `local_dev` to enable the development identity. Unset means public health only; `/api/auth/me` returns 401. |
+| `AUTH_PROVIDER` | Select `local_dev` or `oidc` explicitly. Unset means public health only; `/api/auth/me` returns 401. |
 | `APP_ENV` | Must exactly equal `development` for Local DEV; TEST, PRD, production, and every other value are rejected at startup. |
 | `HTTP_ADDR` | Defaults to `127.0.0.1:8080`. Local DEV requires a literal loopback IP and a valid port, such as `127.0.0.1:8080` or `[::1]:8080`. |
 | `LOCAL_DEV_SUBJECT` | Required fixed development user identifier; never supplied by the browser. |
@@ -90,15 +90,149 @@ no-store`; unexpected provider failures return a generic error without credentia
 
 The `auth.Authenticator` interface resolves an identity for an HTTP request.
 `auth.Require` validates it and places it in request context for protected handlers.
-There is no universal credential string: future OIDC login/callback handlers will
-verify their own flow and establish a server-side session; an OIDC request
-authenticator can then resolve that session. A future IAP authenticator will verify
-the IAP assertion on each request. These integrations, login/logout flows, and
-PostgreSQL session storage are not implemented in Phase 1. Selecting `oidc` or
-`google_iap` currently fails startup, as do unknown provider names.
+There is no universal credential string: OIDC login/callback handlers verify the
+authorization flow and establish a server-side session; the OIDC authenticator
+resolves that session on subsequent requests. A future IAP authenticator will
+verify the IAP assertion on each request. Google IAP and PostgreSQL session storage
+are not implemented. Selecting `google_iap` or an unknown provider fails startup.
 
 React calls same-origin APIs and receives only the public identity fields. Keep
 backend authentication configuration out of `VITE_*` variables and frontend code.
+
+## Run locally with OIDC (Phase 2)
+
+OIDC uses the maintained `github.com/coreos/go-oidc/v3/oidc` and
+`golang.org/x/oauth2` libraries. It is provider-independent: configure a standards-
+compliant OIDC issuer, rather than an Okta-specific endpoint. The development
+session store is in memory, so **OIDC currently requires `APP_ENV=development`**.
+Other environments are rejected at startup until shared, persistent sessions
+(planned PostgreSQL) and shared login transactions are implemented.
+
+Register a **confidential web application** with your chosen provider, enable
+Authorization Code flow with PKCE S256, allow scopes `openid profile email`, and
+register this exact redirect URI:
+
+```text
+https://localhost:5173/api/auth/callback
+```
+
+Configure your ignored `.env`:
+
+```dotenv
+APP_ENV=development
+AUTH_PROVIDER=oidc
+HTTP_ADDR=127.0.0.1:8080
+OIDC_ISSUER_URL=https://your-issuer.example.invalid
+OIDC_CLIENT_ID=your-registered-client-id
+OIDC_CLIENT_SECRET='replace-with-your-local-client-secret'
+OIDC_REDIRECT_URI=https://localhost:5173/api/auth/callback
+DEV_TLS_CERT_FILE=/absolute/path/outside/repository/localhost.pem
+DEV_TLS_KEY_FILE=/absolute/path/outside/repository/localhost-key.pem
+```
+
+Use the exact issuer advertised by the provider, including any issuer path and
+trailing slash. Discovery, authorization, token, and JWKS URLs must use HTTPS;
+TLS certificate verification is enabled and backend HTTP redirects are rejected.
+Startup rejects missing settings, incompatible discovery metadata, and insecure
+URLs. Discovery requests time out after 10 seconds. Token exchange and signature
+verification share a 20-second callback deadline.
+
+### Local HTTPS
+
+OIDC cookies always have `Secure`, `HttpOnly`, `SameSite=Lax`, and `Path=/`, with
+`__Host-` names and no Domain attribute. There is no insecure-cookie switch.
+Therefore the browser-facing frontend must use HTTPS for OIDC. Local DEV can
+continue using HTTP with the TLS variables left empty.
+
+Use an existing trusted local certificate, or create one with OpenSSL outside the
+repository (do not overwrite an existing key):
+
+```bash
+tls_dir="$HOME/.config/go-web-framework/local-tls"
+mkdir -p "$tls_dir"
+chmod 700 "$tls_dir"
+(
+  umask 077
+  openssl req -x509 -newkey rsa:2048 -sha256 -days 30 -nodes \
+    -keyout "$tls_dir/localhost-key.pem" -out "$tls_dir/localhost.pem" \
+    -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1'
+)
+```
+
+Trust the generated certificate in your development browser/OS and put the two
+absolute paths in `.env`. With WSL, trust it on the host OS where the browser runs.
+This local certificate is for Vite; it does not change trust of your OIDC issuer.
+Do not disable TLS verification. Keep the private key outside Git.
+
+Start the backend from the repository root:
+
+```bash
+set -a
+. ./.env
+set +a
+cd backend
+go run .
+```
+
+In a second terminal, also starting from the repository root, export the environment
+so Vite can read the TLS file paths:
+
+```bash
+set -a
+. ./.env
+set +a
+cd frontend
+npm ci
+npm run dev
+```
+
+Open **`https://localhost:5173`**, matching the redirect URI's scheme, host and port
+exactly. Do not switch between `localhost` and `127.0.0.1`: the host-only cookies
+will not transfer. Vite keeps port 5173 fixed and proxies API requests to the Go
+loopback listener. It reads TLS files only on the server side; backend environment
+variables and secrets are never included in the React bundle.
+
+Click **Sign in**, authenticate at your provider, and check the displayed identity.
+Click **Sign out** to invalidate the application session. The dashboard handles a
+401 as signed out while continuing to show backend health independently.
+
+### OIDC flow and session behavior
+
+| Endpoint | Behavior |
+| --- | --- |
+| `GET /api/health` | Public health check, unchanged. |
+| `GET /api/auth/config` | Public provider name only; lets React show the appropriate controls. |
+| `GET /api/auth/login` | Starts OIDC with random state, nonce, PKCE S256, and a browser-bound login cookie. |
+| `GET /api/auth/callback` | Consumes the one-use transaction, exchanges the code, verifies the signed ID token, and creates a session. |
+| `GET /api/auth/me` | Returns only the shared identity, or HTTP 401 for a missing/expired session. |
+| `POST /api/auth/logout` | Requires the exact configured browser Origin, revokes the session and pending login, and clears cookies. GET is not accepted. |
+
+Login/callback/logout routes are available only with `AUTH_PROVIDER=oidc`. Login
+transactions expire after 10 minutes and contain state, nonce and PKCE verifier
+only on the server. The flow cookie is a separate random value, so a valid state
+alone cannot authenticate a different browser. The callback verifies signature,
+issuer, audience/authorized party, expiration and nonce using discovery metadata
+and JWKS. It accepts query-mode Authorization Code callbacks only. Failures
+redirect to a fixed generic dashboard error; provider details are never displayed.
+Return destinations are fixed, not taken from request parameters.
+
+Sessions contain only the public identity and an expiration. Session cookies are
+opaque random IDs, hashed in the server store, and rotated after successful login.
+Sessions expire at the earlier of eight hours or ID-token expiration; there is no
+silent renewal. ID, access, and refresh tokens are discarded after validation,
+never placed in cookies, React storage, API responses, or application logs.
+Authentication responses disable caching and callbacks suppress referrers.
+
+The memory store is concurrency-safe, cleans expired entries on insertion, and is
+bounded to 4096 sessions and 4096 login transactions. Restarting the backend logs
+everyone out and invalidates pending logins. This is a single-process development
+implementation, **not production session storage**. Production requires shared,
+persistent PostgreSQL sessions, shared atomic login-transaction storage, and a
+deployment review before removing the development-only startup guard.
+
+Sign-out is local to this application. It does not end the identity provider's
+browser session, revoke provider tokens, or implement OIDC federated logout; a
+subsequent sign-in may reuse the provider's existing session.
 
 ### Application checks
 
@@ -110,9 +244,13 @@ npm run build
 npm run lint
 ```
 
-The Go tests cover identity validation, explicit provider selection, environment
-and loopback guards, spoofed identity claims, 401 responses, authenticated identity
-responses, and public health checks. No external identity services are contacted.
+The Go tests cover identity validation, Local DEV guards, OIDC discovery and
+configuration, successful login, PKCE, browser-bound state, nonce, signed tokens,
+issuer/audience/expiry rejection, session rotation/expiration, logout CSRF, and
+unauthenticated access. OIDC integration tests start a temporary loopback HTTPS
+provider with generated signing keys and real JWKS verification; they require
+local socket access but no external identity services or credentials. The race
+check also exercises concurrent session-store access.
 
 ## Backup to GitHub and Google Drive
 
