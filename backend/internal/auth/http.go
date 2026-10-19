@@ -38,6 +38,10 @@ func Require(provider Authenticator, next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "unauthenticated")
 			return
 		}
+		if errors.Is(err, ErrStoreUnavailable) {
+			writeError(w, http.StatusServiceUnavailable, "authentication temporarily unavailable")
+			return
+		}
 		if err != nil || identity.Validate() != nil {
 			writeError(w, http.StatusInternalServerError, "authentication unavailable")
 			return

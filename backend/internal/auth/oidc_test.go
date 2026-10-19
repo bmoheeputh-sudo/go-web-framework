@@ -126,13 +126,13 @@ func (f *testIssuer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *testIssuer) config() OIDCConfig {
-	return OIDCConfig{AppEnv: "development", Issuer: f.server.URL, ClientID: "client-id",
+	return OIDCConfig{AppEnv: "development", Sessions: testSessionConfig(), Issuer: f.server.URL, ClientID: "client-id",
 		ClientSecret: "test-client-secret", RedirectURI: testOrigin + "/api/auth/callback"}
 }
 
 func (f *testIssuer) provider(t *testing.T) *OIDCAuthenticator {
 	t.Helper()
-	p, err := NewOIDC(oidc.ClientContext(context.Background(), f.server.Client()), f.config())
+	p, err := NewOIDC(oidc.ClientContext(context.Background(), f.server.Client()), f.config(), newMemoryStore())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,14 +297,14 @@ func TestOIDCCallbackRejectsInvalidStateAndBrowserBinding(t *testing.T) {
 				q.Set("iss", "https://wrong.example.invalid")
 			case "expired flow", "wrong verifier":
 				key := sha256.Sum256([]byte(cookie.Value))
-				flow := p.store.flows[key]
+				flow := p.store.(*memoryStore).flows[key]
 				if mode == "expired flow" {
 					flow.Expires = time.Now().Add(-time.Hour)
 				} else {
 					flow.Verifier = "wrong"
 					exchangeExpected = true
 				}
-				p.store.flows[key] = flow
+				p.store.(*memoryStore).flows[key] = flow
 			}
 			u.RawQuery = q.Encode()
 			f.mu.Lock()
@@ -357,7 +357,7 @@ func TestOIDCRejectsInvalidTokens(t *testing.T) {
 			p := f.provider(t)
 			callback, cookie := beginLogin(t, f, p)
 			assertFailedCallback(t, finishLogin(p, callback, cookie))
-			if len(p.store.sessions) != 0 {
+			if len(p.store.(*memoryStore).sessions) != 0 {
 				t.Fatal("invalid token established a session")
 			}
 		})
@@ -399,10 +399,10 @@ func TestOIDCLogoutAndUnauthenticatedAccess(t *testing.T) {
 }
 
 func TestOIDCConfigurationValidation(t *testing.T) {
-	valid := OIDCConfig{AppEnv: "development", Issuer: "https://issuer.example.invalid", ClientID: "client", ClientSecret: "secret", RedirectURI: testOrigin + "/api/auth/callback"}
+	valid := OIDCConfig{AppEnv: "development", Sessions: testSessionConfig(), Issuer: "https://issuer.example.invalid", ClientID: "client", ClientSecret: "secret", RedirectURI: testOrigin + "/api/auth/callback"}
 	for _, change := range []func(*OIDCConfig){
-		func(c *OIDCConfig) { c.AppEnv = "production" },
-		func(c *OIDCConfig) { c.AppEnv = "TEST" },
+		func(c *OIDCConfig) { c.AppEnv = "production " },
+		func(c *OIDCConfig) { c.AppEnv = "TEST " },
 		func(c *OIDCConfig) { c.AppEnv = "" },
 		func(c *OIDCConfig) { c.Issuer = "http://issuer.example.invalid" },
 		func(c *OIDCConfig) { c.Issuer += "?query=1" },
@@ -416,11 +416,11 @@ func TestOIDCConfigurationValidation(t *testing.T) {
 	} {
 		config := valid
 		change(&config)
-		if _, err := NewOIDC(context.Background(), config); err == nil {
+		if _, err := NewOIDC(context.Background(), config, newMemoryStore()); err == nil {
 			t.Fatal("invalid configuration accepted")
 		}
 	}
-	if err := valid.validate(); err != nil {
+	if err := valid.Validate(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -449,7 +449,7 @@ func TestOIDCDiscoveryFailsClosed(t *testing.T) {
 			if mode == "untrusted TLS" {
 				ctx = context.Background()
 			}
-			if _, err := NewOIDC(ctx, f.config()); err == nil {
+			if _, err := NewOIDC(ctx, f.config(), newMemoryStore()); err == nil {
 				t.Fatal("unsafe discovery accepted")
 			}
 		})

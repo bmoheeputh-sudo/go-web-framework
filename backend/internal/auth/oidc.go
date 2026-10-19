@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -21,6 +22,8 @@ const (
 
 type OIDCConfig struct {
 	AppEnv, Issuer, ClientID, ClientSecret, RedirectURI string
+	AllowHTTPDevelopment                                bool
+	Sessions                                            SessionConfig
 }
 
 func httpsURL(raw string) (*url.URL, error) {
@@ -31,9 +34,17 @@ func httpsURL(raw string) (*url.URL, error) {
 	return u, nil
 }
 
-func (c OIDCConfig) validate() error {
-	if c.AppEnv != "development" {
-		return errors.New("OIDC memory sessions require APP_ENV=development; other environments require shared persistent sessions")
+func (c OIDCConfig) Validate() error {
+	switch c.AppEnv {
+	case "development", "test", "TEST", "production", "prd", "PRD":
+	default:
+		return errors.New("APP_ENV must be development, test/TEST, or production/prd/PRD")
+	}
+	if c.AllowHTTPDevelopment && c.AppEnv != "development" {
+		return errors.New("OIDC_ALLOW_HTTP_DEVELOPMENT is restricted to development")
+	}
+	if err := c.Sessions.validate(); err != nil {
+		return err
 	}
 	issuer, err := httpsURL(c.Issuer)
 	if err != nil || issuer.RawQuery != "" {
@@ -42,9 +53,14 @@ func (c OIDCConfig) validate() error {
 	if strings.TrimSpace(c.ClientID) == "" || strings.TrimSpace(c.ClientSecret) == "" {
 		return errors.New("OIDC_CLIENT_ID and OIDC_CLIENT_SECRET are required")
 	}
-	redirect, err := httpsURL(c.RedirectURI)
-	if err != nil || redirect.Path != "/api/auth/callback" || redirect.RawPath != "" || redirect.RawQuery != "" {
-		return errors.New("OIDC_REDIRECT_URI must be an HTTPS URL ending in /api/auth/callback without query or fragment")
+	redirect, err := url.Parse(c.RedirectURI)
+	if err != nil || redirect.Hostname() == "" || redirect.User != nil || redirect.Fragment != "" ||
+		redirect.Path != "/api/auth/callback" || redirect.RawPath != "" || redirect.RawQuery != "" {
+		return errors.New("OIDC_REDIRECT_URI must be an absolute callback URL without userinfo, query or fragment")
+	}
+	if redirect.Scheme != "https" && !(redirect.Scheme == "http" && c.AllowHTTPDevelopment &&
+		(redirect.Hostname() == "localhost" || net.ParseIP(redirect.Hostname()).IsLoopback())) {
+		return errors.New("OIDC_REDIRECT_URI requires HTTPS; explicit HTTP development is limited to loopback")
 	}
 	return nil
 }
@@ -61,20 +77,26 @@ func (t httpsTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 type OIDCAuthenticator struct {
-	config   oauth2.Config
-	issuer   string
-	origin   string
-	client   *http.Client
-	verifier *oidc.IDTokenVerifier
-	store    *memoryStore
+	config                    oauth2.Config
+	issuer                    string
+	origin                    string
+	client                    *http.Client
+	verifier                  *oidc.IDTokenVerifier
+	store                     sessionStore
+	sessionCookie, flowCookie string
+	secureCookies             bool
+	absoluteTimeout           time.Duration
 }
 
 // NewOIDC discovers trusted provider metadata before the application starts.
 // OAuth errors can include tokens or response bodies, so callers receive only
 // fixed errors. A context HTTP client supports isolated TLS test providers.
-func NewOIDC(ctx context.Context, config OIDCConfig) (*OIDCAuthenticator, error) {
-	if err := config.validate(); err != nil {
+func NewOIDC(ctx context.Context, config OIDCConfig, store sessionStore) (*OIDCAuthenticator, error) {
+	if err := config.Validate(); err != nil {
 		return nil, err
+	}
+	if store == nil {
+		return nil, errors.New("OIDC requires a configured session store")
 	}
 	client := &http.Client{}
 	if supplied, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok {
@@ -113,21 +135,30 @@ func NewOIDC(ctx context.Context, config OIDCConfig) (*OIDCAuthenticator, error)
 		return nil, errors.New("OIDC provider does not support PKCE S256")
 	}
 	redirect, _ := url.Parse(config.RedirectURI)
+	sessionName, flowName := sessionCookie, flowCookie
+	secure := redirect.Scheme == "https"
+	if !secure {
+		sessionName, flowName = "gwf_dev_session", "gwf_dev_oidc_flow"
+	}
 	return &OIDCAuthenticator{
 		config: oauth2.Config{ClientID: config.ClientID, ClientSecret: config.ClientSecret,
 			RedirectURL: config.RedirectURI, Endpoint: provider.Endpoint(), Scopes: []string{oidc.ScopeOpenID, "profile", "email"}},
 		issuer: config.Issuer, origin: redirect.Scheme + "://" + redirect.Host,
-		client: client, verifier: provider.Verifier(&oidc.Config{ClientID: config.ClientID}), store: newMemoryStore(),
+		client: client, verifier: provider.Verifier(&oidc.Config{ClientID: config.ClientID}), store: store,
+		sessionCookie: sessionName, flowCookie: flowName, secureCookies: secure, absoluteTimeout: config.Sessions.AbsoluteTimeout,
 	}, nil
 }
 
 func (p *OIDCAuthenticator) Authenticate(r *http.Request) (Identity, error) {
-	cookie, err := r.Cookie(sessionCookie)
+	cookie, err := r.Cookie(p.sessionCookie)
 	if err != nil {
 		return Identity{}, ErrUnauthenticated
 	}
-	identity, ok := p.store.identity(cookie.Value)
-	if !ok {
+	identity, err := p.store.identity(r.Context(), cookie.Value)
+	if err != nil {
+		return Identity{}, err
+	}
+	if identity.Issuer != p.issuer || identity.Provider != OIDC {
 		return Identity{}, ErrUnauthenticated
 	}
 	return identity, nil
@@ -138,34 +169,37 @@ func authHeaders(w http.ResponseWriter) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 }
 
-func setCookie(w http.ResponseWriter, name, value string, expires time.Time) {
+func (p *OIDCAuthenticator) setCookie(w http.ResponseWriter, name, value string, expires time.Time) {
 	maxAge := int(time.Until(expires).Seconds())
 	if value == "" {
 		maxAge = -1
 	} else if maxAge < 1 {
 		maxAge = 1
 	}
-	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: "/", Secure: true,
+	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: "/", Secure: p.secureCookies,
 		HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: maxAge, Expires: expires})
 }
 
-func clearCookie(w http.ResponseWriter, name string) {
-	setCookie(w, name, "", time.Unix(1, 0))
+func (p *OIDCAuthenticator) clearCookie(w http.ResponseWriter, name string) {
+	p.setCookie(w, name, "", time.Unix(1, 0))
 }
 
 func (p *OIDCAuthenticator) Login(w http.ResponseWriter, r *http.Request) {
 	authHeaders(w)
-	if previous, err := r.Cookie(flowCookie); err == nil {
-		p.store.takeFlow(previous.Value, "")
+	if previous, err := r.Cookie(p.flowCookie); err == nil {
+		if _, err := p.store.takeFlow(r.Context(), previous.Value, ""); err != nil && !errors.Is(err, ErrUnauthenticated) {
+			writeError(w, http.StatusServiceUnavailable, "login temporarily unavailable")
+			return
+		}
 	}
 	flow := loginFlow{State: oauth2.GenerateVerifier(), Nonce: oauth2.GenerateVerifier(),
 		Verifier: oauth2.GenerateVerifier(), Expires: time.Now().Add(loginLifetime)}
-	id, err := p.store.addFlow(flow)
+	id, err := p.store.addFlow(r.Context(), flow)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "login temporarily unavailable")
 		return
 	}
-	setCookie(w, flowCookie, id, flow.Expires)
+	p.setCookie(w, p.flowCookie, id, flow.Expires)
 	location := p.config.AuthCodeURL(flow.State, oidc.Nonce(flow.Nonce),
 		oauth2.S256ChallengeOption(flow.Verifier), oauth2.SetAuthURLParam("response_mode", "query"))
 	http.Redirect(w, r, location, http.StatusFound)
@@ -173,7 +207,7 @@ func (p *OIDCAuthenticator) Login(w http.ResponseWriter, r *http.Request) {
 
 func (p *OIDCAuthenticator) Callback(w http.ResponseWriter, r *http.Request) {
 	authHeaders(w)
-	clearCookie(w, flowCookie)
+	p.clearCookie(w, p.flowCookie)
 	// Reject malformed/ambiguous queries before exchanging a code. Callback errors
 	// redirect to a fixed URL, clearing code/state from the browser address bar.
 	fail := func() { http.Redirect(w, r, p.origin+"/?auth_error=login_failed", http.StatusSeeOther) }
@@ -188,13 +222,13 @@ func (p *OIDCAuthenticator) Callback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	cookie, err := r.Cookie(flowCookie)
+	cookie, err := r.Cookie(p.flowCookie)
 	if err != nil {
 		fail()
 		return
 	}
-	flow, ok := p.store.takeFlow(cookie.Value, query.Get("state"))
-	if !ok || query.Get("error") != "" || query.Get("code") == "" ||
+	flow, err := p.store.takeFlow(r.Context(), cookie.Value, query.Get("state"))
+	if err != nil || query.Get("error") != "" || query.Get("code") == "" ||
 		(query.Get("iss") != "" && query.Get("iss") != p.issuer) {
 		fail()
 		return
@@ -235,7 +269,7 @@ func (p *OIDCAuthenticator) Callback(w http.ResponseWriter, r *http.Request) {
 		fail()
 		return
 	}
-	expires := time.Now().Add(sessionLifetime)
+	expires := time.Now().Add(p.absoluteTimeout)
 	if idToken.Expiry.Before(expires) {
 		expires = idToken.Expiry
 	}
@@ -243,16 +277,17 @@ func (p *OIDCAuthenticator) Callback(w http.ResponseWriter, r *http.Request) {
 		fail()
 		return
 	}
-	id, err := p.store.addSession(identity, expires)
+	previous := ""
+	if cookie, err := r.Cookie(p.sessionCookie); err == nil {
+		previous = cookie.Value
+	}
+	id, err := p.store.addSession(r.Context(), identity, expires, previous)
 	if err != nil {
 		fail()
 		return
 	}
-	// Rotate an existing browser session only after the replacement succeeds.
-	if previous, err := r.Cookie(sessionCookie); err == nil {
-		p.store.deleteSession(previous.Value)
-	}
-	setCookie(w, sessionCookie, id, expires)
+	// The store atomically rotates the existing session before issuing a cookie.
+	p.setCookie(w, p.sessionCookie, id, expires)
 	// ID/access/refresh tokens are discarded, never stored or sent to React.
 	http.Redirect(w, r, p.origin+"/", http.StatusSeeOther)
 }
@@ -265,13 +300,19 @@ func (p *OIDCAuthenticator) Logout(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "invalid request origin")
 		return
 	}
-	if cookie, err := r.Cookie(sessionCookie); err == nil {
-		p.store.deleteSession(cookie.Value)
+	if cookie, err := r.Cookie(p.sessionCookie); err == nil {
+		if err := p.store.deleteSession(r.Context(), cookie.Value); err != nil {
+			writeError(w, http.StatusServiceUnavailable, "logout unavailable; please retry")
+			return
+		}
 	}
-	if cookie, err := r.Cookie(flowCookie); err == nil {
-		p.store.takeFlow(cookie.Value, "")
+	if cookie, err := r.Cookie(p.flowCookie); err == nil {
+		if _, err := p.store.takeFlow(r.Context(), cookie.Value, ""); err != nil && !errors.Is(err, ErrUnauthenticated) {
+			writeError(w, http.StatusServiceUnavailable, "logout unavailable; please retry")
+			return
+		}
 	}
-	clearCookie(w, sessionCookie)
-	clearCookie(w, flowCookie)
+	p.clearCookie(w, p.sessionCookie)
+	p.clearCookie(w, p.flowCookie)
 	w.WriteHeader(http.StatusNoContent)
 }

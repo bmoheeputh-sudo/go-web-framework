@@ -10,16 +10,23 @@ import (
 	"time"
 
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/auth"
+	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/database"
 )
+
+type application struct {
+	*http.Server
+	closeResources func()
+}
 
 // newServer validates configuration before opening a listener. Unset authentication
 // preserves public health checks but grants no identity or protected-route access.
-func newServer(getenv func(string) string) (*http.Server, error) {
+func newServer(getenv func(string) string) (*application, error) {
 	address := getenv("HTTP_ADDR")
 	if address == "" {
 		address = "127.0.0.1:8080"
 	}
 	var provider auth.Authenticator
+	closeResources := func() {}
 	switch auth.Provider(getenv("AUTH_PROVIDER")) {
 	case "":
 	case auth.LocalDev:
@@ -40,26 +47,59 @@ func newServer(getenv func(string) string) (*http.Server, error) {
 		}
 		provider = local
 	case auth.OIDC:
-		oidcProvider, err := auth.NewOIDC(context.Background(), auth.OIDCConfig{
-			AppEnv: getenv("APP_ENV"), Issuer: getenv("OIDC_ISSUER_URL"),
-			ClientID: getenv("OIDC_CLIENT_ID"), ClientSecret: getenv("OIDC_CLIENT_SECRET"),
-			RedirectURI: getenv("OIDC_REDIRECT_URI"),
-		})
+		sessions, err := auth.SessionConfigFromEnv(getenv)
 		if err != nil {
 			return nil, err
 		}
+		allowHTTP := false
+		if value := getenv("OIDC_ALLOW_HTTP_DEVELOPMENT"); value != "" {
+			allowHTTP, err = strconv.ParseBool(value)
+			if err != nil {
+				return nil, errors.New("OIDC_ALLOW_HTTP_DEVELOPMENT must be true or false")
+			}
+		}
+		config := auth.OIDCConfig{
+			AppEnv: getenv("APP_ENV"), Issuer: getenv("OIDC_ISSUER_URL"),
+			ClientID: getenv("OIDC_CLIENT_ID"), ClientSecret: getenv("OIDC_CLIENT_SECRET"),
+			RedirectURI: getenv("OIDC_REDIRECT_URI"),
+			Sessions:    sessions, AllowHTTPDevelopment: allowHTTP,
+		}
+		if err := config.Validate(); err != nil {
+			return nil, err
+		}
+		if allowHTTP {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil || !net.ParseIP(host).IsLoopback() {
+				return nil, errors.New("HTTP development requires a loopback HTTP_ADDR")
+			}
+		}
+		pool, err := database.Open(context.Background(), getenv)
+		if err != nil {
+			return nil, err
+		}
+		store, err := auth.NewPostgresStore(pool, sessions)
+		if err != nil {
+			pool.Close()
+			return nil, err
+		}
+		oidcProvider, err := auth.NewOIDC(context.Background(), config, store)
+		if err != nil {
+			pool.Close()
+			return nil, err
+		}
+		closeResources = pool.Close
 		provider = oidcProvider
 	case auth.GoogleIAP:
 		return nil, errors.New("Google IAP authentication is not implemented")
 	default:
 		return nil, errors.New("unsupported AUTH_PROVIDER; use oidc or local_dev, or leave unset for public health only")
 	}
-	return &http.Server{
+	return &application{closeResources: closeResources, Server: &http.Server{
 		Addr: address, Handler: newHandler(provider),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second, WriteTimeout: 30 * time.Second,
 		IdleTimeout: 60 * time.Second,
-	}, nil
+	}}, nil
 }
 
 func newHandler(provider auth.Authenticator) http.Handler {

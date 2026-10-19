@@ -18,13 +18,14 @@ Reusable web application framework.
 
 Requirements: Go matching `backend/go.mod`, and Node/npm compatible with the
 frontend lockfile (the current setup uses Node 20.20 and npm 11). No external
-identity credentials or PostgreSQL database are needed for this phase.
+identity credentials or PostgreSQL database are needed for Local DEV.
 
 In the repository root, create your local backend configuration without replacing
 an existing `.env`:
 
 ```bash
 cp -n .env.example .env
+vi .env
 ```
 
 Review `.env` and set your fixed development subject, email, and display name.
@@ -93,20 +94,21 @@ The `auth.Authenticator` interface resolves an identity for an HTTP request.
 There is no universal credential string: OIDC login/callback handlers verify the
 authorization flow and establish a server-side session; the OIDC authenticator
 resolves that session on subsequent requests. A future IAP authenticator will
-verify the IAP assertion on each request. Google IAP and PostgreSQL session storage
-are not implemented. Selecting `google_iap` or an unknown provider fails startup.
+verify the IAP assertion on each request. Google IAP is not implemented.
+Selecting `google_iap` or an unknown provider fails startup.
 
 React calls same-origin APIs and receives only the public identity fields. Keep
 backend authentication configuration out of `VITE_*` variables and frontend code.
 
-## Run locally with OIDC (Phase 2)
+## Run locally with OIDC and PostgreSQL (Phase 3)
 
 OIDC uses the maintained `github.com/coreos/go-oidc/v3/oidc` and
 `golang.org/x/oauth2` libraries. It is provider-independent: configure a standards-
-compliant OIDC issuer, rather than an Okta-specific endpoint. The development
-session store is in memory, so **OIDC currently requires `APP_ENV=development`**.
-Other environments are rejected at startup until shared, persistent sessions
-(planned PostgreSQL) and shared login transactions are implemented.
+compliant OIDC issuer. Sessions and one-use login transactions are stored in
+PostgreSQL through `github.com/jackc/pgx/v5/pgxpool`. Apply the version-controlled
+migrations through 000003 below before enabling OIDC; the server never applies migrations itself.
+OIDC accepts `APP_ENV=development`, `test`/`TEST`, and `production`/`prd`/`PRD`.
+Local DEV still requires exactly `development` and does not connect to PostgreSQL.
 
 Register a **confidential web application** with your chosen provider, enable
 Authorization Code flow with PKCE S256, allow scopes `openid profile email`, and
@@ -130,6 +132,11 @@ DEV_TLS_CERT_FILE=/absolute/path/outside/repository/localhost.pem
 DEV_TLS_KEY_FILE=/absolute/path/outside/repository/localhost-key.pem
 ```
 
+Preserve the existing root `.env` database settings for local PostgreSQL 14:
+`DB_HOST`, `DB_PORT`, `DB_NAME=go_web_framework`, `DB_USER=go_web_app`,
+`DB_PASSWORD`, and `DB_SSLMODE`. New settings and safe placeholders are in
+`.env.example`; use `vi .env` to merge them rather than replacing existing values.
+
 Use the exact issuer advertised by the provider, including any issuer path and
 trailing slash. Discovery, authorization, token, and JWKS URLs must use HTTPS;
 TLS certificate verification is enabled and backend HTTP redirects are rejected.
@@ -139,10 +146,17 @@ verification share a 20-second callback deadline.
 
 ### Local HTTPS
 
-OIDC cookies always have `Secure`, `HttpOnly`, `SameSite=Lax`, and `Path=/`, with
-`__Host-` names and no Domain attribute. There is no insecure-cookie switch.
-Therefore the browser-facing frontend must use HTTPS for OIDC. Local DEV can
-continue using HTTP with the TLS variables left empty.
+OIDC HTTPS cookies have `Secure`, `HttpOnly`, `SameSite=Lax`, and `Path=/`, with
+`__Host-` names and no Domain attribute. HTTPS is mandatory in TEST and PRD.
+Local DEV can continue using HTTP with the TLS variables left empty.
+
+For explicit local HTTP OIDC testing only, set `APP_ENV=development`,
+`OIDC_ALLOW_HTTP_DEVELOPMENT=true`, and register/use
+`OIDC_REDIRECT_URI=http://localhost:5173/api/auth/callback`. Leave Vite TLS paths
+empty and keep `HTTP_ADDR` on a literal loopback IP. This uses separate
+`gwf_dev_session`/`gwf_dev_oidc_flow` cookies without Secure, still HttpOnly and
+SameSite=Lax. Non-loopback HTTP callbacks and this flag outside development are
+rejected. The issuer, discovery, token and JWKS endpoints always require HTTPS.
 
 Use an existing trusted local certificate, or create one with OpenSSL outside the
 repository (do not overwrite an existing key):
@@ -216,23 +230,162 @@ and JWKS. It accepts query-mode Authorization Code callbacks only. Failures
 redirect to a fixed generic dashboard error; provider details are never displayed.
 Return destinations are fixed, not taken from request parameters.
 
-Sessions contain only the public identity and an expiration. Session cookies are
-opaque random IDs, hashed in the server store, and rotated after successful login.
-Sessions expire at the earlier of eight hours or ID-token expiration; there is no
-silent renewal. ID, access, and refresh tokens are discarded after validation,
-never placed in cookies, React storage, API responses, or application logs.
-Authentication responses disable caching and callbacks suppress referrers.
+Sessions contain public identity fields (including email verification), creation,
+absolute expiration and last activity timestamps. All timestamps are TIMESTAMPTZ.
+Cookies hold cryptographically random 256-bit opaque tokens; PostgreSQL receives
+only SHA-256 token hashes. Successful authentication atomically inserts a new
+session and deletes the previous session; a failed insert preserves the old one.
+Lookup checks expiration and updates last activity in one SQL statement, and
+logout immediately deletes the session. Expired, idle and revoked sessions return
+401. Storage failures return 503 with no credential details. A failed logout keeps
+the cookie and reports failure so the user can retry revocation.
 
-The memory store is concurrency-safe, cleans expired entries on insertion, and is
-bounded to 4096 sessions and 4096 login transactions. Restarting the backend logs
-everyone out and invalidates pending logins. This is a single-process development
-implementation, **not production session storage**. Production requires shared,
-persistent PostgreSQL sessions, shared atomic login-transaction storage, and a
-deployment review before removing the development-only startup guard.
+`SESSION_IDLE_TIMEOUT` defaults to `30m` and `SESSION_ABSOLUTE_TIMEOUT` to `8h`.
+Use positive Go durations of at least one second, with idle <= absolute <= 720h.
+Absolute expiration is also capped by ID-token expiry; activity never extends it.
+Idle checks use the configured value on every request, so keep it consistent
+across instances. ID, access and refresh tokens are discarded after validation,
+never stored in PostgreSQL or exposed to React or application logs. Shared login
+transactions persist nonce and PKCE verifier for up to ten minutes, but store only
+hashes of the state and flow-cookie token. They are atomically consumed once.
+
+Sessions and pending logins survive backend restarts and work across instances
+sharing the same database, issuer, public origin and configuration. There is no
+in-memory fallback. No refresh-token renewal is implemented. Authentication
+responses disable caching and callbacks suppress referrers.
 
 Sign-out is local to this application. It does not end the identity provider's
 browser session, revoke provider tokens, or implement OIDC federated logout; a
 subsequent sign-in may reuse the provider's existing session.
+
+### Database setup and manual migrations
+
+The pool defaults to 10 maximum connections, no minimum, a 30-minute connection
+lifetime and a five-minute idle connection lifetime. `DB_MAX_CONNS` accepts 1–100.
+Connection/startup checks have a five-second deadline; session operations have a
+three-second deadline. PostgreSQL statement and lock timeouts are five and two
+seconds. Shutdown drains HTTP requests and closes the pool.
+
+OIDC startup checks connectivity and the expected schema using read-only queries.
+Missing migrations, invalid database settings or an unavailable database stop
+startup. An outage after startup blocks authentication; `/api/health` remains a
+public process-liveness endpoint, not a database-readiness check.
+
+Review these [golang-migrate](https://github.com/golang-migrate/migrate) migrations:
+
+- `database/migrations/000001_sessions.up.sql` creates sessions, hash/timestamp
+  constraints, and indexes for expiry, activity, and issuer/subject.
+- `database/migrations/000002_oidc_login_flows.up.sql` creates shared short-lived
+  OIDC login transactions and an expiry index.
+- `database/migrations/000003_framework_schema.up.sql` creates `framework`, moves
+  the two existing tables there with `ALTER TABLE ... SET SCHEMA`, and grants
+  `go_web_app` schema USAGE and SELECT/INSERT/UPDATE/DELETE on both tables. Existing
+  rows, indexes, constraints, table owners, and grants are retained. Migrations
+  000001 and 000002 remain unchanged; do not reapply or edit them on a version-2 DB.
+- `public.schema_migrations` stays in `public`; golang-migrate advances its version
+  from 2 to 3 normally. Do not copy, move, reset, or recreate this history table.
+- Migration 000003's `.down.sql` moves both tables back to `public` without deleting
+  data. It leaves the `framework` schema and grants in place, including any unrelated
+  objects. The older 000001/000002 down migrations **delete tables and data**.
+  Rollback requires separate approval and the matching application version.
+
+**Obtain approval before running migration commands against the actual database.**
+The following commands are provided for manual review and execution, not run by
+the application. Even `migrate version` may create its metadata table on first use.
+Use the golang-migrate CLI with its PostgreSQL driver installed, from the repository
+root. The PostgreSQL driver accepts `PG*` environment variables, so no password
+appears in a command-line database URL:
+
+```bash
+set -a
+. ./.env
+set +a
+export PGHOST="$DB_HOST"
+export PGPORT="${DB_PORT:-5432}"
+export PGDATABASE="$DB_NAME"
+export PGUSER="$DB_USER"
+export PGPASSWORD="$DB_PASSWORD"
+export PGSSLMODE="${DB_SSLMODE:-verify-full}"
+export PGSSLROOTCERT="${DB_SSLROOTCERT:-}"
+export PGCONNECT_TIMEOUT=5
+
+# Only after approval, using the intended database and migration role:
+migrate -path database/migrations -database 'postgres://?search_path=public' goto 3
+migrate -path database/migrations -database 'postgres://?search_path=public' version
+unset PGPASSWORD
+```
+
+The explicit `search_path=public` keeps golang-migrate using the existing history
+in `public`, even if a role has a different default search path. This uses the
+[PostgreSQL driver's search_path option](https://github.com/golang-migrate/migrate/blob/master/database/postgres/README.md).
+On the existing version-2 database, `goto 3` applies only migration 000003. On a
+fresh database it applies migrations 000001–000003 in order. Expect version `3`
+without a dirty marker afterward. Do not run these commands against a version
+newer than 3; `goto` can also migrate down.
+
+For the version-2 upgrade, stop the backend during the approved maintenance window,
+back up the database, apply migration 000003, then start the updated backend.
+The old application expects `public` tables; the new application requires
+`framework` tables and fails startup until migration 000003 is applied. Table
+moves acquire locks, so coordinate with other database clients. A separately
+approved rollback from version 3 uses `down 1` and the old application; never run
+an unbounded `down` on a database whose data must be preserved.
+
+The migration role must own both existing tables (or have equivalent authority),
+be able to CREATE schemas in the database, and access `public.schema_migrations`.
+If `framework` already exists, it also needs CREATE and grant authority there.
+Fresh installations additionally need CREATE on `public` for migrations 000001/2.
+The existing `go_web_app` role must exist before migration 000003; the migration
+fails transactionally if it cannot grant the required access. It does not create
+roles or alter passwords. For TEST/PRD use a separate migration owner and supply
+that role's credentials to the migration command instead of the runtime credentials.
+
+The runtime role needs CONNECT on the database, USAGE on `framework`, and
+SELECT/INSERT/UPDATE/DELETE on `framework.sessions` and `framework.oidc_login_flows`.
+Migration 000003 grants the schema and table privileges to `go_web_app`; it does
+not explicitly grant schema CREATE. Existing privileges and ownership are
+preserved. A role that runs the migration owns the newly created schema, and a
+runtime role that already owns tables retains that authority. Use a separate
+migration owner to keep these ownership privileges out of the runtime role. If a deployment
+uses a different runtime role, provision its equivalent grants separately with
+approval. Application queries use explicit `framework` names and do not require
+changing the runtime search path. No runtime access to migration history is needed.
+
+### TEST/PRD transport security and recovery
+
+TEST and PRD require a browser-facing HTTPS origin and `OIDC_ALLOW_HTTP_DEVELOPMENT=false`.
+Terminate HTTPS at a trusted reverse proxy; restrict the backend HTTP listener to
+that proxy/private network. Do not expose plaintext backend ports publicly. Cookie
+security and logout Origin validation derive from the configured public redirect
+URI, never from untrusted forwarding headers.
+
+Database connections outside development require `DB_SSLMODE=verify-full` and
+`DB_SSLROOTCERT` pointing to the trusted PostgreSQL CA. `DB_HOST` must match the
+server certificate. `require`, `prefer`, `allow`, and `verify-ca` are rejected;
+there is no plaintext fallback. `DB_SSLMODE=disable` is accepted only for loopback
+PostgreSQL in development. Keep DB/OIDC secrets out of `VITE_*`, logs and Git.
+
+If startup fails, check PostgreSQL service availability, the configured role's
+permissions, TLS trust, and migration status. Fix the cause and restart; existing
+unexpired database sessions remain valid. Following a database outage, lookup and
+logout can be retried once the pool reconnects. A failed callback needs a fresh
+sign-in because its state is one-use. Do not bypass checks or fall back to memory.
+
+If a migration is marked dirty, inspect the failed SQL and actual schema before
+using any repair/`force` command; get approval for the exact repair first. Do not
+blindly roll back: the 000001/000002 down migrations delete tables and data. Back up the database before
+approved schema changes. Restoring a backup can restore previously revoked
+sessions; revoke restored sessions before reopening authentication if necessary.
+
+No cleanup worker is added. Expired records are always rejected but remain until
+an operator performs approved maintenance. For example, after approval, remove
+flows with `expires_at <= now()` and sessions with `expires_at <= now()` or
+`last_activity_at <= now() - interval '30 minutes'` (use the deployed idle timeout).
+Review deletes and revocations before running them. Protect database backups and
+access to nonce/PKCE data. Rate limiting, device/session management, federated
+logout, and automatic revocation when an account is disabled at the IdP remain
+outside this phase; revocation otherwise occurs at logout or expiration. Revoke
+existing sessions when changing the registered client/application trust boundary.
 
 ### Application checks
 
@@ -249,8 +402,23 @@ configuration, successful login, PKCE, browser-bound state, nonce, signed tokens
 issuer/audience/expiry rejection, session rotation/expiration, logout CSRF, and
 unauthenticated access. OIDC integration tests start a temporary loopback HTTPS
 provider with generated signing keys and real JWKS verification; they require
-local socket access but no external identity services or credentials. The race
-check also exercises concurrent session-store access.
+local socket access but no external identity services or credentials. PostgreSQL
+tests create and destroy their own isolated clusters under `/tmp`, using private
+Unix sockets with TCP disabled. They never read root `.env` or connect to the
+application database. Install PostgreSQL 14 server binaries or set `PG_TEST_BIN`
+to their directory; database integration tests are explicitly skipped if binaries
+are absent. Run as a non-root user. Install the golang-migrate CLI with the
+PostgreSQL driver on PATH to also run `TestFrameworkSchemaMigration`; this test
+explicitly skips if the CLI is absent. It starts at migration version 2 with seeded
+sessions/login flows and verifies version 3 upgrade, rollback to 2, and re-upgrade
+using the real CLI. It checks row preservation, table/index/constraint identities,
+ownership, existing grants, runtime privileges, and history remaining in `public`.
+Session integration tests run as `go_web_app` with a search path that excludes
+`framework`, verifying that explicit schema references and grants work. Tests also
+cover all migrations up/down, hash storage, idle/absolute expiry, activity updates,
+concurrent lookup, atomic rotation and rollback, shared login-state consumption,
+database outages and cookie policy. Destructive old down migrations run only in
+the disposable clusters, never against the configured application database.
 
 ## Backup to GitHub and Google Drive
 

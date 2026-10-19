@@ -1,110 +1,59 @@
 package auth
 
 import (
-	"crypto/sha256"
-	"crypto/subtle"
+	"context"
 	"errors"
-	"sync"
 	"time"
-
-	"golang.org/x/oauth2"
 )
 
-const (
-	loginLifetime   = 10 * time.Minute
-	sessionLifetime = 8 * time.Hour
-)
+const loginLifetime = 10 * time.Minute
+
+var ErrStoreUnavailable = errors.New("session store unavailable")
 
 type loginFlow struct {
 	State, Nonce, Verifier string
 	Expires                time.Time
 }
 
-type session struct {
-	Identity Identity
-	Expires  time.Time
+// Sessions and one-use browser-bound login transactions are shared between
+// backend instances. No OAuth tokens are persisted by this interface.
+type sessionStore interface {
+	addSession(context.Context, Identity, time.Time, string) (string, error)
+	identity(context.Context, string) (Identity, error)
+	deleteSession(context.Context, string) error
+	addFlow(context.Context, loginFlow) (string, error)
+	takeFlow(context.Context, string, string) (loginFlow, error)
 }
 
-// memoryStore is intentionally process-local and development-only. Sessions hold
-// only public identity data, never OAuth tokens. Cookie IDs are stored as hashes.
-// Production needs shared, persistent sessions AND shared one-use login state.
-type memoryStore struct {
-	mu       sync.Mutex
-	sessions map[[32]byte]session
-	flows    map[[32]byte]loginFlow
-	limit    int
+type SessionConfig struct {
+	IdleTimeout     time.Duration
+	AbsoluteTimeout time.Duration
 }
 
-func newMemoryStore() *memoryStore {
-	return &memoryStore{sessions: make(map[[32]byte]session), flows: make(map[[32]byte]loginFlow), limit: 4096}
-}
-
-// prune runs under the lock. Expiration is also checked on every lookup; cleanup
-// on insertion bounds memory without a background goroutine or shutdown lifecycle.
-func (s *memoryStore) prune() {
-	now := time.Now()
-	for key, value := range s.sessions {
-		if !now.Before(value.Expires) {
-			delete(s.sessions, key)
+func SessionConfigFromEnv(getenv func(string) string) (SessionConfig, error) {
+	config := SessionConfig{IdleTimeout: 30 * time.Minute, AbsoluteTimeout: 8 * time.Hour}
+	for key, target := range map[string]*time.Duration{
+		"SESSION_IDLE_TIMEOUT":     &config.IdleTimeout,
+		"SESSION_ABSOLUTE_TIMEOUT": &config.AbsoluteTimeout,
+	} {
+		if value := getenv(key); value != "" {
+			duration, err := time.ParseDuration(value)
+			if err != nil {
+				return SessionConfig{}, errors.New("session timeouts must be valid Go durations, such as 30m or 8h")
+			}
+			*target = duration
 		}
 	}
-	for key, value := range s.flows {
-		if !now.Before(value.Expires) {
-			delete(s.flows, key)
-		}
+	if err := config.validate(); err != nil {
+		return SessionConfig{}, err
 	}
+	return config, nil
 }
 
-func (s *memoryStore) addFlow(flow loginFlow) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.prune()
-	if len(s.flows) >= s.limit {
-		return "", errors.New("login capacity reached")
+func (c SessionConfig) validate() error {
+	if c.IdleTimeout < time.Second || c.AbsoluteTimeout < time.Second ||
+		c.IdleTimeout > c.AbsoluteTimeout || c.AbsoluteTimeout > 30*24*time.Hour {
+		return errors.New("session timeouts must be at least 1s, idle <= absolute, and absolute <= 720h")
 	}
-	id := oauth2.GenerateVerifier()
-	s.flows[sha256.Sum256([]byte(id))] = flow
-	return id, nil
-}
-
-// takeFlow atomically consumes the browser-bound transaction, even on failure.
-// A state value alone is insufficient: the HttpOnly flow cookie is also required.
-func (s *memoryStore) takeFlow(id, state string) (loginFlow, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	key := sha256.Sum256([]byte(id))
-	flow, ok := s.flows[key]
-	delete(s.flows, key)
-	return flow, ok && time.Now().Before(flow.Expires) &&
-		subtle.ConstantTimeCompare([]byte(flow.State), []byte(state)) == 1
-}
-
-func (s *memoryStore) addSession(identity Identity, expires time.Time) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.prune()
-	if len(s.sessions) >= s.limit {
-		return "", errors.New("session capacity reached")
-	}
-	id := oauth2.GenerateVerifier()
-	s.sessions[sha256.Sum256([]byte(id))] = session{Identity: identity, Expires: expires}
-	return id, nil
-}
-
-func (s *memoryStore) identity(id string) (Identity, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	key := sha256.Sum256([]byte(id))
-	value, ok := s.sessions[key]
-	if !ok || !time.Now().Before(value.Expires) {
-		delete(s.sessions, key)
-		return Identity{}, false
-	}
-	return value.Identity, true
-}
-
-func (s *memoryStore) deleteSession(id string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.sessions, sha256.Sum256([]byte(id)))
+	return nil
 }
