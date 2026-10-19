@@ -1,25 +1,20 @@
 package main
 
 import (
-    "encoding/json"
-    "log"
-    "net/http"
+	"log"
+	"os"
 )
 
 func main() {
-    mux := http.NewServeMux()
-
-    mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
-        w.Header().Set("Content-Type", "application/json")
-        json.NewEncoder(w).Encode(map[string]string{
-            "status": "ok",
-            "service": "go-web-framework",
-        })
-    })
-
-    log.Println("Server running at http://localhost:8080")
-
-    if err := http.ListenAndServe("127.0.0.1:8080", mux); err != nil {
-        log.Fatal(err)
-    }
+	server, err := newServer(os.Getenv)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if os.Getenv("AUTH_PROVIDER") == "local_dev" {
+		log.Print("Local DEV authentication enabled: fixed development identity, no user sessions")
+	}
+	log.Printf("Server listening on %s", server.Addr)
+	if err := server.ListenAndServe(); err != nil {
+		log.Fatal(err)
+	}
 }
