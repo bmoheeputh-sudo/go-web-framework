@@ -46,5 +46,14 @@
   "errorConflict": "Cette modification est incompatible avec l’état actuel. Actualisez puis réessayez.",
   "errorInvalid": "Vérifiez les informations saisies et réessayez.",
   "errorUnavailable": "L’administration des comptes est temporairement indisponible.",
-  "errorRequest": "La requête a échoué. Veuillez réessayer."
+  "errorRequest": "La requête a échoué. Veuillez réessayer.",
+  "changesSaved": "Modifications enregistrées.",
+  "usersEmpty": "Aucun utilisateur trouvé.",
+  "accountsEmpty": "Aucun compte trouvé.",
+  "rolesEmpty": "Aucun rôle trouvé.",
+  "auditEmpty": "Aucun événement d’audit trouvé.",
+  "selectUser": "Sélectionner l’utilisateur : {{name}}",
+  "editAccount": "Modifier le compte : {{name}}",
+  "auditEvent": "Événement",
+  "auditWho": "Auteur / cible"
 }

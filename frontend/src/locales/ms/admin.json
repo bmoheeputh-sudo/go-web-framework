@@ -46,5 +46,14 @@
   "errorConflict": "Perubahan ini bercanggah dengan keadaan semasa. Muat semula dan cuba lagi.",
   "errorInvalid": "Semak input anda dan cuba lagi.",
   "errorUnavailable": "Pentadbiran akaun tidak tersedia buat sementara waktu.",
-  "errorRequest": "Permintaan gagal. Sila cuba lagi."
+  "errorRequest": "Permintaan gagal. Sila cuba lagi.",
+  "changesSaved": "Perubahan disimpan.",
+  "usersEmpty": "Tiada pengguna ditemukan.",
+  "accountsEmpty": "Tiada akaun ditemukan.",
+  "rolesEmpty": "Tiada peranan ditemukan.",
+  "auditEmpty": "Tiada peristiwa audit ditemukan.",
+  "selectUser": "Pilih pengguna: {{name}}",
+  "editAccount": "Edit akaun: {{name}}",
+  "auditEvent": "Peristiwa",
+  "auditWho": "Pelaku / sasaran"
 }

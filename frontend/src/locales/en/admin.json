@@ -46,5 +46,14 @@
   "errorConflict": "This change conflicts with the current state. Refresh and try again.",
   "errorInvalid": "Check your entries and try again.",
   "errorUnavailable": "Account administration is temporarily unavailable.",
-  "errorRequest": "The request failed. Please try again."
+  "errorRequest": "The request failed. Please try again.",
+  "changesSaved": "Changes saved.",
+  "usersEmpty": "No users found.",
+  "accountsEmpty": "No accounts found.",
+  "rolesEmpty": "No roles found.",
+  "auditEmpty": "No audit events found.",
+  "selectUser": "Select user: {{name}}",
+  "editAccount": "Edit account: {{name}}",
+  "auditEvent": "Event",
+  "auditWho": "Actor / target"
 }

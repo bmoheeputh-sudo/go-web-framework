@@ -46,5 +46,14 @@
   "errorConflict": "此更改与当前状态冲突。请刷新后重试。",
   "errorInvalid": "请检查输入内容后重试。",
   "errorUnavailable": "账户管理暂时不可用。",
-  "errorRequest": "请求失败。请重试。"
+  "errorRequest": "请求失败。请重试。",
+  "changesSaved": "更改已保存。",
+  "usersEmpty": "未找到用户。",
+  "accountsEmpty": "未找到账户。",
+  "rolesEmpty": "未找到角色。",
+  "auditEmpty": "未找到审计事件。",
+  "selectUser": "选择用户：{{name}}",
+  "editAccount": "编辑账户：{{name}}",
+  "auditEvent": "事件",
+  "auditWho": "操作者 / 目标"
 }

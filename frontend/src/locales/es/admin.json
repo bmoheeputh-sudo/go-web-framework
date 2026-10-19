@@ -46,5 +46,14 @@
   "errorConflict": "Este cambio entra en conflicto con el estado actual. Actualice e inténtelo de nuevo.",
   "errorInvalid": "Revise los datos introducidos e inténtelo de nuevo.",
   "errorUnavailable": "La administración de cuentas no está disponible temporalmente.",
-  "errorRequest": "La solicitud falló. Inténtelo de nuevo."
+  "errorRequest": "La solicitud falló. Inténtelo de nuevo.",
+  "changesSaved": "Cambios guardados.",
+  "usersEmpty": "No se encontraron usuarios.",
+  "accountsEmpty": "No se encontraron cuentas.",
+  "rolesEmpty": "No se encontraron roles.",
+  "auditEmpty": "No se encontraron eventos de auditoría.",
+  "selectUser": "Seleccionar usuario: {{name}}",
+  "editAccount": "Editar cuenta: {{name}}",
+  "auditEvent": "Evento",
+  "auditWho": "Actor / destino"
 }

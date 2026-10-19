@@ -46,5 +46,14 @@
   "errorConflict": "Perubahan ini bertentangan dengan status saat ini. Muat ulang dan coba lagi.",
   "errorInvalid": "Periksa isian Anda dan coba lagi.",
   "errorUnavailable": "Administrasi akun untuk sementara tidak tersedia.",
-  "errorRequest": "Permintaan gagal. Silakan coba lagi."
+  "errorRequest": "Permintaan gagal. Silakan coba lagi.",
+  "changesSaved": "Perubahan disimpan.",
+  "usersEmpty": "Tidak ada pengguna ditemukan.",
+  "accountsEmpty": "Tidak ada akun ditemukan.",
+  "rolesEmpty": "Tidak ada peran ditemukan.",
+  "auditEmpty": "Tidak ada peristiwa audit ditemukan.",
+  "selectUser": "Pilih pengguna: {{name}}",
+  "editAccount": "Edit akun: {{name}}",
+  "auditEvent": "Peristiwa",
+  "auditWho": "Pelaku / target"
 }

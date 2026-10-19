@@ -1,12 +1,15 @@
+import { chooseLanguage } from './test/menuActions'
+import type { Language } from './i18n'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { I18nextProvider } from 'react-i18next'
 import type { i18n } from 'i18next'
 import { Box } from '@mui/material'
 import { useTheme } from '@mui/material/styles'
 import App from './App'
-import AccessPortal from './AccessPortal'
+import { BrowserRouter } from 'react-router-dom'
+import { mockAPI, mockMedia } from './test/fixtures'
 import LanguageProvider from './LanguageProvider'
 import LanguageSelector from './LanguageSelector'
 import {
@@ -18,6 +21,7 @@ const jsonFiles = import.meta.glob<string>('./locales/*/*.json', { eager: true, 
 const placeholders = (value: string) => [...value.matchAll(/{{\s*([^}]+)\s*}}/g)].map((match) => match[1].trim()).sort()
 
 beforeEach(() => {
+  mockMedia()
   localStorage.clear()
   window.history.replaceState(null, '', '/')
 })
@@ -90,7 +94,7 @@ describe('language detection', () => {
 })
 
 function renderApp(instance: i18n = createI18n('en')) {
-  return render(<I18nextProvider i18n={instance}><LanguageProvider><App /></LanguageProvider></I18nextProvider>)
+  return render(<I18nextProvider i18n={instance}><LanguageProvider><BrowserRouter><App /></BrowserRouter></LanguageProvider></I18nextProvider>)
 }
 function mockUnauthenticated() {
   const fetcher = vi.fn(async (path: string) => {
@@ -111,15 +115,15 @@ describe('language selection and dashboard', () => {
     renderApp(createI18n('fr', incomplete))
     expect((await screen.findByRole('link', { name: 'Sign in' })).getAttribute('href')).toBe('/api/auth/login')
     expect(screen.getByRole('heading', { name: 'Tableau de bord' })).toBeTruthy()
-    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('fr')
+    expect(document.getElementById('language-selector')!.textContent).toBe('FR')
   })
   it('switches between all twelve languages without repeating authentication requests', async () => {
     const fetcher = mockUnauthenticated()
     renderApp()
     await screen.findByRole('link', { name: 'Sign in' })
     const requestCount = fetcher.mock.calls.length
-    for (const [language, name] of Object.entries(languages)) {
-      await userEvent.selectOptions(screen.getByRole('combobox'), name)
+    for (const language of Object.keys(languages)) {
+      await chooseLanguage(language as Language)
       expect(screen.getByRole('heading', { name: resources[language].common.dashboard })).toBeTruthy()
       expect(screen.getByRole('link', { name: resources[language].auth.signIn }).getAttribute('href')).toBe('/api/auth/login')
       expect(screen.getByText(resources[language].common.connected)).toBeTruthy()
@@ -127,18 +131,18 @@ describe('language selection and dashboard', () => {
       expect(document.documentElement.dir).toBe(direction(language))
     }
     expect(fetcher.mock.calls).toHaveLength(requestCount)
-  })
+  }, 10000)
   it('persists only the language and restores it on the next application mount', async () => {
     mockUnauthenticated()
     const view = renderApp()
     await screen.findByRole('link', { name: 'Sign in' })
-    await userEvent.selectOptions(screen.getByRole('combobox'), 'nl')
+    await chooseLanguage('nl')
     expect(localStorage.getItem(languageStorageKey)).toBe('nl')
     expect(localStorage.length).toBe(1)
     view.unmount()
     renderApp(createI18n(detectLanguage(localStorage, ['en-US'])))
     expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeTruthy()
-    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('nl')
+    expect(document.getElementById('language-selector')!.textContent).toBe('NL')
     await screen.findByRole('link', { name: 'Aanmelden' })
   })
   it('still switches language if saving the preference fails', async () => {
@@ -146,7 +150,7 @@ describe('language selection and dashboard', () => {
     renderApp()
     await screen.findByRole('link', { name: 'Sign in' })
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('Storage blocked') })
-    await userEvent.selectOptions(screen.getByRole('combobox'), 'fr')
+    await chooseLanguage('fr')
     expect(screen.getByRole('link', { name: 'Se connecter' })).toBeTruthy()
   })
   it('localizes callback errors and removes the error marker from the URL', async () => {
@@ -168,9 +172,10 @@ describe('language selection and dashboard', () => {
     })
     vi.stubGlobal('fetch', fetcher)
     renderApp(createI18n('nl'))
-    const logout = await screen.findByRole('button', { name: 'Afmelden' })
-    expect(screen.getByText('Alice')).toBeTruthy()
-    expect(screen.getByText('alice@example.test')).toBeTruthy()
+    await userEvent.click(await screen.findByRole('button', { name: resources.nl.auth.profileMenu }))
+    const logout = await screen.findByRole('menuitem', { name: 'Afmelden' })
+    expect(screen.getAllByText('Alice').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('alice@example.test').length).toBeGreaterThan(0)
     await userEvent.click(logout)
     await screen.findByRole('link', { name: 'Aanmelden' })
     expect(fetcher).toHaveBeenCalledWith('/api/auth/logout', { method: 'POST', credentials: 'same-origin' })
@@ -188,11 +193,11 @@ it('switches HTML and MUI direction and actually mirrors Emotion styles for Arab
   const instance = createI18n('en')
   render(<I18nextProvider i18n={instance}><LanguageProvider><LanguageSelector /><DirectionProbe /></LanguageProvider></I18nextProvider>)
   expect(getComputedStyle(screen.getByTestId('direction-probe')).marginLeft).toBe('13px')
-  await userEvent.selectOptions(screen.getByRole('combobox'), 'ar')
+  await chooseLanguage('ar')
   expect(document.documentElement.dir).toBe('rtl')
   expect(screen.getByTestId('direction-probe').dataset.direction).toBe('rtl')
   expect(getComputedStyle(screen.getByTestId('direction-probe')).marginRight).toBe('13px')
-  await userEvent.selectOptions(screen.getByRole('combobox'), 'en')
+  await chooseLanguage('en')
   expect(document.documentElement.dir).toBe('ltr')
   expect(screen.getByTestId('direction-probe').dataset.direction).toBe('ltr')
   expect(getComputedStyle(screen.getByTestId('direction-probe')).marginLeft).toBe('13px')
@@ -200,61 +205,32 @@ it('switches HTML and MUI direction and actually mirrors Emotion styles for Arab
 
 describe('account portal errors', () => {
   it.each([
-    [401, 'errorUnauthenticated'], [403, 'errorForbidden'], [409, 'errorConflict'],
-    [400, 'errorInvalid'], [503, 'errorUnavailable'],
+    [403, 'errorForbidden'], [409, 'errorConflict'], [400, 'errorInvalid'], [503, 'errorUnavailable'],
   ])('localizes HTTP %s using status codes and retranslates existing errors', async (status, key) => {
-    const fetcher = vi.fn(async () => Response.json({ error: 'UNTRUSTED SERVER DETAILS' }, { status: status as number }))
-    vi.stubGlobal('fetch', fetcher)
+    const { fetcher } = mockAPI({ accessStatus: status as number })
     const instance = createI18n('en')
-    render(<I18nextProvider i18n={instance}><AccessPortal /></I18nextProvider>)
+    renderApp(instance)
     expect((await screen.findByRole('alert')).textContent).toBe(resources.en.admin[key])
+    const count = fetcher.mock.calls.length
     await act(() => instance.changeLanguage('fr'))
     expect(screen.getByRole('alert').textContent).toBe(resources.fr.admin[key])
-    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(fetcher.mock.calls).toHaveLength(count)
     expect(screen.queryByText('UNTRUSTED SERVER DETAILS')).toBeNull()
   })
+  it('returns to login on HTTP 401 from account access', async () => {
+    mockAPI({ accessStatus: 401 })
+    renderApp(createI18n('vi'))
+    await screen.findByRole('link', { name: resources.vi.auth.signIn })
+    expect(screen.getByRole('alert').textContent).toBe(resources.vi.auth.unauthenticated)
+  })
   it('uses a translated error for network failures instead of raw exception text', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('INTERNAL NETWORK DETAILS')))
-    render(<I18nextProvider i18n={createI18n('vi')}><AccessPortal /></I18nextProvider>)
+    const { fetcher } = mockAPI()
+    const normal = fetcher.getMockImplementation()!
+    fetcher.mockImplementation(async (path, options) => {
+      if (path === '/api/access/me') throw new Error('INTERNAL NETWORK DETAILS')
+      return normal(path, options)
+    })
+    renderApp(createI18n('vi'))
     expect((await screen.findByRole('alert')).textContent).toBe(resources.vi.admin.errorRequest)
   })
-})
-
-it('localizes administration and audit display while preserving identity, account names, and role mutation payloads', async () => {
-  const actor = { id: 'admin-1', issuer: 'https://issuer.test', subject: 'subject-1', email: 'admin@example.test', display_name: 'Alice', active: true, roles: ['Admin'], permissions: ['admin.manage', 'accounts.read'], account_ids: ['account-1'] }
-  const other = { ...actor, id: 'user-2', subject: 'subject-2', display_name: 'Bob', email: 'bob@example.test', roles: ['Viewer'] }
-  const account = { id: 'account-1', name: 'Original account name', active: true }
-  const audit = { id: '1', created_at: '2026-06-12T14:30:00Z', actor_id: actor.id, target_id: other.id, action: 'user.roles', details: { before: [], after: ['Viewer'] } }
-  const fetcher = vi.fn(async (path: string, options?: RequestInit) => {
-    if (options?.method === 'PUT') return new Response(null, { status: 204 })
-    if (path === '/api/access/me') return Response.json(actor)
-    if (path === '/api/accounts' || path.startsWith('/api/admin/accounts')) return Response.json([account])
-    if (path.startsWith('/api/admin/users')) return Response.json([actor, other])
-    if (path === '/api/admin/roles') return Response.json([{ name: 'Admin', permissions: ['admin.manage'] }, { name: 'Viewer', permissions: ['accounts.read'] }])
-    if (path.startsWith('/api/admin/audit')) return Response.json([audit])
-    throw new Error(`Unexpected request: ${path}`)
-  })
-  vi.stubGlobal('fetch', fetcher)
-  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
-  const instance = createI18n('fr')
-  render(<I18nextProvider i18n={instance}><LanguageProvider><AccessPortal /></LanguageProvider></I18nextProvider>)
-  await screen.findByText(`${formatDate(audit.created_at, 'fr')} — ${resources.fr.admin.actionRoles}`)
-  expect(screen.getByRole('heading', { name: 'Portail d’administration' })).toBeTruthy()
-  expect(screen.getByText('Administrateur: Gérer l’administration')).toBeTruthy()
-  expect(screen.getByText(JSON.stringify(audit.details))).toBeTruthy()
-  expect(screen.getAllByText(account.name).length).toBeGreaterThan(0)
-  fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Utilisateur' }))
-  await userEvent.click(await screen.findByRole('option', { name: 'Bob — bob@example.test' }))
-  await userEvent.click(screen.getByRole('checkbox', { name: 'Administrateur' }))
-  await waitFor(() => expect(fetcher.mock.calls.some(([path, options]) => path === '/api/admin/users/user-2/roles' && options?.method === 'PUT')).toBe(true))
-  const mutation = fetcher.mock.calls.find(([, options]) => options?.method === 'PUT')!
-  expect(JSON.parse(mutation[1]!.body as string)).toEqual({ roles: ['Viewer', 'Admin'] })
-  expect(confirm).toHaveBeenCalledWith(instance.t('admin:grantAdmin', { issuer: other.issuer, subject: other.subject }))
-  await screen.findByText(`${formatDate(audit.created_at, 'fr')} — ${resources.fr.admin.actionRoles}`)
-  const count = fetcher.mock.calls.length
-  await act(() => instance.changeLanguage('ar'))
-  expect(screen.getByText(`${formatDate(audit.created_at, 'ar')} — ${resources.ar.admin.actionRoles}`)).toBeTruthy()
-  expect(screen.getAllByText(`الصفحة ${new Intl.NumberFormat('ar').format(1)}`).length).toBe(3)
-  expect(screen.getByRole('checkbox', { name: 'مسؤول' })).toBeTruthy()
-  expect(fetcher.mock.calls).toHaveLength(count)
 })

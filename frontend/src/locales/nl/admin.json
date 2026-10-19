@@ -46,5 +46,14 @@
   "errorConflict": "Deze wijziging conflicteert met de huidige status. Vernieuw en probeer het opnieuw.",
   "errorInvalid": "Controleer uw invoer en probeer het opnieuw.",
   "errorUnavailable": "Accountbeheer is tijdelijk niet beschikbaar.",
-  "errorRequest": "Het verzoek is mislukt. Probeer het opnieuw."
+  "errorRequest": "Het verzoek is mislukt. Probeer het opnieuw.",
+  "changesSaved": "Wijzigingen opgeslagen.",
+  "usersEmpty": "Geen gebruikers gevonden.",
+  "accountsEmpty": "Geen accounts gevonden.",
+  "rolesEmpty": "Geen rollen gevonden.",
+  "auditEmpty": "Geen auditgebeurtenissen gevonden.",
+  "selectUser": "Gebruiker selecteren: {{name}}",
+  "editAccount": "Account bewerken: {{name}}",
+  "auditEvent": "Gebeurtenis",
+  "auditWho": "Actor / doel"
 }

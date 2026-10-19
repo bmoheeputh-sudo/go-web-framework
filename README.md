@@ -645,11 +645,14 @@ Writes require JSON, reject unknown fields and oversized bodies, and enforce
 origin checks. User/account deletion is intentionally represented by deactivation.
 
 The React dashboard shows assigned roles and linked accounts. Administrators also
-see the Admin Portal: select a user, verify their issuer/subject, toggle role
-assignments, activate/deactivate users, create/edit accounts, link/unlink accounts,
-and inspect audit history. Admin grants require an explicit browser confirmation.
-Selectors and audit history have pagination. Use Refresh access after your roles
-change. Backend authorization remains authoritative if the UI becomes stale.
+see Users, Accounts, Roles, and Audit logs in the sidebar. On Users, select a user,
+verify their issuer/subject, toggle roles, activate/deactivate users, and link or
+unlink accounts. Accounts provides account creation and editing; Roles displays
+the existing permission catalog; Audit logs displays the audit history. Admin
+grants require an explicit browser confirmation. User selectors, account selectors,
+the account-link picker, and audit history have pagination. Use Refresh access on
+the dashboard after your roles change. Backend authorization remains authoritative
+if the UI becomes stale.
 
 Every successful admin mutation records the actor's framework user ID, target,
 action, UTC timestamp, and before/after values in the same transaction. A failed
@@ -721,15 +724,226 @@ Use the toolbar selector to try each language, refresh to verify persistence,
 and select Arabic to inspect RTL layout. No environment variables, database
 changes, or migrations are needed for multilingual support.
 
+## Reusable portal and navigation (Phase 7)
+
+The responsive layout has a 260px expanded / 68px collapsed desktop drawer, with
+tooltips for collapsed links. Its preference is stored as a boolean string under
+`gwf.sidebar.expanded`, separately from `gwf.language`; neither preference contains
+authentication data. Below MUI's `md` breakpoint (900px), the menu button opens a
+temporary drawer that closes on navigation, including browser back/forward, or
+Escape. Arabic explicitly uses a right-hand drawer, left-hand tooltips, and the
+matching slide transition. Width transitions respect reduced-motion preferences.
+The top bar shows the current page title, language and appearance selectors, and
+an avatar that opens the authenticated user’s profile menu.
+
+| Route | Page and access |
+| --- | --- |
+| `/` | Dashboard, public health and login status; authenticated users also see their roles and linked accounts. |
+| `/users` | User roles, activation, and account associations; requires `admin.manage`. |
+| `/accounts` | Account creation/editing; requires `admin.manage`. |
+| `/roles` | Read-only role/permission catalog; requires `admin.manage`. |
+| `/audit` | Paginated audit history; requires `admin.manage`. |
+| Other paths | Translated page-not-found view with a dashboard link. |
+
+User and Viewer accounts retain their linked-account view on the dashboard. The
+Accounts administration page does not broaden their access. Sidebar filtering and
+route guards use the same access predicate, but routes are guarded independently:
+typing a hidden URL cannot mount its page or fetch its administration data. An
+active authenticated user is required for protected routes; if both a role and a
+permission are specified, both are required. Go remains the final authorization
+authority for every API request. There are no client-side role grants or bypasses.
+
+The main frontend modules are:
+
+- `navigation/NavigationRegistry.tsx`: typed `NavItem` definitions and static
+  registration; `navigation/AppRoutes.tsx`: nested React Router routes.
+- `navigation/ProtectedRoute.tsx` and `authorization.ts`: authentication/access
+  checks and translated denials.
+- `layout/AdminLayout.tsx`: layout with `<Outlet />`; accepts `items` as a prop.
+  `Sidebar.tsx` renders links and `TopBar.tsx` renders identity and controls.
+- `pages/`: Dashboard, Users, Accounts, Roles, AuditLogs, and NotFound components.
+  `lazyPages.ts` declares page-level `React.lazy` boundaries; the layout supplies
+  `Suspense`. Administration pages load only when visited and authorized.
+- `auth/SessionProvider.tsx` and `session.ts`: shared identity, health, access, and
+  logout state above the routes; `AuthenticationNotice.tsx`: existing login UI.
+- `api/client.ts`: shared HTTP/error handling and API types; `cache.ts`,
+  `queries.ts`, and `QueryProvider.tsx`: small in-memory read cache and hooks.
+- `AccessPortal.tsx`: dashboard role/account summary; `components/PageTools.tsx`:
+  shared refresh, loading/error indicators, and locale-aware pagination.
+
+### Appearance, profile, and feedback (Phase 7.1)
+
+Use the **Appearance** icon menu in the toolbar to choose Light, Dark, or System. System is the
+initial default and follows live operating-system color-scheme changes. An explicit
+Light or Dark selection overrides the OS preference. The selection persists under
+`gwf.appearance` independently of language and sidebar settings; no identity or
+authentication data is stored with these preferences. If browser storage is
+blocked, controls continue working for the current page. Preferences are not
+synchronized between already-open tabs.
+
+Appearance is integrated into `LanguageProvider.tsx` so MUI colors, locale,
+CssBaseline, and the existing Emotion RTL caches stay coordinated. Components use
+theme colors for backgrounds, selection, text, and status. `appearance/` contains
+the preference context and toolbar selector. A circular 24px floating toggle
+straddles the desktop sidebar/content seam at the center of the 80px top toolbar.
+It sits outside the drawer's clipped scroll area and follows the 260px/68px width
+transition, including in RTL. The collapsed header shows only the logo. A second
+control at the bottom uses the same state: a labeled collapse button when expanded
+and an expand icon when collapsed. Only the navigation list scrolls, so the bottom
+control stays visible. Both controls preserve keyboard focus styling, translated
+tooltips, and preference persistence. Mobile hides both desktop controls and
+retains the temporary drawer's menu and close buttons.
+
+The compact **Language** button shows the selected code (such as EN or PT-BR) and
+opens a menu of all twelve native language names, without flags. The appearance
+icon reflects the selected Light, Dark, or System mode. Both menus mark the current
+choice, support keyboard navigation and Escape, restore focus to their trigger,
+and align with the current LTR/RTL direction. Existing localized labels are reused;
+no translation keys or dependencies are required for these controls.
+
+On desktop, the profile button shows the avatar, authenticated display name,
+primary application role, and dropdown chevron. A blank display name falls back
+to the email from the authentication API. Name and role text use CSS ellipsis,
+with a maximum text width of 160px from MUI's md breakpoint (900px) and 220px from
+lg (1200px). The avatar and chevron do not shrink. The full name is available in a
+tooltip and the profile menu. Mobile shows just the avatar. The primary
+role uses existing localized labels with display precedence Admin, User, Viewer;
+this is presentation only and does not change role permissions. Inactive users do
+not show an active application role. Language, appearance, and profile controls
+remain grouped horizontally, with the toolbar able to wrap on narrow screens.
+
+Open the avatar or name to inspect display name, email, provider, issuer, and subject.
+`layout/UserProfileMenu.tsx` explicitly renders only these identity fields. OIDC
+Sign out uses the existing POST logout and session-clearing behavior. Google IAP
+shows that sign-out is managed by the identity provider/IAP; Local DEV explains its
+fixed development identity and offers no logout action.
+
+`notifications/NotificationProvider.tsx` queues transient MUI Snackbar/Alert
+messages. `useNotifications()` supports `success`, `error`, `warning`, and `info`,
+with a namespaced translation key and optional interpolation values. For example,
+inside a registered page:
+
+```tsx
+const notify = useNotifications()
+notify({ severity: 'info', messageKey: 'common:loading' })
+```
+
+Import the hook from `notifications/notifications`. Administrative mutations use
+this shared hook automatically: successful writes show a confirmation and failed
+writes show the existing localized error. Identical visible or queued messages are
+coalesced. Errors also remain inline on the page until refresh or the next attempt;
+the snackbar does not replace the durable error. Notifications expire after six
+seconds (MUI pauses the timer during interaction) or can be dismissed. Logout or
+an identity change clears the notification queue along with the read cache.
+
+Users, Accounts, Roles, and Audit logs use `components/CompactTable.tsx`, with
+compact rows, translated empty states, and keyboard-focusable horizontal scrolling
+contained within each table on small screens. Select a user or account by its name
+button to edit it; **Create new account** resets the account form. Pagination,
+role confirmations, self-change restrictions, account linking, API paths, and raw
+audit JSON retain their existing behavior. The Roles catalog remains read-only.
+
+To check these additions locally, use the existing backend configuration and run
+`npm run dev` from `frontend`. Select each appearance, reload, then choose System
+and change the OS theme. Try Arabic in both themes, collapse the sidebar and hover
+its icons, and inspect the avatar menu with the configured provider. Use the mocked
+frontend suite to exercise successful/rejected changes and empty tables without
+modifying live records. The UI tests run in jsdom; they do not replace real-browser
+visual and screen-reader checks.
+
+### Register application pages
+
+Create the registry once outside a component and pass it to `App`. For example:
+
+```tsx
+import { lazy } from 'react'
+import AssessmentRounded from '@mui/icons-material/AssessmentRounded'
+import App from './App'
+import { createNavigationRegistry } from './navigation/NavigationRegistry'
+
+const ReportsPage = lazy(() => import('./pages/ReportsPage'))
+const navigation = createNavigationRegistry([
+  {
+    path: '/reports/daily',
+    labelKey: 'common:navReports',
+    icon: <AssessmentRounded />,
+    element: <ReportsPage />,
+    requiredRole: 'User',
+    requiredPermission: 'accounts.read',
+  },
+])
+
+// Inside the existing BrowserRouter / LanguageProvider setup:
+<App navigation={navigation} />
+```
+
+Add `navReports` to all twelve `common.json` files. The example role requirement
+is exact, not a hierarchy: an Admin without the User role would not match it.
+Omit `requiredRole` when a permission alone should determine access. With neither
+requirement, a route still requires an active authenticated framework user;
+`public: true` is explicit and cannot be combined with privilege requirements.
+Register static absolute application paths (including nested paths), with no
+duplicates or `/api` paths. Parameterized routes, runtime plugin downloads, and
+plugin discovery are intentionally outside this simple registry.
+
+### Data freshness and deployment routing
+
+Identity/configuration/health and current access are fetched once per application
+mount, not on language changes or ordinary navigation. Page reads are deduplicated
+and cached only in memory for the current identity. Successful mutations and the
+refresh controls invalidate cached reads; late aborted responses are discarded.
+Refresh administration reloads page data; Refresh access reloads current roles and
+links. There is no polling or cross-tab synchronization, so changes by another
+administrator appear after refresh or reload. API 401 responses expire the UI
+session, and logout removes cached protected content. Cached data is never written
+to local storage. API 403/409 responses remain localized errors; rejected writes
+do not optimistically alter displayed records.
+
+Vite's existing `/api` proxy is unchanged. Direct URL refreshes work through Vite's
+SPA fallback. For a deployed build, configure the existing frontend web server to
+serve `frontend/dist/index.html` for application routes such as `/users`, while
+serving built assets normally and routing **all `/api/*` requests to Go before any
+SPA fallback**. This preserves `/api/auth/login`, `/api/auth/callback`, and logout;
+OIDC's callback still returns to the dashboard as before. A client-side 404 view
+is rendered inside the SPA; its initial HTML response is normally HTTP 200.
+
+Routing follows React Router's
+[nested layout routes](https://reactrouter.com/start/declarative/routing), with
+`BrowserRouter`, router links, `useLocation`, and `<Outlet />`. No Go routes,
+database schema, migrations, or authentication configuration are changed.
+
+### Try the redesigned portal locally
+
+Start the backend using your existing authentication configuration and the earlier
+startup instructions, then:
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+Use the same frontend origin as your configured OIDC redirect URI when using OIDC.
+With an existing authorized Admin, visit Users, Accounts, Roles, and Audit logs;
+refresh each URL and try browser back/forward. Collapse the sidebar, reload, and
+verify it stays collapsed. Narrow the viewport below 900px and test the menu.
+Switch to Arabic to check the drawer, tooltips, controls, and dates. With an
+existing User or Viewer, verify linked accounts on Dashboard and an access-denied
+page for a directly entered `/users` URL. Do not grant privileges merely to test
+the UI; automated tests use mock identities and disposable databases.
+
 ### Application checks
 
 ```bash
 cd backend
 go test -race -cover ./...
+go vet ./...
 cd ../frontend
 npm test
 npm run build
 npm run lint
+cd ..
+git diff --check
 ```
 
 The frontend tests mock all API requests. They validate all 36 translation JSON
@@ -737,6 +951,14 @@ files, consistent keys and interpolation placeholders, English fallback, browser
 detection, switching all twelve languages, preference persistence and blocked
 storage, HTML/MUI direction and actual Emotion style mirroring, locale formatting,
 localized HTTP/network errors, and unchanged administrator role request values.
+Portal tests additionally cover registry extensions, independent guards on all
+administration routes, direct URLs, browser history, persistent desktop widths,
+mobile closing behavior, RTL edges/tooltips/slide direction, user activation,
+self-change protection, Admin confirmation, account linking/unlinking and picker
+pagination, account creation/editing, rejected writes, audit pagination, session
+expiry/logout, and cache invalidation/recovery. These UI tests run in jsdom;
+viewport and transition geometry are mocked, so they do not replace visual checks
+in the deployment's supported browsers.
 
 The Go tests cover identity validation, Local DEV guards, OIDC discovery and
 configuration, successful login, PKCE, browser-bound state, nonce, signed tokens,

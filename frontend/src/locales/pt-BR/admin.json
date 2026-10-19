@@ -46,5 +46,14 @@
   "errorConflict": "Esta alteração conflita com o estado atual. Atualize e tente novamente.",
   "errorInvalid": "Verifique os dados informados e tente novamente.",
   "errorUnavailable": "A administração de contas está temporariamente indisponível.",
-  "errorRequest": "A solicitação falhou. Tente novamente."
+  "errorRequest": "A solicitação falhou. Tente novamente.",
+  "changesSaved": "Alterações salvas.",
+  "usersEmpty": "Nenhum usuário encontrado.",
+  "accountsEmpty": "Nenhuma conta encontrada.",
+  "rolesEmpty": "Nenhuma função encontrada.",
+  "auditEmpty": "Nenhum evento de auditoria encontrado.",
+  "selectUser": "Selecionar usuário: {{name}}",
+  "editAccount": "Editar conta: {{name}}",
+  "auditEvent": "Evento",
+  "auditWho": "Autor / alvo"
 }

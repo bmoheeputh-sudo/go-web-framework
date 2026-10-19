@@ -46,5 +46,14 @@
   "errorConflict": "Thay đổi này xung đột với trạng thái hiện tại. Hãy tải lại và thử lại.",
   "errorInvalid": "Kiểm tra thông tin đã nhập rồi thử lại.",
   "errorUnavailable": "Chức năng quản trị tài khoản tạm thời không khả dụng.",
-  "errorRequest": "Yêu cầu không thành công. Vui lòng thử lại."
+  "errorRequest": "Yêu cầu không thành công. Vui lòng thử lại.",
+  "changesSaved": "Đã lưu thay đổi.",
+  "usersEmpty": "Không tìm thấy người dùng.",
+  "accountsEmpty": "Không tìm thấy tài khoản.",
+  "rolesEmpty": "Không tìm thấy vai trò.",
+  "auditEmpty": "Không tìm thấy sự kiện kiểm toán.",
+  "selectUser": "Chọn người dùng: {{name}}",
+  "editAccount": "Chỉnh sửa tài khoản: {{name}}",
+  "auditEvent": "Sự kiện",
+  "auditWho": "Người thực hiện / đối tượng"
 }
