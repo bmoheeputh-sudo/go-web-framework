@@ -34,6 +34,7 @@ type Registry struct {
 	ids         []string
 	permissions []string
 	routes      []route
+	migrations  []MigrationPlan
 }
 
 // New accepts only a literal comma-separated allowlist. Empty means no modules.
@@ -62,6 +63,13 @@ func New(catalog []module.Module, enabled string) (*Registry, error) {
 			}
 			permissions[permission] = true
 		}
+		if manifest.Migrations != nil {
+			if _, err := migrationPlan(manifest.ID, *manifest.Migrations); err != nil {
+				return nil, err
+			}
+			frozen := *manifest.Migrations
+			manifest.Migrations = &frozen
+		}
 		manifest.Permissions = slices.Clone(manifest.Permissions)
 		known[manifest.ID], manifests[manifest.ID] = m, manifest
 	}
@@ -81,6 +89,10 @@ func New(catalog []module.Module, enabled string) (*Registry, error) {
 	validator := http.NewServeMux()
 	for _, id := range registry.ids {
 		manifest := manifests[id]
+		if manifest.Migrations != nil {
+			plan, _ := migrationPlan(id, *manifest.Migrations) // already validated, copied above
+			registry.migrations = append(registry.migrations, plan)
+		}
 		collector := &registrar{id: id, declared: make(map[module.Permission]bool), validator: validator}
 		for _, permission := range manifest.Permissions {
 			collector.declared[permission] = true

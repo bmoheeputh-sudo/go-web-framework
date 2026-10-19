@@ -147,6 +147,10 @@ func newServer(getenv func(string) string) (*application, error) {
 			return nil, errors.New("RBAC schema unavailable; apply migration 000004 manually before enabling RBAC")
 		}
 	}
+	if err := registry.CheckMigrations(context.Background(), pool); err != nil {
+		closeResources()
+		return nil, err
+	}
 	handler, err := newHandlerWithModules(provider, authorization, origin, registry)
 	if err != nil {
 		closeResources()

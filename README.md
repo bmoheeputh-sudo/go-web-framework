@@ -996,7 +996,8 @@ existing authentication data. The bootstrap command is not run against live data
 Application modules are statically imported Go packages. `backend/module/module.go`
 provides the small `Module`, `Manifest`, `Permission`, and `Registrar` contract.
 `backend/server.go` contains the explicit catalog; no package-init hooks, runtime
-plugin discovery, dynamic code loading, or module-specific migrations are added.
+plugin discovery or dynamic code loading is used. Phase 8.3 adds optional module
+migration metadata and read-only startup checks.
 The frontend and existing authentication, account, administrator, and audit APIs
 keep their current behavior.
 
@@ -1019,8 +1020,9 @@ RBAC_ENABLED=true
 ENABLED_MODULES=example
 ```
 
-Change configuration with `vi .env` and restart through the existing startup
-instructions. This does not register permission rows or grant access.
+Before enabling `example`, manually install its version-1 schema using the Phase
+8.3 instructions below. Change configuration with `vi .env` and restart through
+the existing startup instructions. This does not register permission rows or grant access.
 `GET /api/modules` requires verified authentication and returns only:
 
 ```json
@@ -1038,16 +1040,16 @@ Configuration changes take effect after restart; there is no frontend module UI 
 ### Routes and permission boundaries
 
 The example in `backend/internal/apps/example/module.go` declares `example.read`
-and two read-only endpoints, with no storage or external integrations:
+and two read-only endpoints, with an empty owned schema and no external integrations:
 
 | Endpoint | Requirements |
 | --- | --- |
 | `GET /api/modules/example/info` | Verified identity, active registered framework user, and `example.read`. |
 | `GET /api/modules/example/accounts/{account}/info` | The same, plus an explicit link to the active account in the path. |
 
-Neither endpoint has a default grant, including for Admin. Because permission
-provisioning/module migrations are outside this phase, an existing database will
-normally return 403 even after enabling the example. A permission must be declared
+Neither endpoint has a default grant, including for Admin. Once its required
+migration is installed, an existing database will normally return 403 even after
+enabling the example until permissions are explicitly provisioned. A permission must be declared
 in code **and** exist with an approved role binding in PostgreSQL before it grants
 access. Only disposable integration tests provision these example permissions in
 this phase. No live permission changes or module migrations are needed to run tests.
@@ -1098,8 +1100,9 @@ membership check alone is not sufficient for arbitrary stored resources.
 Phase 8.2 adds the shared mutation/audit adapter described below. Existing core
 mutations retain their transaction-time checks, revocation lock, last-Admin
 protection, and audit behavior. The shipped example still performs no writes.
-There are no module migrations, automatic permission provisioning, per-module
-roles, background workers, or frontend module routes in this phase.
+Module migrations are managed independently as described in Phase 8.3 below.
+There is no automatic permission provisioning, per-module role system, background
+worker, or frontend module route registration.
 
 Run `go test -race -count=1 ./...` and `go vet ./...` from `backend`, then
 `npm test`, `npm run build`, and `npm run lint` from `frontend`. New tests cover
@@ -1229,10 +1232,174 @@ application writes. A connection loss during COMMIT can leave the outcome unknow
 reconcile business/audit records before considering a retry.
 
 No database changes are required for this adapter. Migrations 000001–000004 are
-unchanged, and no module business tables are installed. Future modules need reviewed,
-version-controlled migrations for their own data tables and explicit permission
+unchanged, and no module business tables are installed. Phase 8.3 supplies independent migration management. Future modules still need
+reviewed, version-controlled migrations for their own data tables and explicit permission
 rows/grants, applied manually after approval. Use the existing `framework.audit_log`
 and existing `go_web_app` role; never introduce a second audit table.
+
+## Independent module migrations (Phase 8.3)
+
+Core SQL files `database/migrations/000001`–`000004` and the existing
+`public.schema_migrations` journal are unchanged. Each persistent module has a
+separate numbered migration sequence and journal:
+
+```text
+database/
+├── migrations/                         # core: public.schema_migrations
+└── modules/
+    └── example/
+        └── migrations/                 # example: public.schema_migrations_example
+            ├── 000001_initial.up.sql
+            └── 000001_initial.down.sql
+```
+
+Declare optional metadata in the compile-time manifest:
+
+```go
+module.Manifest{
+    ID: "example",
+    Permissions: []module.Permission{"example.read"},
+    Migrations: &module.MigrationSpec{
+        Schema: "example",
+        Directory: "database/modules/example/migrations",
+        RequiredVersion: 1,
+    },
+}
+```
+
+A nil `Migrations` value means no persistent schema requirement. To prevent
+cross-module configuration mistakes, schema **must equal the module ID** and the
+repository-relative directory **must be exactly** `database/modules/<id>/migrations`.
+Absolute paths, traversal, URLs, alternative module/core paths, reserved PostgreSQL
+schemas and nonpositive versions are rejected. Catalog metadata is validated even
+for disabled modules and copied to prevent later mutation. Journal names are
+always derived as `public.schema_migrations_<id>`; modules cannot supply or override
+a journal name. `Registry.MigrationPlans()` returns copies for enabled modules only.
+The runtime neither scans source directories nor executes migration files. Ship
+reviewed SQL directories with the deployment tooling; binaries need no SQL files
+for startup validation.
+
+After the existing core checks, startup checks enabled persistent modules inside a
+bounded, read-only, repeatable-read PostgreSQL transaction. It requires schema
+existence/USAGE, a readable regular journal table in `public`, exactly one version
+row, `dirty=false`, and an **exact version match**. Both older and newer versions
+fail closed. A missing/empty/invalid journal, missing schema, dirty state, timeout,
+or database error stops startup with a sanitized error. No journal is created and
+no SQL files are applied. Disabled/stateless modules do not need schemas or
+journals. Capability responses, permissions, authentication, RBAC and transaction
+security are unchanged; the startup check never grants permissions.
+
+### Manual operator workflow
+
+Do not run the following against the live development, TEST or PRD database until
+explicitly approved. Stop affected application instances for migration/deployment,
+review the SQL and take an appropriate backup. Use the existing `go_web_app` role
+for module migrations; no new user or database server is needed. The role needs
+CREATE on the database and CREATE/USAGE on `public` to install its own schema and
+journal. Have the database owner review/provision these privileges separately if
+missing; this implementation never grants them automatically. It does not alter
+permissions on the framework journal. The newly created module schema and journal
+are owned by `go_web_app`. TEST/PRD still require production-safe database TLS.
+
+From the repository root, with the existing `DB_*` settings exported in your shell:
+
+```bash
+export PGHOST="$DB_HOST"
+export PGPORT="${DB_PORT:-5432}"
+export PGDATABASE="$DB_NAME"
+export PGUSER=go_web_app
+export PGPASSWORD="$DB_PASSWORD"
+export PGSSLMODE="${DB_SSLMODE:-verify-full}"
+export PGSSLROOTCERT="${DB_SSLROOTCERT:-}"
+```
+
+Keep credentials out of command arguments, shell tracing, logs and source control.
+Review local settings with `vi .env`; this documentation does not execute or load it.
+Use the existing approved credential handling process to export its values.
+
+Read-only status, including schema presence, current version and dirty state:
+
+```bash
+psql -X -v ON_ERROR_STOP=1 <<'SQL'
+BEGIN READ ONLY;
+SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = 'example') AS schema_exists,
+       pg_catalog.to_regclass('public.schema_migrations_example') AS journal;
+SELECT version, dirty FROM public.schema_migrations_example;
+ROLLBACK;
+SQL
+```
+
+A missing journal produces a relation-not-found error; it is not created by this
+status command. A schema without a journal is untracked, not an installed version.
+Before enabling the example, install the reviewed version 1 manually:
+
+```bash
+migrate -path database/modules/example/migrations \
+  -database 'postgres://?search_path=public&x-migrations-table=schema_migrations_example' up 1
+
+migrate -path database/modules/example/migrations \
+  -database 'postgres://?search_path=public&x-migrations-table=schema_migrations_example' version
+```
+
+The [official golang-migrate PostgreSQL driver](https://github.com/golang-migrate/migrate/blob/master/database/postgres/README.md)
+supports `x-migrations-table`; `search_path=public` applies only to this operator
+connection so the driver places its selected journal in `public`. Application
+requests do not modify their search path. Migration SQL uses fully qualified table
+names. Never omit/substitute the journal option when migrating a module. Keep the
+core command pointed at `database/migrations` and `public.schema_migrations`.
+**Even `migrate version` may create a journal on first use**; use the psql read-only
+status command for inspection before approval/installation.
+
+For later module versions, review the current status and apply the intended number
+of steps with `up N`, then deploy the binary with the matching `RequiredVersion`.
+Do not use `goto` without checking the current version: it can migrate down.
+The example's initial migration creates only its empty schema, without business
+tables, permission grants or external integrations. Its optional approved rollback is:
+
+```bash
+migrate -path database/modules/example/migrations \
+  -database 'postgres://?search_path=public&x-migrations-table=schema_migrations_example' down 1
+```
+
+The example rollback uses `DROP SCHEMA example RESTRICT` and fails if unexpected
+objects remain. It never drops any migration journal. Future module rollbacks may
+remove data: review each down migration independently. Disabling a module removes
+its routes and readiness requirements, but leaves its schema, data and journal intact.
+
+### Dirty-state recovery and boundaries
+
+A dirty journal blocks startup and further migrations. Inspect the failed SQL,
+version/dirty row and actual schema before taking action. Keep multi-statement
+module DDL transactional (`BEGIN`/`COMMIT`) where PostgreSQL permits. After a failed
+transactional upgrade from 1 to 2, first prove the database still matches version 1.
+Only after approval, repair the SQL/schema and reconcile the module's marker:
+
+```bash
+# Example ONLY when inspection confirms that version 1 is the actual state:
+migrate -path database/modules/example/migrations \
+  -database 'postgres://?search_path=public&x-migrations-table=schema_migrations_example' force 1
+# Then apply the reviewed repair/upgrade with the same module directory and journal.
+```
+
+`force` changes metadata; it does not repair or execute SQL. Never blindly force the
+required version or touch `public.schema_migrations` to repair a module. The recovery
+tests intentionally edit only disposable migration files, never deployed history.
+
+Independent journals prevent accidental version/dirty-state collisions through the
+migration infrastructure. SQL migrations remain trusted operator-reviewed code:
+with a single database user, this is **not a database sandbox** against deliberately
+cross-schema SQL. Review files (including any symlinks) for module-owned objects and
+fully qualified SQL; never write framework/other-module journal tables in migration
+SQL. Existing framework grants are unchanged. golang-migrate tracks version/dirty
+state rather than checksums, and a startup version check does not inspect every
+business table or continuously monitor schema drift. Avoid concurrent live migrations.
+
+Tests use disposable PostgreSQL clusters and the real golang-migrate CLI, with
+`go_web_app` for migration and readiness connections. They cover installation,
+upgrade/rollback, separate numbering/journals, dirty and failed migration recovery,
+missing/invalid state, disabled modules, read-only validation, and core/other-module
+journal preservation. The CLI with PostgreSQL support and local PostgreSQL binaries
+are required; tests explicitly skip if either tool is unavailable.
 
 ## Backup to GitHub and Google Drive
 

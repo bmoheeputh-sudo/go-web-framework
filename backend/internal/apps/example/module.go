@@ -1,4 +1,4 @@
-// Package example demonstrates registration without domain storage or integrations.
+// Package example demonstrates registration with an independent schema and no business tables or integrations.
 package example
 
 import (
@@ -13,7 +13,9 @@ const Read module.Permission = "example.read"
 type Module struct{}
 
 func (Module) Manifest() module.Manifest {
-	return module.Manifest{ID: "example", Permissions: []module.Permission{Read}}
+	return module.Manifest{ID: "example", Permissions: []module.Permission{Read}, Migrations: &module.MigrationSpec{
+		Schema: "example", Directory: "database/modules/example/migrations", RequiredVersion: 1,
+	}}
 }
 
 func (Module) Register(routes module.Registrar) error {

@@ -10,6 +10,16 @@ type Permission string
 type Manifest struct {
 	ID          string
 	Permissions []Permission
+	Migrations  *MigrationSpec
+}
+
+// MigrationSpec is optional. Schema and directory must follow the module ID;
+// journals are framework-derived, never module-configurable. RequiredVersion is
+// an exact compatibility requirement, not a minimum. No startup SQL execution.
+type MigrationSpec struct {
+	Schema          string
+	Directory       string // repository-relative database/modules/<id>/migrations
+	RequiredVersion int64
 }
 
 type Module interface {
