@@ -65,6 +65,7 @@ func Register(mux *http.ServeMux, provider auth.Authenticator, store *access.Sto
 		})
 		mux.Handle(pattern, auth.Require(provider, access.ProtectWrites(origin, store.Require(access.AdminManage, "", available))))
 	}
+	newConnectionTests(repo, origin).register(mux, route)
 	route("GET /api/admin/auth/settings", func(w http.ResponseWriter, r *http.Request) {
 		before, limit, err := pagination(r.URL.RawQuery)
 		if err != nil {

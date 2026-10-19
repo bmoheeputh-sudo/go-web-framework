@@ -11,6 +11,7 @@ import { formatDate, formatNumber } from '../i18n'
 import { useNotifications } from '../notifications/notifications'
 import type { Notification } from '../notifications/notifications'
 import AuthDraftForm from './AuthDraftForm'
+import OIDCConnectionTest from './OIDCConnectionTest'
 
 export default function AuthenticationSettings() {
   const { t, i18n } = useTranslation(['auth', 'common', 'admin'])
@@ -112,6 +113,7 @@ export default function AuthenticationSettings() {
         {metadata.status === 'draft' && <Button disabled={locked || Boolean(queryError)} variant="contained" onClick={() => void mutate(`${authSettingsPath}/${metadata.id}/validate`, { expected_generation: metadata.generation }, 'auth:validationSaved')}>{t('validateSettings')}</Button>}
         {metadata.status === 'validated' && <Button disabled={locked || Boolean(queryError)} variant="contained" onClick={() => setApproval(metadata)}>{t('approveRevision')}</Button>}
       </Stack>
+      {metadata.status === 'approved' && metadata.provider === 'oidc' && <OIDCConnectionTest key={metadata.id} revision={metadata} disabled={locked || Boolean(queryError)} />}
     </Paper>}
     <Dialog open={Boolean(approval)} onClose={() => { if (!busy) setApproval(null) }} fullWidth maxWidth="sm" aria-labelledby="auth-approve-title">
       <DialogTitle id="auth-approve-title">{t('approveTitle')}</DialogTitle>

@@ -27,3 +27,10 @@ export type NewAuthDraft = { expected_latest_version: number } & (
 )
 export const authSettingsPath = '/api/admin/auth/settings'
 export const authStatusPath = '/api/admin/auth/status' // No query parameters on this endpoint.
+
+export type ConnectionTest = {
+  id: string; revision_id: string; configuration_version: number; generation: number
+  status: 'checking' | 'pending' | 'processing' | 'succeeded' | 'failed' | 'cancelled' | 'expired'
+  expires_at: string; callback_uri: string; reason?: string; tested_identity?: Identity
+}
+export type StartedConnectionTest = ConnectionTest & { authorization_url?: string }

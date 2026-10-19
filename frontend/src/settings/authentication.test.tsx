@@ -105,6 +105,7 @@ it('keeps runtime environment authentication separate from approved and database
   expect(detail.textContent).toContain(approved.created_by)
   expect(detail.textContent).toContain(en.secretPresent)
   expect(screen.queryByRole('button', { name: en.approveRevision })).toBeNull()
+  expect(screen.getByRole('button', { name: en.testConnection })).toBeTruthy()
   expect(fetcher.mock.calls.some(([path]) => path === `${settings}/${approved.id}`)).toBe(true)
   expect(fetcher.mock.calls.filter(([path]) => path.startsWith(statusPath)).every(([path]) => path === statusPath)).toBe(true)
 })

@@ -1572,14 +1572,14 @@ the application using the existing instructions and visit `/settings` with an
 already authorized administrator. Saving/registering against the actual development
 database is a live mutation and requires your explicit approval.
 
-## Authentication configuration storage and administration (Phases 9.2.1–9.2.3)
+## Authentication configuration storage and administration (Phases 9.2.1–9.2.4)
 
 This is **management-only configuration storage**, not a new authentication source.
 The Phase 9.2.2 admin APIs use the Phase 9.2.1 repository and encryption. Runtime
 `AUTH_PROVIDER`, provider startup and sessions continue using environment settings.
 Phase 9.2.3 adds a management UI under Settings → Authentication. There is no
-activation method, provider switching, external OIDC handshake, polling or
-LISTEN/NOTIFY. Migration 000005 seeds no configuration or active state.
+activation method, provider switching, background polling or LISTEN/NOTIFY.
+Phase 9.2.4 adds a separate, explicitly initiated OIDC test handshake. Migration 000005 seeds no configuration or active state.
 The existing admin, RBAC, account and module APIs retain their behavior.
 
 ### Versioned storage and scope
@@ -1801,8 +1801,8 @@ are never included. Authorization is rechecked inside the shared advisory-locked
 `AdminTransaction`; mutation and audit commit or roll back together.
 
 The current policy allows the same authorized administrator to create, validate
-and approve a revision. Separate approvers, provider connection tests, activation,
-and runtime keyring/rotation management remain future reviewed phases.
+and approve a revision. Separate approvers, activation, and runtime keyring/rotation management remain
+future reviewed phases.
 
 ### Authentication Settings UI (Phase 9.2.3)
 
@@ -1845,11 +1845,114 @@ UI never runs migrations. Viewing status/history is read-only. Creating,
 validating or approving a draft writes management records and audit events to
 the configured database, so use a disposable environment for interactive tests.
 
-Test Connection is reserved for Phase 9.2.4; activation and rollback for Phase
-9.2.5. This UI has no controls or requests for those unimplemented operations.
+Test Connection is implemented in Phase 9.2.4 below. Activation and rollback
+remain reserved for Phase 9.2.5, with no operational controls or requests.
 Frontend tests mock all HTTP requests; they do not contact an identity provider
 or the live database. Automated responsive/RTL tests use a DOM environment;
 visual review in a real browser is still advisable.
+
+### Isolated OIDC connection tests (Phase 9.2.4)
+
+Select an **approved OIDC revision** under Settings → Authentication, open its
+metadata, and choose **Test Connection**. Allow the popup and sign in to the
+provider. The main window polls only this explicitly started operation and shows
+its revision, result, callback URL, and verified issuer/subject. Success proves
+only that particular identity authenticated with that immutable revision and
+generation. It does not prove that other users can log in or have application
+access. No provider is activated, and the tested identity is never registered as
+a framework user, assigned roles, or issued an application session.
+
+The test callback is **`APP_ORIGIN` + `/api/auth/test/callback`**, separate from
+normal `/api/auth/callback`. For the current local origin, add this exact URL to
+the Auth0 application's **Allowed Callback URLs** before live testing:
+
+```text
+http://localhost:5173/api/auth/test/callback
+```
+
+Keep the existing normal-login callback
+`http://localhost:8080/api/auth/callback`. Visit the portal through
+`http://localhost:5173` consistently; `localhost` and `127.0.0.1` are different
+cookie origins. Vite's existing `/api` proxy forwards the test callback to Go.
+If `APP_ORIGIN` changes, allowlist its exact test callback instead. HTTPS is
+required outside development; local HTTP also requires the approved revision's
+HTTP-development allowance. The test deliberately substitutes its isolated
+callback for the stored normal callback, so success does **not** verify the
+normal callback's provider allowlisting. Configure the stored issuer using the
+provider's exact issuer, including its trailing slash. Client credentials come
+only from the encrypted approved revision, never frontend variables or code.
+
+| Method | Endpoint | Behavior |
+| --- | --- | --- |
+| POST | `/api/admin/auth/settings/{id}/test` | `{ "expected_generation": 3 }`; checks approved OIDC revision, audits start, validates discovery/JWKS, returns test metadata and a pending authorization URL |
+| GET | `/api/admin/auth/tests/{test_id}` | Returns safe result metadata to the initiating, still-authorized administrator only |
+| POST | `/api/admin/auth/tests/{test_id}/cancel` | `{}`; cancels pending work, records an audit result, clears the test cookie |
+| GET | `/api/auth/test/callback` | Public one-time callback, correlated with the originating browser; never an application login endpoint |
+
+All administration endpoints retain verified authentication, active user and
+`admin.manage` checks; writes require the configured Origin and JSON. The shared
+advisory-locked administrator transaction rechecks the actor and exact revision
+generation before releasing credentials, before exchange and before publishing
+success. A different administrator cannot inspect or cancel another's operation.
+Neither the actor nor deployment scope can be supplied by request JSON. Start
+and finish audit events use `auth_config.test_started` and
+`auth_config.test_finished`; details contain test ID, version, generation, fixed
+outcome, and a hash of verified issuer/subject on success. Tokens, codes, client
+secrets, raw provider responses and tested email are never audited. If final
+revalidation or audit insertion fails, the UI must not receive success.
+
+Tests use random state, nonce, PKCE S256 and a separate per-test HttpOnly,
+SameSite=Lax browser-binding cookie (Secure with HTTPS). They consume callback
+state before the token exchange, so concurrent/replayed callbacks cannot exchange
+again. The existing OIDC identity verification helper and maintained OAuth2/OIDC
+libraries check signatures, issuer, audience, nonce, authorized party and expiry.
+Test cookies never overwrite normal login/session cookies. Popup pages have no
+opener access; result polling does not trust cross-window messages. Closing the
+popup, cancelling, or leaving the panel cancels pending tests where possible;
+server expiry remains authoritative if a browser closes or loses connectivity.
+
+Outbound requests use a dedicated HTTPS client: no environment proxy, no
+redirects, port 443 only, DNS checks rejecting private/loopback/link-local/metadata
+and special-purpose ranges, and dialing the already-checked numeric address
+while retaining hostname TLS verification. All resolved addresses must be public;
+new connections recheck DNS. Authorization, token and JWKS endpoints must share
+the approved issuer origin. The test accepts RS256 (RSA at least 2048 bits) and
+ES256 (P-256), requires advertised PKCE S256, and currently uses
+`client_secret_basic`. Providers with split endpoint origins, nonstandard ports,
+other algorithms/authentication methods, or omitted S256 metadata fail closed
+rather than silently relaxing these restrictions. Keys are checked during
+initial discovery and refreshed before exchange, supporting key rotation.
+Responses are bounded to 1 MiB, headers to 64 KiB, with three-second connection/TLS,
+five-second response-header and ten-second HTTP timeouts. Existing admin middleware
+also bounds start requests to five seconds; callbacks have a twenty-second ceiling.
+No external call runs inside a database transaction and failed exchanges are not
+retried automatically.
+
+No migration is needed. Test state is process-local, with five-minute validity,
+a maximum of 64 retained operations and three pending tests per administrator.
+Expired entries are removed lazily after a further five minutes; secrets and
+verified identity metadata are never persisted as test-state rows. Successful
+start/result audit records remain in the existing database audit table. A restart
+invalidates pending tests and makes result IDs unavailable. Multi-instance hosting
+requires routing the whole test to the same process; shared persistent test state
+is a future change. Abandoned tests may have only a start audit event if expiry is
+never observed; database/audit outages cannot guarantee a terminal audit event.
+The UI will report failure/unavailability rather than invent a successful result.
+JavaScript and Go garbage collectors do not guarantee immediate string erasure.
+
+The backend's DNS/IP restrictions protect its own requests; it cannot control the
+browser's DNS or a provider's subsequent browser redirects. Trusted administrator
+review of issuers, network egress restrictions and DNS policy remain appropriate.
+Configure reverse proxies and observability tools to omit query strings on both
+OIDC callback routes and redact authorization URLs, cookies, request bodies and
+provider responses. The application does not log these values. Provider-side SSO
+cookies may be affected by the user's explicit test login, but framework sessions
+and runtime authentication configuration remain unchanged.
+
+Automated tests use synthetic signed tokens, mocked discovery/token/JWKS endpoints
+and disposable PostgreSQL clusters. Running the test suite never contacts Auth0
+or reads its stored credentials. Live tests create management audit events and
+contact the configured provider; initiate those only after operator approval.
 
 ### Manual migration and regression checks
 

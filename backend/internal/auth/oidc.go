@@ -245,33 +245,14 @@ func (p *OIDCAuthenticator) Callback(w http.ResponseWriter, r *http.Request) {
 		fail()
 		return
 	}
-	idToken, err := p.verifier.Verify(ctx, rawIDToken)
-	if err != nil || idToken.Issuer != p.issuer ||
-		subtle.ConstantTimeCompare([]byte(idToken.Nonce), []byte(flow.Nonce)) != 1 {
-		fail()
-		return
-	}
-	var claims struct {
-		Email           string `json:"email"`
-		EmailVerified   bool   `json:"email_verified"`
-		Name            string `json:"name"`
-		AuthorizedParty string `json:"azp"`
-	}
-	if idToken.Claims(&claims) != nil ||
-		(claims.AuthorizedParty != "" && claims.AuthorizedParty != p.config.ClientID) ||
-		(len(idToken.Audience) > 1 && claims.AuthorizedParty != p.config.ClientID) {
-		fail()
-		return
-	}
-	identity := Identity{Issuer: idToken.Issuer, Subject: idToken.Subject, Email: claims.Email,
-		EmailVerified: claims.EmailVerified, DisplayName: claims.Name, Provider: OIDC}
-	if identity.Validate() != nil {
+	identity, tokenExpiry, err := VerifyOIDCIdentity(ctx, p.verifier, rawIDToken, p.issuer, p.config.ClientID, flow.Nonce)
+	if err != nil {
 		fail()
 		return
 	}
 	expires := time.Now().Add(p.absoluteTimeout)
-	if idToken.Expiry.Before(expires) {
-		expires = idToken.Expiry
+	if tokenExpiry.Before(expires) {
+		expires = tokenExpiry
 	}
 	if !time.Now().Before(expires) {
 		fail()
@@ -315,4 +296,31 @@ func (p *OIDCAuthenticator) Logout(w http.ResponseWriter, r *http.Request) {
 	p.clearCookie(w, p.sessionCookie)
 	p.clearCookie(w, p.flowCookie)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// VerifyOIDCIdentity is shared by normal login and isolated configuration tests.
+// It verifies tokens and maps claims only; it never creates sessions or users.
+func VerifyOIDCIdentity(ctx context.Context, verifier *oidc.IDTokenVerifier, rawIDToken, issuer, clientID, nonce string) (Identity, time.Time, error) {
+	idToken, err := verifier.Verify(ctx, rawIDToken)
+	if err != nil || idToken.Issuer != issuer ||
+		subtle.ConstantTimeCompare([]byte(idToken.Nonce), []byte(nonce)) != 1 {
+		return Identity{}, time.Time{}, ErrUnauthenticated
+	}
+	var claims struct {
+		Email           string `json:"email"`
+		EmailVerified   bool   `json:"email_verified"`
+		Name            string `json:"name"`
+		AuthorizedParty string `json:"azp"`
+	}
+	if idToken.Claims(&claims) != nil ||
+		(claims.AuthorizedParty != "" && claims.AuthorizedParty != clientID) ||
+		(len(idToken.Audience) > 1 && claims.AuthorizedParty != clientID) {
+		return Identity{}, time.Time{}, ErrUnauthenticated
+	}
+	identity := Identity{Issuer: idToken.Issuer, Subject: idToken.Subject, Email: claims.Email,
+		EmailVerified: claims.EmailVerified, DisplayName: claims.Name, Provider: OIDC}
+	if identity.Validate() != nil {
+		return Identity{}, time.Time{}, ErrUnauthenticated
+	}
+	return identity, idToken.Expiry, nil
 }
