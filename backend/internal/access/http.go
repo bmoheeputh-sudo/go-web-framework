@@ -60,7 +60,7 @@ func failure(w http.ResponseWriter, err error) {
 // Require is deny-by-default, and must run inside auth.Require. accountParameter
 // names a route path parameter whose account must be explicitly linked and active.
 func (s *Store) Require(permission, accountParameter string, next http.Handler) http.Handler {
-	return s.identify(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return s.identify(false, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, _ := Principal(r.Context())
 		accountID := ""
 		if accountParameter != "" {
@@ -77,7 +77,7 @@ func (s *Store) Require(permission, accountParameter string, next http.Handler) 
 		next.ServeHTTP(w, r)
 	}))
 }
-func (s *Store) identify(next http.Handler) http.Handler {
+func (s *Store) identify(register bool, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		identity, ok := auth.IdentityFromContext(r.Context())
 		if !ok {
@@ -90,7 +90,13 @@ func (s *Store) identify(next http.Handler) http.Handler {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
-		u, err := s.Resolve(ctx, identity)
+		var u User
+		var err error
+		if register {
+			u, err = s.Resolve(ctx, identity)
+		} else {
+			u, err = s.lookup(ctx, identity)
+		}
 		if err != nil {
 			failure(w, err)
 			return
@@ -144,7 +150,7 @@ func Register(mux *http.ServeMux, provider auth.Authenticator, s *Store, origin 
 	route := func(pattern, permission, accountParameter string, h http.HandlerFunc) {
 		var handler http.Handler
 		if permission == "self" {
-			handler = s.identify(h)
+			handler = s.identify(true, h)
 		} else {
 			handler = s.Require(permission, accountParameter, h)
 		}

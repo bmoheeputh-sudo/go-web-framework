@@ -517,8 +517,11 @@ Migration `000004_rbac_accounts.up.sql` adds `framework.users`, `roles`,
 `audit_log`, and the one-time `admin_bootstrap` marker. Existing migrations
 000001–000003, authentication tables, and `public.schema_migrations` are unchanged.
 
-A user is registered when a verified identity accesses an RBAC endpoint, including
-`GET /api/access/me` from the dashboard. The unique key is **issuer + subject**;
+A user is registered or their profile refreshed only when a verified, active
+identity accesses `GET /api/access/me` from the dashboard. Permission checks on
+other RBAC endpoints are read-only; denied requests do not create users or refresh
+profiles/timestamps, and inactive users cannot refresh through the self endpoint.
+The unique key is **issuer + subject**;
 email is profile data and never links identities. Registration and profile refresh
 assign no roles or accounts. Administrators cannot create a claimed identity by
 email, edit issuer/subject, or merge identities through the API. Accounts are plain

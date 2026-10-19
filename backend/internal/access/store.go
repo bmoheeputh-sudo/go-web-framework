@@ -90,8 +90,27 @@ func scanUser(row pgx.Row) (User, error) {
 	return u, err
 }
 
-// Resolve accepts only the Identity produced by auth.Require, never a request body.
-// Profile refresh never changes active status, roles, or account links.
+// lookup is read-only: a denied permission check must not create or refresh users.
+func (s *Store) lookup(ctx context.Context, identity auth.Identity) (User, error) {
+	if identity.Validate() != nil {
+		return User{}, ErrDenied
+	}
+	u, err := scanUser(s.pool.QueryRow(ctx, userSelect+`WHERE u.issuer=$1 AND u.subject=$2`, identity.Issuer, identity.Subject))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, ErrDenied
+	}
+	if err != nil {
+		return User{}, ErrUnavailable
+	}
+	if !u.Active {
+		return User{}, ErrDenied
+	}
+	return u, nil
+}
+
+// Resolve registers/refreshes only through the authenticated self endpoint.
+// It never updates an inactive user, roles, or account links. The identity comes
+// from auth.Require, never a request body.
 func (s *Store) Resolve(ctx context.Context, identity auth.Identity) (User, error) {
 	if identity.Validate() != nil {
 		return User{}, ErrDenied
@@ -100,7 +119,11 @@ func (s *Store) Resolve(ctx context.Context, identity auth.Identity) (User, erro
 	err := s.pool.QueryRow(ctx, `INSERT INTO framework.users(issuer,subject,email,email_verified,display_name,provider)
  VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(issuer,subject) DO UPDATE SET
  email=EXCLUDED.email,email_verified=EXCLUDED.email_verified,display_name=EXCLUDED.display_name,
- provider=EXCLUDED.provider,verified_at=clock_timestamp() RETURNING id::text`, identity.Issuer, identity.Subject, identity.Email, identity.EmailVerified, identity.DisplayName, string(identity.Provider)).Scan(&id)
+ provider=EXCLUDED.provider,verified_at=clock_timestamp()
+ WHERE framework.users.active RETURNING id::text`, identity.Issuer, identity.Subject, identity.Email, identity.EmailVerified, identity.DisplayName, string(identity.Provider)).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, ErrDenied
+	}
 	if err != nil {
 		return User{}, ErrUnavailable
 	}
@@ -376,7 +399,7 @@ func (s *Store) Roles(ctx context.Context) ([]Role, error) {
 	return result, dbError(rows.Err())
 }
 func (s *Store) Audit(ctx context.Context, offset int) ([]Audit, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id::text,created_at,actor_user_id::text,action,target_id,details FROM framework.audit_log ORDER BY id DESC LIMIT 100 OFFSET $1`, offset)
+	rows, err := s.pool.Query(ctx, `SELECT id::text,created_at,actor_user_id::text,action,target_id,details FROM framework.audit_log ORDER BY framework.audit_log.id DESC LIMIT 100 OFFSET $1`, offset)
 	if err != nil {
 		return nil, ErrUnavailable
 	}
