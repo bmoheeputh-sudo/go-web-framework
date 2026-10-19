@@ -104,6 +104,12 @@ func (s *Store) identify(register bool, next http.Handler) http.Handler {
 		next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, principalKey{}, u)))
 	})
 }
+
+// ProtectWrites applies the same origin and JSON checks to core and module writes.
+func ProtectWrites(origin string, next http.Handler) http.Handler {
+	return protectWrites(origin, next)
+}
+
 func protectWrites(origin string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" && r.Method != "HEAD" {
@@ -154,7 +160,7 @@ func Register(mux *http.ServeMux, provider auth.Authenticator, s *Store, origin 
 		} else {
 			handler = s.Require(permission, accountParameter, h)
 		}
-		mux.Handle(pattern, auth.Require(provider, protectWrites(origin, handler)))
+		mux.Handle(pattern, auth.Require(provider, ProtectWrites(origin, handler)))
 	}
 	route("GET /api/access/me", "self", "", func(w http.ResponseWriter, r *http.Request) { u, _ := Principal(r.Context()); respond(w, 200, u) })
 	route("GET /api/admin/users", AdminManage, "", func(w http.ResponseWriter, r *http.Request) {

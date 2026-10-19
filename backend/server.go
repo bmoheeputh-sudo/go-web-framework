@@ -10,8 +10,11 @@ import (
 	"time"
 
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/access"
+	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/apps/example"
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/auth"
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/database"
+	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/modules"
+	"github.com/bmoheeputh-sudo/go-web-framework/backend/module"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -30,6 +33,14 @@ func newServer(getenv func(string) string) (*application, error) {
 		if err != nil {
 			return nil, errors.New("RBAC_ENABLED must be true or false")
 		}
+	}
+	// Explicit compile-time catalog: no init hooks, filesystem discovery or plugins.
+	registry, err := modules.New([]module.Module{example.Module{}}, getenv("ENABLED_MODULES"))
+	if err != nil {
+		return nil, err
+	}
+	if len(registry.Enabled()) != 0 && !rbacEnabled {
+		return nil, errors.New("ENABLED_MODULES requires RBAC_ENABLED=true")
 	}
 	origin := getenv("APP_ORIGIN")
 	if rbacEnabled {
@@ -136,8 +147,13 @@ func newServer(getenv func(string) string) (*application, error) {
 			return nil, errors.New("RBAC schema unavailable; apply migration 000004 manually before enabling RBAC")
 		}
 	}
+	handler, err := newHandlerWithModules(provider, authorization, origin, registry)
+	if err != nil {
+		closeResources()
+		return nil, err
+	}
 	return &application{closeResources: closeResources, Server: &http.Server{
-		Addr: address, Handler: newHandlerWithAccess(provider, authorization, origin),
+		Addr: address, Handler: handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second, WriteTimeout: 30 * time.Second,
 		IdleTimeout: 60 * time.Second,
@@ -148,7 +164,7 @@ func newHandler(provider auth.Authenticator) http.Handler {
 	return newHandlerWithAccess(provider, nil, "")
 }
 
-func newHandlerWithAccess(provider auth.Authenticator, authorization *access.Store, origin string) http.Handler {
+func newHandlerWithAccess(provider auth.Authenticator, authorization *access.Store, origin string) *http.ServeMux {
 	mux := http.NewServeMux()
 	access.Register(mux, provider, authorization, origin)
 	var providerName auth.Provider
@@ -185,4 +201,16 @@ func newHandlerWithAccess(provider auth.Authenticator, authorization *access.Sto
 		_ = json.NewEncoder(w).Encode(identity)
 	})))
 	return mux
+}
+
+// The core composition root owns both namespaces; modules never receive this mux.
+func newHandlerWithModules(provider auth.Authenticator, authorization *access.Store, origin string, registry *modules.Registry) (http.Handler, error) {
+	moduleHandler, err := registry.Handler(provider, authorization, origin)
+	if err != nil {
+		return nil, err
+	}
+	handler := newHandlerWithAccess(provider, authorization, origin)
+	handler.Handle("/api/modules", moduleHandler)
+	handler.Handle("/api/modules/", moduleHandler)
+	return handler, nil
 }

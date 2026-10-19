@@ -58,7 +58,10 @@ type Audit struct {
 	TargetID  string          `json:"target_id"`
 	Details   json.RawMessage `json:"details"`
 }
-type Store struct{ pool *pgxpool.Pool }
+type Store struct {
+	pool              *pgxpool.Pool
+	modulePermissions map[string]bool // immutable, copied during registry construction
+}
 
 func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 
@@ -141,8 +144,8 @@ type querier interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
-func allowed(ctx context.Context, q querier, userID, permission, accountID string) error {
-	if permission != AdminManage && permission != AccountRead && permission != AccountWrite {
+func (s *Store) allowed(ctx context.Context, q querier, userID, permission, accountID string) error {
+	if permission != AdminManage && permission != AccountRead && permission != AccountWrite && !s.modulePermissions[permission] {
 		return ErrDenied
 	}
 	var ok bool
@@ -160,7 +163,7 @@ func allowed(ctx context.Context, q querier, userID, permission, accountID strin
 	return nil
 }
 func (s *Store) Allowed(ctx context.Context, id, permission, accountID string) error {
-	return allowed(ctx, s.pool, id, permission, accountID)
+	return s.allowed(ctx, s.pool, id, permission, accountID)
 }
 func validID(id string) bool { var v pgtype.UUID; return len(id) == 36 && v.Scan(id) == nil && v.Valid }
 func validName(name string) bool {
@@ -188,7 +191,7 @@ func (s *Store) mutate(ctx context.Context, actor, permission, accountID string,
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, mutationLock); err != nil {
 		return ErrUnavailable
 	}
-	if err = allowed(ctx, tx, actor, permission, accountID); err != nil {
+	if err = s.allowed(ctx, tx, actor, permission, accountID); err != nil {
 		return err
 	}
 	if err = fn(tx); err != nil {

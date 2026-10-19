@@ -991,6 +991,127 @@ one-time latch, runtime DB grants, immediate revocation, concurrent administrato
 demotions, audit rollback, outages, and migration 4 upgrade/rollback preserving
 existing authentication data. The bootstrap command is not run against live data.
 
+## Minimal module registration (Phase 8.1)
+
+Application modules are statically imported Go packages. `backend/module/module.go`
+provides the small `Module`, `Manifest`, `Permission`, and `Registrar` contract.
+`backend/server.go` contains the explicit catalog; no package-init hooks, runtime
+plugin discovery, dynamic code loading, or module-specific migrations are added.
+The frontend and existing authentication, account, administrator, and audit APIs
+keep their current behavior.
+
+### Configuration and capability endpoint
+
+`ENABLED_MODULES` is an exact, comma-separated allowlist of compiled module IDs.
+The default empty value enables none. Whitespace, empty entries, repeated IDs,
+unknown IDs, and uppercase IDs fail startup. Catalog IDs and permission declarations
+are validated even for disabled modules, while only enabled modules run `Register`.
+Enabled modules require `RBAC_ENABLED=true`, an explicit authentication provider,
+valid `APP_ORIGIN`, and the existing PostgreSQL settings. Keep `DB_USER=go_web_app`;
+startup checks the existing framework schema and performs no permission or schema
+writes. Existing database-free Local DEV/IAP behavior remains available when RBAC
+and modules are disabled.
+
+For an already configured RBAC deployment, the optional example configuration is:
+
+```dotenv
+RBAC_ENABLED=true
+ENABLED_MODULES=example
+```
+
+Change configuration with `vi .env` and restart through the existing startup
+instructions. This does not register permission rows or grant access.
+`GET /api/modules` requires verified authentication and returns only:
+
+```json
+{"modules":["example"]}
+```
+
+With no enabled modules it returns `{"modules":[]}`. IDs are sorted and the
+response is not cacheable. This endpoint reports availability, not authorization:
+it does not require a framework role, create/refresh a framework user, expose
+permission catalogs or secrets, or grant access to module data. Its only identity
+source is the existing authentication middleware. Anonymous requests receive 401.
+Disabling a module removes its routes (404) without deleting data or grants.
+Configuration changes take effect after restart; there is no frontend module UI yet.
+
+### Routes and permission boundaries
+
+The example in `backend/internal/apps/example/module.go` declares `example.read`
+and two read-only endpoints, with no storage or external integrations:
+
+| Endpoint | Requirements |
+| --- | --- |
+| `GET /api/modules/example/info` | Verified identity, active registered framework user, and `example.read`. |
+| `GET /api/modules/example/accounts/{account}/info` | The same, plus an explicit link to the active account in the path. |
+
+Neither endpoint has a default grant, including for Admin. Because permission
+provisioning/module migrations are outside this phase, an existing database will
+normally return 403 even after enabling the example. A permission must be declared
+in code **and** exist with an approved role binding in PostgreSQL before it grants
+access. Only disposable integration tests provision these example permissions in
+this phase. No live permission changes or module migrations are needed to run tests.
+
+To add a module, implement `Manifest()` and `Register(module.Registrar)`, then add
+its value explicitly to the server catalog. For example:
+
+```go
+func (Module) Register(routes module.Registrar) error {
+    return routes.AccountRoute("GET", "/findings", "drive_audit.findings.read", findings)
+}
+```
+
+`AccountRoute` supplies `/api/modules/<id>/accounts/{account}` as the prefix;
+`GlobalRoute` supplies `/api/modules/<id>`. Module IDs use lowercase letters,
+digits, and underscores, starting with a letter (up to 40 characters). Core names
+are reserved. Permissions must start with that module's ID followed by a dot,
+with lowercase dot-separated action segments. Each route needs an explicitly
+declared permission; empty, core, foreign, and undeclared requirements are rejected.
+Permission declarations never imply role assignments.
+
+Relative route paths begin with a literal segment, such as `/info` or
+`/findings/{finding}`. A trailing slash, catch-all wildcard, query string, encoded
+segment, traversal, host-qualified pattern, or a redefinition of `{account}` is
+rejected. Global paths cannot occupy the reserved `/accounts` subtree. Supported
+methods are GET, POST, PUT, PATCH, and DELETE; Go's normal GET-to-HEAD matching is
+preserved. Duplicate and ambiguous patterns fail registration using ServeMux's
+conflict checks. Registration errors cannot be ignored by module code to mount a
+partial module, and retained registrars cannot add routes after startup.
+
+The framework wraps every module handler with `auth.Require`, the existing
+origin/JSON write protection, and `access.Store.Require`. Identity comes from the
+verified context; account scope comes only from the framework-owned path parameter.
+Query parameters, bodies, and unsigned identity headers cannot override either.
+Permissions and account membership/active status are checked in PostgreSQL on every
+request. Database failures fail closed. Admin does not bypass account membership.
+Only the enabled module catalog can extend the permission allowlist; even an
+undeclared permission with a database grant is denied.
+
+### Limits and tests
+
+Modules are trusted compiled code, not a sandbox. The registry prevents missing
+HTTP middleware but cannot stop malicious same-process code from opening another
+listener or using credentials directly. Future domain handlers must constrain
+resource queries by the authorized account ID as well as the resource ID; a URL
+membership check alone is not sufficient for arbitrary stored resources.
+
+This phase does not add a shared module mutation/audit transaction API. Existing
+core mutations retain their transaction-time checks, revocation lock, last-Admin
+protection, and audit behavior. The example performs no writes. Before adding real
+module mutations, preserve those same transaction-time authorization and atomic
+audit requirements; route middleware alone does not solve revocation races.
+There are no module migrations, automatic permission provisioning, per-module
+roles, background workers, or frontend module routes in this phase.
+
+Run `go test -race -count=1 ./...` and `go vet ./...` from `backend`, then
+`npm test`, `npm run build`, and `npm run lint` from `frontend`. New tests cover
+configuration/catalog validation, route conflicts, disabled modules, authenticated
+capabilities, ungranted Admin access, declared/unknown permissions, account isolation,
+revocation, write-origin protection, database outages, unchanged records on denial,
+and composition with existing core routes. Integration tests use the existing
+disposable PostgreSQL harness and the `go_web_app` runtime role, never root `.env`
+settings or the actual development database.
+
 ## Backup to GitHub and Google Drive
 
 Run from the repository on the `main` branch:
