@@ -35,5 +35,6 @@
   "status": "状态",
   "statusActive": "已启用",
   "statusInactive": "已停用",
-  "none": "无"
+  "none": "无",
+  "modulesUnavailable": "无法加载应用模块。核心功能仍然可用。"
 }

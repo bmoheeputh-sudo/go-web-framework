@@ -52,7 +52,7 @@ export function direction(language: string) { return supportedLanguage(language)
 export function createI18n(language: Language, translations: Resource = resources) {
   const instance = createInstance()
   void instance.use(initReactI18next).init({
-    resources: translations, lng: language, fallbackLng: 'en',
+    resources: structuredClone(translations), lng: language, fallbackLng: 'en',
     supportedLngs: Object.keys(languages), load: 'currentOnly',
     ns: [...namespaces], defaultNS: 'common', initAsync: false,
     interpolation: { escapeValue: false }, // React escapes rendered text.
@@ -78,4 +78,22 @@ export const permissionKeys: Record<string, string> = {
 export const actionKeys: Record<string, string> = {
   'admin.bootstrap': 'actionBootstrap', 'user.roles': 'actionRoles', 'user.active': 'actionActive',
   'user.accounts': 'actionAssociations', 'account.save': 'actionSave', 'account.rename': 'actionRename',
+}
+
+// Module namespaces are isolated from the three core namespaces. Only locally
+// compiled bundles are accepted; capabilities never supply translation content.
+export function registerModuleTranslations(instance: ReturnType<typeof createI18n>, moduleID: string, translations: Record<Language, Record<string, string>>) {
+  if (!/^[a-z][a-z0-9_]{0,39}$/.test(moduleID) || (namespaces as readonly string[]).includes(moduleID)) {
+    throw new Error('Invalid module translation namespace')
+  }
+  for (const language of Object.keys(languages) as Language[]) {
+    const bundle = translations[language]
+    if (!bundle || Object.entries(bundle).some(([key, value]) =>
+      !/^[a-zA-Z][a-zA-Z0-9_]*$/.test(key) || typeof value !== 'string' || !value.trim())) {
+      throw new Error('Invalid module translation bundle')
+    }
+  }
+  for (const language of Object.keys(languages) as Language[]) {
+    instance.addResourceBundle(language, moduleID, { ...translations[language] }, true, true)
+  }
 }

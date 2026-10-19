@@ -441,19 +441,22 @@ If `framework` already exists, it also needs CREATE and grant authority there.
 Fresh installations additionally need CREATE on `public` for migrations 000001/2.
 The existing `go_web_app` role must exist before migration 000003; the migration
 fails transactionally if it cannot grant the required access. It does not create
-roles or alter passwords. For TEST/PRD use a separate migration owner and supply
-that role's credentials to the migration command instead of the runtime credentials.
+roles or alter passwords. The current deployment uses `go_web_app` for both the
+application and migrations; it also owns schemas/tables. Separating a migration
+owner from a DML-only runtime role is a future hardening option, not an implemented
+property of this deployment.
 
 The runtime role needs CONNECT on the database, USAGE on `framework`, and
 SELECT/INSERT/UPDATE/DELETE on `framework.sessions` and `framework.oidc_login_flows`.
 Migration 000003 grants the schema and table privileges to `go_web_app`; it does
 not explicitly grant schema CREATE. Existing privileges and ownership are
 preserved. A role that runs the migration owns the newly created schema, and a
-runtime role that already owns tables retains that authority. Use a separate
-migration owner to keep these ownership privileges out of the runtime role. If a deployment
-uses a different runtime role, provision its equivalent grants separately with
-approval. Application queries use explicit `framework` names and do not require
-changing the runtime search path. No runtime access to migration history is needed.
+runtime role that already owns tables retains that authority. In this deployment,
+`go_web_app` has ownership/migration authority in addition to DML privileges; these
+grants do not establish database least-privilege separation. A future deployment
+could separate the migration owner and runtime role after an explicit security
+review. Application queries use explicit schema names and do not change the
+runtime search path. Module startup validation reads the independent journals.
 
 ### TEST/PRD transport security and recovery
 
@@ -569,12 +572,13 @@ The existing schema-move instructions targeting version 3 are for Phase 3 only;
 RBAC requires the additional migration. Never use `force` to skip migrations.
 Enable RBAC in `vi .env` and restart the application after the migration.
 
-The runtime `go_web_app` role receives required user/account DML, read-only role
-catalog access, and INSERT/SELECT on audit records. It receives no UPDATE/DELETE
-on audit records or access to the bootstrap marker. **Use a separate migration
-owner in TEST/PRD:** an application role that owns these tables can bypass grants.
+The migrations explicitly grant `go_web_app` required user/account DML, read-only
+role catalog access, and INSERT/SELECT on audit records. These explicit grants do
+not limit an owner: the current single database user also owns schemas/tables and
+runs migrations, so it retains broader authority, including ownership rights over
+audit/bootstrap objects it owns. DML-only runtime separation is not implemented.
 Database credentials are trusted administrative capabilities, not user credentials.
-For another runtime role, provision equivalent grants explicitly with approval.
+A separate migration owner would be future hardening and requires explicit approval.
 
 Rollback from version 4 uses `down 1`, with approval and the backend stopped.
 **This drops all Phase 5 users, roles, account associations, audit records, and the
@@ -594,8 +598,10 @@ exact issuer and stable subject belong to the intended administrator. Do not
 substitute an email address or copy identity headers from an untrusted request.
 
 After approval to change the actual database, run this operator command from
-`backend`, using trusted `DB_*` settings for the migration owner (or a separately
-provisioned bootstrap role), not the limited runtime role:
+`backend`, using the trusted operator-controlled `DB_*` settings. In the current
+single-user deployment, `go_web_app` also owns the migration/bootstrap objects;
+it is not a limited DML-only runtime role. A future split-role deployment would
+use a separately authorized owner/bootstrap role:
 
 ```bash
 # Replace both placeholders with values verified above; do not pass DB passwords as flags.
@@ -1400,6 +1406,66 @@ upgrade/rollback, separate numbering/journals, dirty and failed migration recove
 missing/invalid state, disabled modules, read-only validation, and core/other-module
 journal preservation. The CLI with PostgreSQL support and local PostgreSQL binaries
 are required; tests explicitly skip if either tool is unavailable.
+
+## Frontend module composition (Phase 8.4)
+
+After `/api/auth/me` authenticates a session, the shell fetches `/api/modules`
+with same-origin credentials, no response caching and abortable requests. It
+intersects the returned enabled IDs with the explicitly compiled frontend catalog
+in `frontend/src/modules/registry.ts`. Server responses cannot supply import URLs,
+React code, translation contents or permission grants. Unknown valid IDs produce
+a configuration warning and are ignored. Malformed responses, network errors or
+module-loading failures leave only the core routes and show a translated warning.
+An HTTP 401 uses the existing session-expiration behavior. No module route is
+registered from catalog membership alone.
+
+Each compiled module implements `FrontendModule` in `modules/types.ts`: an ID,
+protected pages with a mandatory namespaced permission, and a translation bundle
+for every supported language. Page paths must stay under `/modules/<id>/`, and
+navigation labels use the module namespace. Public pages, missing/foreign/core
+permissions, duplicate paths and invalid module IDs are rejected. The existing
+`NavigationRegistry`, `ProtectedRoute`, sidebar and backend authorization remain
+responsible for access checks; enabling a module is not a permission grant.
+
+`composeModules` is asynchronous so its static import functions load only enabled
+module definitions and their translations. It returns pages and an explicit
+`registerTranslations` function; registration happens only after the request is
+confirmed to belong to the current session. The active i18next instance receives
+bundles under the module ID, separate from `common`, `auth` and `admin`. English
+fallback, all twelve locales, Arabic RTL and the current MUI theme remain intact.
+Module page components use `React.lazy` and the shell's existing Suspense boundary.
+
+The example contributes `/modules/example/items`, guarded by **`example.read`**,
+matching the backend manifest. It is a translated, read-only demonstration page;
+there is no backend Items API, item persistence or CRUD implementation in this
+phase. The module's translations live in twelve JSON files under
+`frontend/src/modules/example/locales`. The existing independent example database
+migration and explicit role permission grant are still required for a live setup;
+no grants or database changes are made by the frontend.
+
+To add another frontend module, implement its definition and lazy pages, provide
+all twelve locale bundles with matching keys/placeholders, and add a literal import
+function to the static catalog. Rebuild/deploy both compatible frontend and backend
+versions. No runtime plugin loader is involved. Capability requests run after
+successful authentication, not on ordinary navigation, language changes or access
+refreshes. Sign-out/session changes immediately discard module routes, abort stale
+requests and fetch capabilities for a subsequent authenticated identity. Loaded
+translation strings may remain cached in memory; they contain no session data and
+never authorize routes. Capability configuration changes during a session require
+reloading/signing in again; there is no polling or automatic retry loop.
+
+For local verification, use the existing startup instructions, explicitly enable
+`example` only after its approved migration/grant setup, and open
+`/modules/example/items`. A user without `example.read` gets the translated
+access-denied view even if Admin. Disabled or unconfirmed modules have no registered
+route. Browser route guards render an access-denied view; actual HTTP API 403s are
+enforced by Go. Test network-failure fallback with browser request blocking, and
+switch to Arabic to check the module label/page and RTL layout. These operations
+require no frontend-specific migrations or credentials.
+
+The current single database user, `go_web_app`, owns schemas and runs migrations.
+Application RBAC and transaction boundaries remain enforced in Go, but database
+DML-only/owner privilege separation is a future design, **not implemented security**.
 
 ## Backup to GitHub and Google Drive
 

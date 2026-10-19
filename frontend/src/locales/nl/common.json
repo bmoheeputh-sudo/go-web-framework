@@ -35,5 +35,6 @@
   "status": "Status",
   "statusActive": "Actief",
   "statusInactive": "Inactief",
-  "none": "Geen"
+  "none": "Geen",
+  "modulesUnavailable": "Applicatiemodules konden niet worden geladen. De kernfuncties blijven beschikbaar."
 }

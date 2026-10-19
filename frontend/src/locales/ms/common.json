@@ -35,5 +35,6 @@
   "status": "Status",
   "statusActive": "Aktif",
   "statusInactive": "Tidak aktif",
-  "none": "Tiada"
+  "none": "Tiada",
+  "modulesUnavailable": "Modul aplikasi tidak dapat dimuatkan. Ciri utama masih tersedia."
 }

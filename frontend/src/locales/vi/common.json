@@ -35,5 +35,6 @@
   "status": "Trạng thái",
   "statusActive": "Hoạt động",
   "statusInactive": "Không hoạt động",
-  "none": "Không có"
+  "none": "Không có",
+  "modulesUnavailable": "Không thể tải các mô-đun ứng dụng. Các chức năng cốt lõi vẫn khả dụng."
 }

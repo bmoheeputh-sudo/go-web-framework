@@ -15,7 +15,7 @@ function initialExpanded() {
   try { return browserStorage()?.getItem(drawerPreferenceKey) !== 'false' } catch { return true }
 }
 
-export default function AdminLayout({ items }: { items: readonly NavItem[] }) {
+export default function AdminLayout({ items, moduleWarning = false }: { items: readonly NavItem[]; moduleWarning?: boolean }) {
   const theme = useTheme()
   const desktop = useMediaQuery(theme.breakpoints.up('md'))
   const location = useLocation()
@@ -40,9 +40,10 @@ export default function AdminLayout({ items }: { items: readonly NavItem[] }) {
     <Box sx={{ flex: 1, minWidth: 0 }}>
       <TopBar titleKey={titleKey} desktop={desktop} mobileOpen={mobileOpen} onMenu={() => setMenu({ key: location.key, open: !mobileOpen })} />
       <Box component="main" sx={{ p: { xs: 2, sm: 3, xl: 4 }, maxWidth: 1600, mx: 'auto', overflowWrap: 'anywhere' }}>
-        <Stack spacing={2} sx={{ mb: loginFailed || logoutFailed ? 2 : 0 }}>
+        <Stack spacing={2} sx={{ mb: loginFailed || logoutFailed || moduleWarning ? 2 : 0 }}>
           {loginFailed && authentication.status !== 'authenticated' && <Alert severity="error">{t('auth:loginFailed')}</Alert>}
           {logoutFailed && <Alert severity="error">{t('auth:logoutFailed')}</Alert>}
+          {moduleWarning && <Alert severity="warning">{t('common:modulesUnavailable')}</Alert>}
         </Stack>
         <Suspense fallback={<CircularProgress size={28} aria-label={t('loading')} />}><Outlet /></Suspense>
       </Box>

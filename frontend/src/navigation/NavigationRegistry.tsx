@@ -27,8 +27,8 @@ export const defaultNavigation: readonly NavItem[] = [
 ]
 
 // Explicit, static registration at application startup; no dynamic plugins.
-export function createNavigationRegistry(additional: readonly NavItem[] = []): readonly NavItem[] {
-  const items = [...defaultNavigation, ...additional]
+export function createNavigationRegistry(additional: readonly NavItem[] = [], core: readonly NavItem[] = defaultNavigation): readonly NavItem[] {
+  const items = [...core, ...additional]
   const paths = new Set<string>()
   for (const item of items) {
     if (!/^\/(?:[\w-]+(?:\/[\w-]+)*)?$/.test(item.path) || /^\/api(?:\/|$)/i.test(item.path)) throw new Error('Navigation paths must be static application paths outside /api')

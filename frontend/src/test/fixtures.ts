@@ -17,7 +17,7 @@ export function mockMedia(desktop = true) {
 }
 
 // A local API simulation; no real requests, credentials, or database writes.
-export function mockAPI(options: { user?: User; provider?: Identity['provider']; authenticated?: boolean; accessStatus?: number; writeStatus?: number; logoutStatus?: number } = {}) {
+export function mockAPI(options: { user?: User; provider?: Identity['provider']; authenticated?: boolean; accessStatus?: number; writeStatus?: number; logoutStatus?: number; modules?: string[] } = {}) {
   const current = structuredClone(options.user || admin)
   const users = [current, structuredClone(bob)]
   const accounts = [structuredClone(account)]
@@ -36,6 +36,7 @@ export function mockAPI(options: { user?: User; provider?: Identity['provider'];
       authenticated = false
       return new Response(null, { status: 204 })
     }
+    if (path === '/api/modules') return Response.json({ modules: options.modules || [] })
     if (path === '/api/access/me') return options.accessStatus ? Response.json({ error: 'UNTRUSTED SERVER DETAILS' }, { status: options.accessStatus }) : Response.json(current)
     if (path === '/api/accounts') return Response.json(accounts.filter((a) => a.active && current.account_ids.includes(a.id)))
     if (method !== 'GET') {

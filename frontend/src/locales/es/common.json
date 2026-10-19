@@ -35,5 +35,6 @@
   "status": "Estado",
   "statusActive": "Activo",
   "statusInactive": "Inactivo",
-  "none": "Ninguno"
+  "none": "Ninguno",
+  "modulesUnavailable": "No se pudieron cargar los módulos de la aplicación. Las funciones principales siguen disponibles."
 }

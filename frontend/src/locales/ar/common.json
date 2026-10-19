@@ -35,5 +35,6 @@
   "status": "الحالة",
   "statusActive": "نشط",
   "statusInactive": "غير نشط",
-  "none": "لا يوجد"
+  "none": "لا يوجد",
+  "modulesUnavailable": "تعذّر تحميل وحدات التطبيق. تظل الميزات الأساسية متاحة."
 }
