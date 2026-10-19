@@ -1,0 +1,15 @@
+{
+  "appName": "Go Web Framework",
+  "dashboard": "Bảng điều khiển",
+  "backendStatus": "Trạng thái máy chủ",
+  "checkingConnection": "Đang kiểm tra kết nối máy chủ",
+  "connected": "Đã kết nối",
+  "connectionError": "Lỗi kết nối",
+  "disconnected": "Đã ngắt kết nối",
+  "language": "Ngôn ngữ",
+  "notProvided": "Chưa cung cấp",
+  "previousPage": "Trang trước",
+  "nextPage": "Trang sau",
+  "page": "Trang {{page}}",
+  "inactive": "(không hoạt động)"
+}

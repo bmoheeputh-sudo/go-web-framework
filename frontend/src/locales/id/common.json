@@ -1,0 +1,15 @@
+{
+  "appName": "Go Web Framework",
+  "dashboard": "Dasbor",
+  "backendStatus": "Status backend",
+  "checkingConnection": "Memeriksa koneksi backend",
+  "connected": "Terhubung",
+  "connectionError": "Kesalahan koneksi",
+  "disconnected": "Terputus",
+  "language": "Bahasa",
+  "notProvided": "Tidak diberikan",
+  "previousPage": "Halaman sebelumnya",
+  "nextPage": "Halaman berikutnya",
+  "page": "Halaman {{page}}",
+  "inactive": "(tidak aktif)"
+}

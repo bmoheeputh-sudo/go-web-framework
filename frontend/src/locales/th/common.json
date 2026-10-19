@@ -1,0 +1,15 @@
+{
+  "appName": "Go Web Framework",
+  "dashboard": "แดชบอร์ด",
+  "backendStatus": "สถานะระบบหลังบ้าน",
+  "checkingConnection": "กำลังตรวจสอบการเชื่อมต่อระบบหลังบ้าน",
+  "connected": "เชื่อมต่อแล้ว",
+  "connectionError": "เกิดข้อผิดพลาดในการเชื่อมต่อ",
+  "disconnected": "ไม่ได้เชื่อมต่อ",
+  "language": "ภาษา",
+  "notProvided": "ไม่ได้ระบุ",
+  "previousPage": "หน้าก่อนหน้า",
+  "nextPage": "หน้าถัดไป",
+  "page": "หน้า {{page}}",
+  "inactive": "(ไม่ใช้งาน)"
+}

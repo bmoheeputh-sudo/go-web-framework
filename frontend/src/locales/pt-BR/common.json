@@ -1,0 +1,15 @@
+{
+  "appName": "Go Web Framework",
+  "dashboard": "Painel",
+  "backendStatus": "Status do servidor",
+  "checkingConnection": "Verificando a conexão com o servidor",
+  "connected": "Conectado",
+  "connectionError": "Erro de conexão",
+  "disconnected": "Desconectado",
+  "language": "Idioma",
+  "notProvided": "Não informado",
+  "previousPage": "Página anterior",
+  "nextPage": "Próxima página",
+  "page": "Página {{page}}",
+  "inactive": "(inativo)"
+}

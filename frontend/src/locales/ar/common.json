@@ -1,0 +1,15 @@
+{
+  "appName": "Go Web Framework",
+  "dashboard": "لوحة المعلومات",
+  "backendStatus": "حالة الخادم",
+  "checkingConnection": "جارٍ التحقق من الاتصال بالخادم",
+  "connected": "متصل",
+  "connectionError": "خطأ في الاتصال",
+  "disconnected": "غير متصل",
+  "language": "اللغة",
+  "notProvided": "غير متوفر",
+  "previousPage": "الصفحة السابقة",
+  "nextPage": "الصفحة التالية",
+  "page": "الصفحة {{page}}",
+  "inactive": "(غير نشط)"
+}

@@ -661,15 +661,82 @@ a database owner. No external log service, delegated login, ingestion, or worker
 is added. Restoring a database backup can restore old role grants and memberships;
 review restored access before reopening the application.
 
+## Multilingual interface (Phase 6)
+
+The toolbar language selector supports English (`en`, default/fallback), Dutch
+(`nl`), French (`fr`), Spanish (`es`), Brazilian Portuguese (`pt-BR`), Simplified
+Chinese (`zh-CN`), Indonesian (`id`), Malay (`ms`), Thai (`th`), Vietnamese (`vi`),
+Hindi (`hi`), and Arabic (`ar`). Language names appear in their own languages.
+
+On the first visit, the app uses the first supported language in the browser's
+language preferences, otherwise English. Regional variants resolve to the
+supported language; Portuguese variants use Brazilian Portuguese and Chinese
+variants use Simplified Chinese. An explicit selection takes precedence on later
+visits. Only the language code is saved in local storage under `gwf.language`;
+no authentication data is stored with this preference. If storage is blocked,
+switching still works for the current page. Remove that key in browser developer
+tools to test first-visit detection again.
+
+Translations are bundled locally with i18next/react-i18next in
+`frontend/src/locales/<language>/{common,auth,admin}.json`. Missing or empty
+translations fall back to English. Keep keys and `{{placeholder}}` names identical
+across languages when adding text, and add entries to all twelve languages.
+Language changes update the existing UI and error messages without reloading
+authentication or resetting portal selections. Dates use the selected locale and
+the browser's time zone; page numbers and permission lists use `Intl` formatting.
+Digit shapes and date conventions follow the browser's locale data.
+
+Arabic sets the document's language/direction, the MUI theme direction, and an
+Emotion cache using the official MUI RTL plugin. Global document direction also
+covers MUI portal menus. This follows the
+[MUI RTL configuration](https://mui.com/material-ui/customization/right-to-left/).
+Switching back restores LTR styling. MUI's locale bundles localize its own labels.
+
+Application labels, role/permission descriptions, known audit actions, buttons,
+and errors are translated. User names, account names, email addresses, identity
+identifiers, the Go Web Framework product name, and protocol/provider names such
+as OIDC and Google IAP retain their original values. Audit payloads are explicitly
+labelled **Original audit data** and displayed unchanged as LTR JSON; this retains
+their exact before/after values and technical field names. Unknown future role,
+permission, and audit-action codes remain visible as their original codes until
+translations are added. No existing application UI strings are intentionally
+left untranslated beyond these data, identifiers, and proper names.
+
+The Go API contract remains unchanged. React maps stable HTTP status codes
+(400/401/403/409/5xx) and the fixed `login_failed` callback marker to local messages;
+it does not parse English API error prose or display raw response/exception text.
+Translations change display labels only: authorization, identity matching, role
+assignment payloads, account links, and audit records retain their original codes.
+
+After updating dependencies, start the backend using the existing Local DEV,
+OIDC, or IAP configuration and run the frontend as usual:
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+Use the toolbar selector to try each language, refresh to verify persistence,
+and select Arabic to inspect RTL layout. No environment variables, database
+changes, or migrations are needed for multilingual support.
+
 ### Application checks
 
 ```bash
 cd backend
 go test -race -cover ./...
 cd ../frontend
+npm test
 npm run build
 npm run lint
 ```
+
+The frontend tests mock all API requests. They validate all 36 translation JSON
+files, consistent keys and interpolation placeholders, English fallback, browser
+detection, switching all twelve languages, preference persistence and blocked
+storage, HTML/MUI direction and actual Emotion style mirroring, locale formatting,
+localized HTTP/network errors, and unchanged administrator role request values.
 
 The Go tests cover identity validation, Local DEV guards, OIDC discovery and
 configuration, successful login, PKCE, browser-bound state, nonce, signed tokens,

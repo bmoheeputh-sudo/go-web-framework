@@ -1,0 +1,15 @@
+{
+  "appName": "Go Web Framework",
+  "dashboard": "डैशबोर्ड",
+  "backendStatus": "बैकएंड की स्थिति",
+  "checkingConnection": "बैकएंड कनेक्शन की जाँच हो रही है",
+  "connected": "कनेक्ट है",
+  "connectionError": "कनेक्शन में त्रुटि",
+  "disconnected": "कनेक्शन नहीं है",
+  "language": "भाषा",
+  "notProvided": "दिया नहीं गया",
+  "previousPage": "पिछला पृष्ठ",
+  "nextPage": "अगला पृष्ठ",
+  "page": "पृष्ठ {{page}}",
+  "inactive": "(निष्क्रिय)"
+}

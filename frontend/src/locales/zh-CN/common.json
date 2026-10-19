@@ -1,0 +1,15 @@
+{
+  "appName": "Go Web Framework",
+  "dashboard": "仪表板",
+  "backendStatus": "后端状态",
+  "checkingConnection": "正在检查后端连接",
+  "connected": "已连接",
+  "connectionError": "连接错误",
+  "disconnected": "已断开连接",
+  "language": "语言",
+  "notProvided": "未提供",
+  "previousPage": "上一页",
+  "nextPage": "下一页",
+  "page": "第 {{page}} 页",
+  "inactive": "（已停用）"
+}

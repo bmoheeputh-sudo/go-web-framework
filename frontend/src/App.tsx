@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import AccessPortal from './AccessPortal'
+import { useTranslation } from 'react-i18next'
+import LanguageSelector from './LanguageSelector'
 import {
   AppBar,
   Toolbar,
@@ -27,9 +29,9 @@ type Authentication =
   | { status: 'authenticated'; identity: Identity }
 
 const providerNames: Record<Identity['provider'], string> = {
-  oidc: 'OIDC',
-  google_iap: 'Google IAP',
-  local_dev: 'Local DEV',
+  oidc: 'providerOidc',
+  google_iap: 'providerIap',
+  local_dev: 'providerLocal',
 }
 
 function isIdentity(value: unknown): value is Identity {
@@ -46,7 +48,8 @@ function isIdentity(value: unknown): value is Identity {
 }
 
 function App() {
-  const [status, setStatus] = useState('Checking...')
+  const { t } = useTranslation(['common', 'auth'])
+  const [status, setStatus] = useState('checking')
   const [authentication, setAuthentication] = useState<Authentication>({ status: 'loading' })
   const [oidcEnabled, setOidcEnabled] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
@@ -82,10 +85,10 @@ function App() {
         return response.json()
       })
       .then((data) => {
-        if (!controller.signal.aborted) setStatus(data.status === 'ok' ? 'Connected' : 'Error')
+        if (!controller.signal.aborted) setStatus(data.status === 'ok' ? 'connected' : 'connectionError')
       })
       .catch(() => {
-        if (!controller.signal.aborted) setStatus('Disconnected')
+        if (!controller.signal.aborted) setStatus('disconnected')
       })
 
     // Health and authentication are independent: HTTP 401 does not mean the
@@ -128,28 +131,29 @@ function App() {
   return (
     <>
       <AppBar position="static">
-        <Toolbar>
-          <Typography variant="h6">Go Web Framework</Typography>
+        <Toolbar sx={{ gap: 2, flexWrap: 'wrap', py: 1 }}>
+          <Typography variant="h6" sx={{ flexGrow: 1, textAlign: 'start' }}>{t('appName')}</Typography>
+          <LanguageSelector />
         </Toolbar>
       </AppBar>
 
       <Container maxWidth="lg" sx={{ mt: 4 }}>
         <Typography variant="h4" gutterBottom>
-          Dashboard
+          {t('dashboard')}
         </Typography>
 
         <Paper sx={{ p: 3 }}>
           <Typography variant="h6" gutterBottom>
-            Backend Status
+            {t('backendStatus')}
           </Typography>
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            {status === 'Checking...' ? (
-              <CircularProgress size={24} aria-label="Checking backend connection" />
+            {status === 'checking' ? (
+              <CircularProgress size={24} aria-label={t('checkingConnection')} />
             ) : (
               <Chip
-                label={status}
-                color={status === 'Connected' ? 'success' : 'error'}
+                label={t(status)}
+                color={status === 'connected' ? 'success' : 'error'}
               />
             )}
           </Box>
@@ -157,47 +161,47 @@ function App() {
 
         <Paper sx={{ p: 3, mt: 3 }}>
           <Typography variant="h6" gutterBottom>
-            Authentication
+            {t('auth:title')}
           </Typography>
 
           <Box aria-live="polite">
             {loginFailed && authentication.status !== 'authenticated' && (
-              <Alert severity="error" sx={{ mb: 2 }}>Sign-in could not be completed. Please try again.</Alert>
+              <Alert severity="error" sx={{ mb: 2 }}>{t('auth:loginFailed')}</Alert>
             )}
             {logoutFailed && (
-              <Alert severity="error" sx={{ mb: 2 }}>Sign-out failed. Please try again.</Alert>
+              <Alert severity="error" sx={{ mb: 2 }}>{t('auth:logoutFailed')}</Alert>
             )}
             {authentication.status === 'loading' && (
-              <CircularProgress size={24} aria-label="Checking authentication" />
+              <CircularProgress size={24} aria-label={t('auth:checking')} />
             )}
             {authentication.status === 'unauthenticated' && (
-              <Alert severity="info">You are not authenticated. No user identity is available.</Alert>
+              <Alert severity="info">{t('auth:unauthenticated')}</Alert>
             )}
             {authentication.status === 'error' && (
-              <Alert severity="error">Unable to load your identity. Please try refreshing the page.</Alert>
+              <Alert severity="error">{t('auth:identityError')}</Alert>
             )}
             {authentication.status === 'authenticated' && (
-              <Box component="dl" sx={{ m: 0, textAlign: 'left' }}>
-                <Typography component="dt" color="text.secondary">Provider</Typography>
+              <Box component="dl" sx={{ m: 0, textAlign: 'start' }}>
+                <Typography component="dt" color="text.secondary">{t('auth:provider')}</Typography>
                 <Typography component="dd" sx={{ m: 0, mb: 2 }}>
-                  {providerNames[authentication.identity.provider]}
+                  {t(`auth:${providerNames[authentication.identity.provider]}`)}
                 </Typography>
-                <Typography component="dt" color="text.secondary">Display name</Typography>
+                <Typography component="dt" color="text.secondary">{t('auth:displayName')}</Typography>
                 <Typography component="dd" sx={{ m: 0, mb: 2 }}>
-                  {authentication.identity.display_name || 'Not provided'}
+                  <bdi>{authentication.identity.display_name || t('notProvided')}</bdi>
                 </Typography>
-                <Typography component="dt" color="text.secondary">Email address</Typography>
+                <Typography component="dt" color="text.secondary">{t('auth:email')}</Typography>
                 <Typography component="dd" sx={{ m: 0, overflowWrap: 'anywhere' }}>
-                  {authentication.identity.email || 'Not provided'}
+                  <bdi>{authentication.identity.email || t('notProvided')}</bdi>
                 </Typography>
               </Box>
             )}
             {oidcEnabled && authentication.status === 'unauthenticated' && (
-              <Button variant="contained" href="/api/auth/login" sx={{ mt: 2 }}>Sign in</Button>
+              <Button variant="contained" href="/api/auth/login" sx={{ mt: 2 }}>{t('auth:signIn')}</Button>
             )}
             {authentication.status === 'authenticated' && authentication.identity.provider === 'oidc' && (
               <Button variant="outlined" onClick={() => void logout()} disabled={loggingOut} sx={{ mt: 2 }}>
-                {loggingOut ? 'Signing out…' : 'Sign out'}
+                {t(loggingOut ? 'auth:signingOut' : 'auth:signOut')}
               </Button>
             )}
           </Box>

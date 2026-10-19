@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { actionKeys, formatDate, formatNumber, permissionKeys, roleKeys } from './i18n'
 import {
   Alert, Box, Button, Checkbox, Chip, FormControlLabel, MenuItem,
   Paper, Stack, TextField, Typography,
@@ -12,6 +14,8 @@ type Account = { id: string; name: string; active: boolean }
 type Role = { name: string; permissions: string[] }
 type Audit = { id: string; created_at: string; actor_id: string; action: string; target_id: string; details: unknown }
 
+class APIError extends Error {}
+
 async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   const response = await fetch(path, {
     method, credentials: 'same-origin', cache: 'no-store',
@@ -19,17 +23,18 @@ async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> 
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   if (!response.ok) {
-    if (response.status === 401) throw new Error('Please sign in again.')
-    if (response.status === 403) throw new Error('You do not have permission for this operation.')
-    if (response.status === 409) throw new Error('This change conflicts with the current state. Refresh and try again.')
-    if (response.status === 400) throw new Error('Check your entries and try again.')
-    throw new Error('Account administration is temporarily unavailable.')
+    if (response.status === 401) throw new APIError('errorUnauthenticated')
+    if (response.status === 403) throw new APIError('errorForbidden')
+    if (response.status === 409) throw new APIError('errorConflict')
+    if (response.status === 400) throw new APIError('errorInvalid')
+    throw new APIError('errorUnavailable')
   }
   return response.status === 204 ? undefined as T : response.json() as Promise<T>
 }
-function message(error: unknown) { return error instanceof Error ? error.message : 'The request failed.' }
+function message(error: unknown) { return error instanceof APIError ? error.message : 'errorRequest' }
 
 export default function AccessPortal() {
+  const { t } = useTranslation('admin')
   const [user, setUser] = useState<User | null>(null)
   const [accounts, setAccounts] = useState<Account[]>([])
   const [error, setError] = useState('')
@@ -48,15 +53,15 @@ export default function AccessPortal() {
   }, [revision])
   return (
     <Paper sx={{ p: 3, mt: 3 }}>
-      <Typography variant="h6" gutterBottom>Account access</Typography>
-      <Button onClick={() => setRevision((r) => r + 1)} sx={{ mb: 2 }}>Refresh access</Button>
-      {error && <Alert severity="warning">{error}</Alert>}
+      <Typography variant="h6" gutterBottom>{t('accountAccess')}</Typography>
+      <Button onClick={() => setRevision((r) => r + 1)} sx={{ mb: 2 }}>{t('refreshAccess')}</Button>
+      {error && <Alert severity="warning">{t(error)}</Alert>}
       {user && <>
         <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
-          {user.roles.length ? user.roles.map((role) => <Chip key={role} label={role} />) : <Typography>No roles assigned. Contact your administrator for access.</Typography>}
+          {user.roles.length ? user.roles.map((role) => <Chip key={role} label={t(roleKeys[role] || role, { defaultValue: role })} />) : <Typography>{t('noRoles')}</Typography>}
         </Stack>
         {accounts.map((account) => <Typography key={account.id}>{account.name}</Typography>)}
-        {user.permissions.includes('accounts.read') && accounts.length === 0 && <Typography>No active accounts are linked to you.</Typography>}
+        {user.permissions.includes('accounts.read') && accounts.length === 0 && <Typography>{t('noAccounts')}</Typography>}
         {user.permissions.includes('admin.manage') && <AdminPanel key={revision} actorID={user.id} />}
       </>}
     </Paper>
@@ -64,6 +69,8 @@ export default function AccessPortal() {
 }
 
 function AdminPanel({ actorID }: { actorID: string }) {
+  const { t, i18n } = useTranslation(['admin', 'common'])
+  const language = i18n.resolvedLanguage || 'en'
   const [users, setUsers] = useState<User[]>([])
   const [roles, setRoles] = useState<Role[]>([])
   const [accounts, setAccounts] = useState<Account[]>([])
@@ -103,64 +110,65 @@ function AdminPanel({ actorID }: { actorID: string }) {
   }
   const pager = (page: number, count: number, change: (page: number) => void) => (
     <Stack direction="row" spacing={1} sx={{ my: 1 }}>
-      <Button disabled={busy || page === 0} onClick={() => { setBusy(true); change(page - 1) }}>Previous page</Button>
-      <Typography sx={{ alignSelf: 'center' }}>Page {page + 1}</Typography>
-      <Button disabled={busy || count < 100} onClick={() => { setBusy(true); change(page + 1) }}>Next page</Button>
+      <Button disabled={busy || page === 0} onClick={() => { setBusy(true); change(page - 1) }}>{t('common:previousPage')}</Button>
+      <Typography sx={{ alignSelf: 'center' }}>{t('common:page', { page: formatNumber(page + 1, language) })}</Typography>
+      <Button disabled={busy || count < 100} onClick={() => { setBusy(true); change(page + 1) }}>{t('common:nextPage')}</Button>
     </Stack>
   )
   return (
     <Box sx={{ mt: 3 }}>
-      <Typography variant="h5" gutterBottom>Admin Portal</Typography>
-      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-      <Button disabled={busy} onClick={() => { setBusy(true); setRevision((r) => r + 1) }}>Refresh administration</Button>
-      <Typography variant="h6" sx={{ mt: 2 }}>Users and roles</Typography>
-      <Typography variant="body2" sx={{ mb: 2 }}>Users appear after signing in and opening account access. Check issuer and subject before assigning privileges.</Typography>
-      <TextField select fullWidth label="User" value={selected ? selectedID : ''} disabled={busy} onChange={(e) => setSelectedID(e.target.value)}>
-        {users.map((user) => <MenuItem key={user.id} value={user.id}>{user.display_name || user.subject} — {user.email || user.subject}{user.active ? '' : ' (inactive)'}</MenuItem>)}
+      <Typography variant="h5" gutterBottom>{t('title')}</Typography>
+      {error && <Alert severity="error" sx={{ mb: 2 }}>{t(error)}</Alert>}
+      <Button disabled={busy} onClick={() => { setBusy(true); setRevision((r) => r + 1) }}>{t('refresh')}</Button>
+      <Typography variant="h6" sx={{ mt: 2 }}>{t('usersRoles')}</Typography>
+      <Typography variant="body2" sx={{ mb: 2 }}>{t('usersHelp')}</Typography>
+      <TextField select fullWidth label={t('user')} value={selected ? selectedID : ''} disabled={busy} onChange={(e) => setSelectedID(e.target.value)}>
+        {users.map((user) => <MenuItem key={user.id} value={user.id}>{user.display_name || user.subject} — {user.email || user.subject}{user.active ? '' : ` ${t('common:inactive')}`}</MenuItem>)}
       </TextField>
       {pager(userPage, users.length, (page) => { setSelectedID(''); setUserPage(page) })}
       {selected && <Box sx={{ my: 2, overflowWrap: 'anywhere' }}>
-        <Typography>Issuer: {selected.issuer}</Typography>
-        <Typography>Subject: {selected.subject}</Typography>
-        <Typography color="text.secondary">User ID: {selected.id}</Typography>
-        {roles.map((role) => <FormControlLabel key={role.name} label={role.name} control={<Checkbox checked={selected.roles.includes(role.name)} disabled={busy || selected.id === actorID}
+        <Typography>{t('issuer', { issuer: selected.issuer })}</Typography>
+        <Typography>{t('subject', { subject: selected.subject })}</Typography>
+        <Typography color="text.secondary">{t('userID', { id: selected.id })}</Typography>
+        {roles.map((role) => <FormControlLabel key={role.name} label={t(roleKeys[role.name] || role.name, { defaultValue: role.name })} control={<Checkbox checked={selected.roles.includes(role.name)} disabled={busy || selected.id === actorID}
           onChange={(_, checked) => {
-            if (role.name === 'Admin' && checked && !window.confirm(`Grant Admin to issuer ${selected.issuer}, subject ${selected.subject}?`)) return
+            if (role.name === 'Admin' && checked && !window.confirm(t('grantAdmin', { issuer: selected.issuer, subject: selected.subject }))) return
             void mutate(`/api/admin/users/${selected.id}/roles`, 'PUT', { roles: checked ? [...selected.roles, role.name] : selected.roles.filter((r) => r !== role.name) })
           }} />} />)}
-        <Box><Button disabled={busy || selected.id === actorID} onClick={() => void mutate(`/api/admin/users/${selected.id}`, 'PUT', { active: !selected.active })}>{selected.active ? 'Deactivate user' : 'Activate user'}</Button></Box>
-        {selected.id === actorID && <Typography variant="body2">Another administrator must change your roles or active status.</Typography>}
-        <Typography variant="subtitle1" sx={{ mt: 2 }}>Linked accounts</Typography>
+        <Box><Button disabled={busy || selected.id === actorID} onClick={() => void mutate(`/api/admin/users/${selected.id}`, 'PUT', { active: !selected.active })}>{t(selected.active ? 'deactivate' : 'activate')}</Button></Box>
+        {selected.id === actorID && <Typography variant="body2">{t('selfRestriction')}</Typography>}
+        <Typography variant="subtitle1" sx={{ mt: 2 }}>{t('linkedAccounts')}</Typography>
         <Stack direction="row" useFlexGap sx={{ mb: 2, flexWrap: 'wrap', gap: 1 }}>
           {selected.account_ids.map((id) => <Chip key={id} label={accounts.find((account) => account.id === id)?.name || id} disabled={busy}
             onDelete={() => void mutate(`/api/admin/users/${selected.id}/accounts`, 'PUT', { account_ids: selected.account_ids.filter((value) => value !== id) })} />)}
         </Stack>
-        <TextField select fullWidth label="Account to link" value={accounts.some((account) => account.id === linkID) ? linkID : ''} disabled={busy} onChange={(e) => setLinkID(e.target.value)}>
-          {accounts.map((account) => <MenuItem key={account.id} value={account.id} disabled={selected.account_ids.includes(account.id)}>{account.name}{account.active ? '' : ' (inactive)'}</MenuItem>)}
+        <TextField select fullWidth label={t('accountToLink')} value={accounts.some((account) => account.id === linkID) ? linkID : ''} disabled={busy} onChange={(e) => setLinkID(e.target.value)}>
+          {accounts.map((account) => <MenuItem key={account.id} value={account.id} disabled={selected.account_ids.includes(account.id)}>{account.name}{account.active ? '' : ` ${t('common:inactive')}`}</MenuItem>)}
         </TextField>
         <Button disabled={busy || !accounts.some((account) => account.id === linkID) || selected.account_ids.includes(linkID) || selected.account_ids.length >= 100}
-          onClick={() => void mutate(`/api/admin/users/${selected.id}/accounts`, 'PUT', { account_ids: [...selected.account_ids, linkID] })}>Link account</Button>
+          onClick={() => void mutate(`/api/admin/users/${selected.id}/accounts`, 'PUT', { account_ids: [...selected.account_ids, linkID] })}>{t('linkAccount')}</Button>
       </Box>}
 
-      <Typography variant="h6" sx={{ mt: 3 }}>Accounts</Typography>
-      <TextField select fullWidth label="Account to edit" value={accounts.some((account) => account.id === accountID) ? accountID : ''} disabled={busy} onChange={(e) => {
+      <Typography variant="h6" sx={{ mt: 3 }}>{t('accounts')}</Typography>
+      <TextField select fullWidth label={t('accountToEdit')} value={accounts.some((account) => account.id === accountID) ? accountID : ''} disabled={busy} onChange={(e) => {
         const account = accounts.find((account) => account.id === e.target.value)
         setAccountID(account?.id || ''); setAccountName(account?.name || ''); setAccountActive(account?.active ?? true)
       }}>
-        <MenuItem value="">Create new account</MenuItem>
-        {accounts.map((account) => <MenuItem key={account.id} value={account.id}>{account.name}{account.active ? '' : ' (inactive)'}</MenuItem>)}
+        <MenuItem value="">{t('newAccount')}</MenuItem>
+        {accounts.map((account) => <MenuItem key={account.id} value={account.id}>{account.name}{account.active ? '' : ` ${t('common:inactive')}`}</MenuItem>)}
       </TextField>
       {pager(accountPage, accounts.length, (page) => { setAccountID(''); setAccountName(''); setAccountActive(true); setLinkID(''); setAccountPage(page) })}
-      <TextField fullWidth label="Account name" value={accountName} disabled={busy} onChange={(e) => setAccountName(e.target.value)} sx={{ mt: 1 }} />
-      <FormControlLabel label="Active account" control={<Checkbox checked={accountActive} disabled={busy} onChange={(_, checked) => setAccountActive(checked)} />} />
-      <Box><Button variant="contained" disabled={busy || !accountName.trim()} onClick={() => void mutate(accountID ? `/api/admin/accounts/${accountID}` : '/api/admin/accounts', accountID ? 'PUT' : 'POST', { name: accountName.trim(), active: accountActive })}>{accountID ? 'Save account' : 'Create account'}</Button></Box>
-      <Typography variant="h6" sx={{ mt: 3 }}>Permission catalog</Typography>
-      {roles.map((role) => <Typography key={role.name}>{role.name}: {role.permissions.join(', ')}</Typography>)}
-      <Typography variant="h6" sx={{ mt: 3 }}>Administrator audit history</Typography>
+      <TextField fullWidth label={t('accountName')} value={accountName} disabled={busy} onChange={(e) => setAccountName(e.target.value)} sx={{ mt: 1 }} />
+      <FormControlLabel label={t('activeAccount')} control={<Checkbox checked={accountActive} disabled={busy} onChange={(_, checked) => setAccountActive(checked)} />} />
+      <Box><Button variant="contained" disabled={busy || !accountName.trim()} onClick={() => void mutate(accountID ? `/api/admin/accounts/${accountID}` : '/api/admin/accounts', accountID ? 'PUT' : 'POST', { name: accountName.trim(), active: accountActive })}>{t(accountID ? 'saveAccount' : 'createAccount')}</Button></Box>
+      <Typography variant="h6" sx={{ mt: 3 }}>{t('permissionCatalog')}</Typography>
+      {roles.map((role) => <Typography key={role.name}>{t(roleKeys[role.name] || role.name, { defaultValue: role.name })}: {new Intl.ListFormat(language).format(role.permissions.map((permission) => t(permissionKeys[permission] || permission, { defaultValue: permission })))}</Typography>)}
+      <Typography variant="h6" sx={{ mt: 3 }}>{t('auditHistory')}</Typography>
       {audit.map((event) => <Box key={event.id} sx={{ py: 1, borderBottom: 1, borderColor: 'divider', overflowWrap: 'anywhere' }}>
-        <Typography>{new Date(event.created_at).toLocaleString()} — {event.action}</Typography>
-        <Typography variant="body2">Actor: {event.actor_id} · Target: {event.target_id}</Typography>
-        <Typography variant="body2" component="pre" sx={{ whiteSpace: 'pre-wrap', m: 0 }}>{JSON.stringify(event.details)}</Typography>
+        <Typography>{formatDate(event.created_at, language)} — {t(actionKeys[event.action] || event.action, { defaultValue: event.action })}</Typography>
+        <Typography variant="body2">{t('actorTarget', { actor: event.actor_id, target: event.target_id })}</Typography>
+        <Typography variant="caption">{t('rawDetails')}</Typography>
+        <Typography variant="body2" component="pre" dir="ltr" sx={{ whiteSpace: 'pre-wrap', m: 0 }}>{JSON.stringify(event.details)}</Typography>
       </Box>)}
       {pager(auditPage, audit.length, setAuditPage)}
     </Box>

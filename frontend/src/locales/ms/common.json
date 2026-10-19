@@ -1,0 +1,15 @@
+{
+  "appName": "Go Web Framework",
+  "dashboard": "Papan pemuka",
+  "backendStatus": "Status pelayan",
+  "checkingConnection": "Menyemak sambungan pelayan",
+  "connected": "Disambungkan",
+  "connectionError": "Ralat sambungan",
+  "disconnected": "Terputus",
+  "language": "Bahasa",
+  "notProvided": "Tidak diberikan",
+  "previousPage": "Halaman sebelumnya",
+  "nextPage": "Halaman seterusnya",
+  "page": "Halaman {{page}}",
+  "inactive": "(tidak aktif)"
+}

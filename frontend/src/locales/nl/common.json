@@ -1,0 +1,15 @@
+{
+  "appName": "Go Web Framework",
+  "dashboard": "Dashboard",
+  "backendStatus": "Backendstatus",
+  "checkingConnection": "Backendverbinding controleren",
+  "connected": "Verbonden",
+  "connectionError": "Verbindingsfout",
+  "disconnected": "Niet verbonden",
+  "language": "Taal",
+  "notProvided": "Niet opgegeven",
+  "previousPage": "Vorige pagina",
+  "nextPage": "Volgende pagina",
+  "page": "Pagina {{page}}",
+  "inactive": "(inactief)"
+}
