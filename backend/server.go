@@ -90,9 +90,13 @@ func newServer(getenv func(string) string) (*application, error) {
 		closeResources = pool.Close
 		provider = oidcProvider
 	case auth.GoogleIAP:
-		return nil, errors.New("Google IAP authentication is not implemented")
+		iap, err := auth.NewGoogleIAP(getenv("IAP_AUDIENCE"))
+		if err != nil {
+			return nil, err
+		}
+		provider = iap
 	default:
-		return nil, errors.New("unsupported AUTH_PROVIDER; use oidc or local_dev, or leave unset for public health only")
+		return nil, errors.New("unsupported AUTH_PROVIDER; use oidc, google_iap or local_dev, or leave unset for public health only")
 	}
 	return &application{closeResources: closeResources, Server: &http.Server{
 		Addr: address, Handler: newHandler(provider),
@@ -113,6 +117,8 @@ func newHandler(provider auth.Authenticator) http.Handler {
 		mux.HandleFunc("POST /api/auth/logout", selected.Logout)
 	case *auth.LocalDevAuthenticator:
 		providerName = auth.LocalDev
+	case *auth.IAPAuthenticator:
+		providerName = auth.GoogleIAP
 	}
 	// Only the provider name is public; no issuer, client configuration or tokens.
 	mux.HandleFunc("GET /api/auth/config", func(w http.ResponseWriter, r *http.Request) {

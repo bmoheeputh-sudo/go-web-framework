@@ -6,7 +6,7 @@ Reusable web application framework.
 - Backend: Go
 - Frontend: React + Material UI
 - Database: PostgreSQL
-- Authentication: generic OIDC and Local DEV; Google IAP planned
+- Authentication: generic OIDC, Google IAP, and Local DEV
 - Authorization: RBAC
 - Deployment: Manual
 
@@ -67,7 +67,7 @@ curl http://127.0.0.1:8080/api/auth/me
 
 | Variable | Purpose |
 | --- | --- |
-| `AUTH_PROVIDER` | Select `local_dev` or `oidc` explicitly. Unset means public health only; `/api/auth/me` returns 401. |
+| `AUTH_PROVIDER` | Select `local_dev`, `oidc`, or `google_iap` explicitly. Unset means public health only; `/api/auth/me` returns 401. |
 | `APP_ENV` | Must exactly equal `development` for Local DEV; TEST, PRD, production, and every other value are rejected at startup. |
 | `HTTP_ADDR` | Defaults to `127.0.0.1:8080`. Local DEV requires a literal loopback IP and a valid port, such as `127.0.0.1:8080` or `[::1]:8080`. |
 | `LOCAL_DEV_SUBJECT` | Required fixed development user identifier; never supplied by the browser. |
@@ -85,7 +85,7 @@ and never creates production users, session cookies, or database sessions.
 The shared `auth.Identity` contains `issuer`, `subject`, `email`, `email_verified`,
 `display_name`, and `provider`. Identify users by the issuer/subject pair, not by
 email. Common validation requires issuer, subject, and a known provider; email and
-display name may be absent for future upstream providers. Identity shape validation
+display name may be absent when upstream providers omit them. Identity shape validation
 is separate from verifying credentials. Authentication responses use `Cache-Control:
 no-store`; unexpected provider failures return a generic error without credentials.
 
@@ -93,12 +93,114 @@ The `auth.Authenticator` interface resolves an identity for an HTTP request.
 `auth.Require` validates it and places it in request context for protected handlers.
 There is no universal credential string: OIDC login/callback handlers verify the
 authorization flow and establish a server-side session; the OIDC authenticator
-resolves that session on subsequent requests. A future IAP authenticator will
-verify the IAP assertion on each request. Google IAP is not implemented.
-Selecting `google_iap` or an unknown provider fails startup.
+resolves that session on subsequent requests. The Google IAP authenticator verifies
+the signed assertion on every protected request, without creating a session.
+Unknown providers and missing required provider configuration fail startup.
 
 React calls same-origin APIs and receives only the public identity fields. Keep
 backend authentication configuration out of `VITE_*` variables and frontend code.
+
+## Google IAP on App Engine, Cloud Run, or external hosts (Phase 4)
+
+Set `AUTH_PROVIDER=google_iap` and explicitly set `IAP_AUDIENCE` to the **Signed
+Header JWT Audience** of the Google IAP resource protecting this deployment.
+Missing or malformed audiences stop startup. No project, audience, or hosting
+information is discovered: this provider never uses the Google Cloud Metadata
+Server, application default credentials, a service account, or the database.
+OIDC and Local DEV retain their existing configuration and behavior.
+
+| IAP resource | Exact `IAP_AUDIENCE` format |
+| --- | --- |
+| App Engine application | `/projects/PROJECT_NUMBER/apps/PROJECT_ID` |
+| Global backend service, including an IAP connector forwarding to AWS EC2 | `/projects/PROJECT_NUMBER/global/backendServices/BACKEND_SERVICE_ID` |
+| IAP enabled directly on a Cloud Run service | `/projects/PROJECT_NUMBER/locations/REGION/services/SERVICE_NAME` |
+
+Use the numeric project **number**, and the numeric backend service **ID** where
+applicable. Copy the actual signed-header audience from the IAP resource's console
+settings; it is not the OAuth client ID, AWS instance ID, hostname, or service URL.
+For Cloud Run protected at a load balancer, use that backend service's audience;
+for direct Cloud Run IAP, use the regional service audience. See Google's
+[signed-header audience reference](https://cloud.google.com/iap/docs/signed-headers-howto)
+and [Cloud Run IAP options](https://cloud.google.com/iap/docs/enabling-cloud-run).
+
+Edit your local configuration with `vi .env`, keeping real environment values out
+of Git. Example for an external deployment (replace both numeric placeholders):
+
+```dotenv
+APP_ENV=PRD
+AUTH_PROVIDER=google_iap
+IAP_AUDIENCE=/projects/123456789/global/backendServices/987654321
+HTTP_ADDR=127.0.0.1:8080
+```
+
+Load the environment and run the backend as in the local startup instructions.
+For App Engine or Cloud Run, supply these variables in deployment configuration
+and set `HTTP_ADDR` to the platform-required listener, for example `0.0.0.0:8080`
+when its assigned port is 8080. For EC2, bind to loopback behind a local reverse
+proxy, or a private interface reachable only by the trusted connector/proxy.
+Configure HTTPS at ingress and protected transport to the origin. There is no
+IAP development bypass, including in TEST and PRD. For offline UI development use
+`AUTH_PROVIDER=local_dev` with `APP_ENV=development` instead.
+
+### External hosting and network boundary
+
+Running on AWS EC2 alone does not provide IAP. Deploy supported Google IAP
+connector/proxy infrastructure that authenticates requests and forwards Google's
+signed assertion to the origin. Google's [external application connector guide](https://cloud.google.com/iap/docs/enabling-on-prem-howto)
+describes this infrastructure. Audience configuration alone is insufficient.
+Restrict AWS security groups, firewalls, and origin listeners to the authorized
+connector/proxy path; prevent public or alternate ingress that bypasses IAP.
+Apply equivalent ingress restrictions on App Engine and Cloud Run. Serve React
+and `/api` through the protected same-origin route. The proxy must forward the
+IAP assertion without logging it; never synthesize identities from unsigned
+`X-Goog-Authenticated-User-*` headers. This change provisions no cloud resources.
+
+### Verification, caching, and operational limits
+
+The existing maintained `go-jose/v4` dependency verifies compact ES256 signatures
+using only keys fetched over HTTPS from
+`https://www.gstatic.com/iap/verify/public_key-jwk`. The issuer must exactly equal
+`https://cloud.google.com/iap`, the audience must be one exact string, and subject,
+issued-at, and expiration are required. Clock skew is limited to 30 seconds and
+`exp - iat` to 660 seconds. A future `nbf` is also rejected beyond the skew.
+Keep host clocks synchronized. No environment setting disables verification or
+substitutes a different key URL.
+
+`issuer`, `subject`, `email`, `name` (as `display_name`), and `email_verified` come
+only from verified claims. Missing optional email/name stay empty; email verification
+stays false unless explicitly asserted. Unsigned identity headers, query strings,
+OIDC session cookies, and Authorization headers cannot substitute for the assertion.
+React receives only the common identity, displays Google IAP as the provider, and
+handles 401 independently of backend health. It receives no assertion or token.
+IAP controls sign-in; the application's OIDC login/callback/logout routes are not
+registered in this mode, and no application cookies or PostgreSQL sessions are made.
+
+All authenticated handlers must use `auth.Require(provider, handler)`, as
+`/api/auth/me` does, to verify each request. `/api/health` and the provider-only
+`/api/auth/config` remain public; use `/api/health` for unauthenticated health
+probes through the appropriate infrastructure exception.
+
+Public keys are fetched on demand with a five-second HTTP timeout, no redirects,
+a 1 MiB response limit, and validation of key IDs/types/algorithms. They are cached
+in memory for at most five minutes. An unknown key ID triggers refresh, limited
+to once every 30 seconds across concurrent requests, including after errors.
+A newly rotated key can therefore be rejected for up to 30 seconds; retry after
+that interval. Removed keys stop working when the cache refreshes or expires.
+No background worker or database cache is needed.
+
+Invalid or missing assertions return 401. When trusted keys cannot be obtained,
+protected requests return a generic 503; fresh cached keys remain usable until
+expiry, but stale keys never authorize requests. Startup validates configuration
+without fetching keys, so health remains available during a key endpoint outage.
+Allow outbound HTTPS to the fixed Google endpoint. Error responses and application
+logs never include raw assertions, identity payloads, or key-fetch details.
+
+IAP assertions are bearer credentials and can be replayed until expiry; this phase
+does not add per-token revocation, application logout, RBAC, or CSRF protection for
+future state-changing APIs. Restrict origin access and protect transport and logs.
+Deployment IAM policy, proxy forwarding, actual Google key rotation, and end-to-end
+cloud access must still be validated in the target environment; automated tests
+use generated ES256 keys and mocked key responses, with no live IAP credentials.
 
 ## Run locally with OIDC and PostgreSQL (Phase 3)
 
@@ -400,7 +502,10 @@ npm run lint
 The Go tests cover identity validation, Local DEV guards, OIDC discovery and
 configuration, successful login, PKCE, browser-bound state, nonce, signed tokens,
 issuer/audience/expiry rejection, session rotation/expiration, logout CSRF, and
-unauthenticated access. OIDC integration tests start a temporary loopback HTTPS
+unauthenticated access. IAP tests cover signed identity mapping, all supported
+audience formats, invalid claims/signatures/headers, key rotation, expired key
+caches, outages, and concurrent refresh. They use generated ES256 keys and mocked
+HTTPS transport responses, without contacting Google. OIDC integration tests start a temporary loopback HTTPS
 provider with generated signing keys and real JWKS verification; they require
 local socket access but no external identity services or credentials. PostgreSQL
 tests create and destroy their own isolated clusters under `/tmp`, using private

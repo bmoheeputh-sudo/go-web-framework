@@ -38,7 +38,7 @@ func Require(provider Authenticator, next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "unauthenticated")
 			return
 		}
-		if errors.Is(err, ErrStoreUnavailable) {
+		if errors.Is(err, ErrStoreUnavailable) || errors.Is(err, ErrIAPKeysUnavailable) {
 			writeError(w, http.StatusServiceUnavailable, "authentication temporarily unavailable")
 			return
 		}
