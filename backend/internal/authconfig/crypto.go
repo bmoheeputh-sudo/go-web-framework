@@ -1,5 +1,5 @@
-// Package authconfig stores future authentication settings. It is deliberately
-// not connected to provider startup, HTTP endpoints, or the running auth session.
+// Package authconfig manages future authentication settings. It is deliberately
+// not connected to provider startup or the running auth session.
 package authconfig
 
 import (

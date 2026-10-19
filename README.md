@@ -1572,15 +1572,14 @@ the application using the existing instructions and visit `/settings` with an
 already authorized administrator. Saving/registering against the actual development
 database is a live mutation and requires your explicit approval.
 
-## Authentication configuration storage (Phase 9.2.1)
+## Authentication configuration storage and administration (Phases 9.2.1–9.2.2)
 
-This is an **unused internal database foundation**, not a new authentication source.
-`server.go`, `AUTH_PROVIDER`, provider startup, session handling, RBAC and HTTP APIs
-continue using the existing environment-based configuration. There is no admin UI,
-activation method, provider switching, external OIDC handshake, polling or
-LISTEN/NOTIFY. Installing migration 000005 seeds no configuration or active state.
-The server does not require an encryption key until a future explicitly wired
-consumer constructs this repository.
+This is **management-only configuration storage**, not a new authentication source.
+The Phase 9.2.2 admin APIs use the Phase 9.2.1 repository and encryption. Runtime
+`AUTH_PROVIDER`, provider startup and sessions continue using environment settings.
+There is no admin UI, activation method, provider switching, external OIDC handshake,
+polling or LISTEN/NOTIFY. Migration 000005 seeds no configuration or active state.
+The existing admin, RBAC, account and module APIs retain their behavior.
 
 ### Versioned storage and scope
 
@@ -1678,7 +1677,7 @@ repository with that historical key.
 
 | Operation | Behavior |
 | --- | --- |
-| `CipherFromEnv`, `ScopeFromEnv`, `NewRepository` | Explicit internal construction; no automatic server registration |
+| `CipherFromEnv`, `ScopeFromEnv`, `NewRepository`, `RepositoryFromEnv` | Server-owned management construction; never a runtime provider loader |
 | `LatestVersion(ctx)` | Version to use for optimistic draft creation; zero when empty |
 | `CreateDraft(ctx, expectedLatestVersion, settings, secret)` | Append a new revision and initial lifecycle row atomically |
 | `Read(ctx, id)` / `List(ctx, beforeVersion, limit)` | Secret-free metadata; descending keyset pagination, limit 1–100 |
@@ -1713,6 +1712,96 @@ login success or deployment safety. Approval is an explicit administrator action
 a separate-approver policy and runtime secret-reader authority remain future design
 questions. Active/superseded states are constrained in SQL for future work, but no
 repository method can enter them. SQL fixture tests alone exercise active uniqueness.
+
+### Management APIs (Phase 9.2.2)
+
+The server registers these routes; every route requires verified authentication,
+an active framework user and `admin.manage`. POST requests require the exact
+`APP_ORIGIN` and `Content-Type: application/json`. Bodies use the shared 16 KiB,
+unknown-field/trailing-JSON-rejecting decoder. Actor, deployment, environment,
+validation results and lifecycle status cannot be supplied by the caller.
+
+| Method | Path | Behavior |
+| --- | --- | --- |
+| GET | `/api/admin/auth/settings` | Descending revision metadata; `limit` defaults to 50 (1–100), optional nonnegative `before_version` |
+| GET | `/api/admin/auth/settings/{id}` | One revision's metadata within the server's deployment/environment |
+| POST | `/api/admin/auth/settings` | Append an immutable draft; 201 with metadata and a `Location` header |
+| POST | `/api/admin/auth/settings/{id}/validate` | Offline/static validation only; 200 with incremented generation |
+| POST | `/api/admin/auth/settings/{id}/approve` | Explicit approval of a validated revision; 200 with incremented generation |
+| GET | `/api/admin/auth/status` | Environment-backed runtime provider plus separate latest/active database revision metadata |
+
+Configure `RBAC_ENABLED=true`, the existing database/origin settings,
+`AUTH_CONFIG_DEPLOYMENT`, `APP_ENV`, `AUTH_ENCRYPTION_KEY_ID` and
+`AUTH_ENCRYPTION_KEY` using the key custody instructions above. Migration 000005
+must already be installed through the approved manual workflow; these APIs never
+apply migrations. Configuration is read at process startup. Missing/invalid scope
+or encryption configuration makes the protected management service return 503;
+it does not break environment-based login. Missing tables, database outages,
+audit failures and unavailable historical encryption keys likewise fail closed.
+No replacement key or runtime provider is created automatically.
+
+OIDC draft request shape (placeholder only; never put real secrets in source,
+shell history, request logs or monitoring payloads):
+
+```json
+{
+  "expected_latest_version": 0,
+  "provider": "oidc",
+  "issuer_url": "https://idp.example.invalid",
+  "client_id": "application-client",
+  "client_secret": "<new OIDC client secret>",
+  "redirect_uri": "https://app.example.invalid/api/auth/callback",
+  "allow_http_development": false
+}
+```
+
+`expected_latest_version` is required: use zero when no revisions exist, otherwise
+use the highest version from the first list page or status's `latest_revision`.
+A stale value yields 409; refresh and review before retrying. A new OIDC draft
+always requires a nonempty client secret; no implicit copying of stored secrets.
+Google IAP drafts instead use `provider: "google_iap"` and `iap_audience` with no
+OIDC fields or secret. Local DEV drafts use `provider: "local_dev"` and are allowed
+only in `APP_ENV=development`; local identity values remain environment-owned.
+HTTP callback allowance is confined to existing loopback development rules.
+
+Validation and approval bodies are `{ "expected_generation": 1 }`, using the
+revision's current generation (normally 2 for approval after initial validation).
+A stale generation yields 409; an invalid lifecycle step, such as approving a
+draft directly, yields 400. Approval is audited and **does not activate anything**.
+Validation records only `{ "check": "static", "version": 1 }`; it does not test
+OIDC discovery, JWKS, credentials, token exchange or browser login.
+
+List responses are `{ "revisions": [], "next_before_version": 0 }`. A nonzero
+cursor can be used for the next page; the last full page may lead to an empty page.
+Metadata includes `has_secret` but never a client secret, nonce or ciphertext.
+There is no HTTP secret-reading, update-in-place, deletion or activation endpoint.
+All management responses use JSON and `Cache-Control: no-store`.
+
+Status returns `runtime_provider`, `runtime_source: "environment"`,
+`management_only: true`, `validation_mode: "offline_static"`, `latest_revision`
+and `database_active_revision`. Revision fields are null when absent. Even an
+existing database `active` row is reported separately and is not loaded into the
+running provider. Drafts/approvals never change login behavior.
+
+Call `/api/admin/auth/status` without query parameters. Supplying a deployment,
+environment or cache-busting parameter returns 400 `auth_config_invalid` before
+the repository is called; scope comes from server configuration. Use a request
+`Cache-Control: no-cache` header if needed, rather than adding a query parameter.
+An empty configuration store is valid: status returns 200 with both revision
+fields null and the environment-backed runtime provider unchanged.
+
+Errors use `{ "error": "..." }`: 400 invalid input/configuration, 401 unauthenticated,
+403 denied, 404 unknown or out-of-scope revision, 409 version/generation conflict,
+and 503 unavailable configuration/database service. Existing authentication and
+access middleware retain their JSON error conventions; management errors use
+`auth_config_invalid`, `auth_config_not_found`, `auth_config_conflict` and
+`auth_config_unavailable`. SQL, submitted secrets and cryptographic diagnostics
+are never included. Authorization is rechecked inside the shared advisory-locked
+`AdminTransaction`; mutation and audit commit or roll back together.
+
+The current policy allows the same authorized administrator to create, validate
+and approve a revision. Separate approvers, provider connection tests, activation,
+UI controls and runtime keyring/rotation management remain future reviewed phases.
 
 ### Manual migration and regression checks
 

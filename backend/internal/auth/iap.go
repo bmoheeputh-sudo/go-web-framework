@@ -31,10 +31,19 @@ type IAPAuthenticator struct {
 // NewGoogleIAP needs no metadata server, credentials, database, or login callback.
 // Keys are fetched lazily; protected requests fail closed during a key outage.
 func NewGoogleIAP(audience string) (*IAPAuthenticator, error) {
-	if len(audience) > 512 || !iapAudiencePattern.MatchString(audience) {
-		return nil, errors.New("IAP_AUDIENCE must be an explicit App Engine, backend service, or Cloud Run signed-header resource audience")
+	if err := ValidateIAPAudience(audience); err != nil {
+		return nil, err
 	}
 	return &IAPAuthenticator{audience: audience, keys: newIAPKeyCache(), now: time.Now}, nil
+}
+
+// ValidateIAPAudience checks configuration syntax without constructing a provider
+// or fetching keys. Administration uses the same rules as runtime startup.
+func ValidateIAPAudience(audience string) error {
+	if len(audience) > 512 || !iapAudiencePattern.MatchString(audience) {
+		return errors.New("IAP_AUDIENCE must be an explicit App Engine, backend service, or Cloud Run signed-header resource audience")
+	}
+	return nil
 }
 
 func (p *IAPAuthenticator) Authenticate(r *http.Request) (Identity, error) {

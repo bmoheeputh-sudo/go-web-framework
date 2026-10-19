@@ -101,8 +101,7 @@ type Metadata struct {
 	EncryptionKeyID  string     `json:"encryption_key_id,omitempty"`
 }
 
-// Repository is a deployment-bound internal administrator capability. Neither it
-// nor Cipher is installed in server.go in this phase. Metadata never has a secret
+// Repository is a deployment-bound internal administrator capability. Metadata never has a secret
 // field. No method changes immutable revision settings or activates a provider.
 type Repository struct {
 	access *access.Store
@@ -152,7 +151,7 @@ func validate(scope Scope, s Settings, secret Secret) error {
 			return ErrInvalid
 		}
 	case auth.GoogleIAP:
-		if _, err := auth.NewGoogleIAP(s.IAPAudience); err != nil {
+		if err := auth.ValidateIAPAudience(s.IAPAudience); err != nil {
 			return ErrInvalid
 		}
 	default:

@@ -138,6 +138,11 @@ func decode(w http.ResponseWriter, r *http.Request, value any) bool {
 	}
 	return true
 }
+
+// DecodeJSON reuses the bounded, strict decoder for trusted core admin APIs.
+func DecodeJSON(w http.ResponseWriter, r *http.Request, value any) bool {
+	return decode(w, r, value)
+}
 func offset(r *http.Request) (int, error) {
 	value := r.URL.Query().Get("offset")
 	if value == "" {

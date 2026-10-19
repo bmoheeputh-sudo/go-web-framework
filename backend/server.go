@@ -12,6 +12,7 @@ import (
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/access"
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/apps/example"
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/auth"
+	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/authconfig"
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/database"
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/modules"
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/module"
@@ -156,6 +157,11 @@ func newServer(getenv func(string) string) (*application, error) {
 		closeResources()
 		return nil, err
 	}
+	// Management is optional and never supplies runtime authentication settings.
+	// Missing/invalid management configuration yields protected 503 responses;
+	// it must not disable the existing environment-configured login provider.
+	configRepository, _ := authconfig.RepositoryFromEnv(authorization, getenv)
+	authconfig.Register(handler, provider, authorization, origin, configRepository, auth.Provider(getenv("AUTH_PROVIDER")))
 	return &application{closeResources: closeResources, Server: &http.Server{
 		Addr: address, Handler: handler,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -208,7 +214,7 @@ func newHandlerWithAccess(provider auth.Authenticator, authorization *access.Sto
 }
 
 // The core composition root owns both namespaces; modules never receive this mux.
-func newHandlerWithModules(provider auth.Authenticator, authorization *access.Store, origin string, registry *modules.Registry) (http.Handler, error) {
+func newHandlerWithModules(provider auth.Authenticator, authorization *access.Store, origin string, registry *modules.Registry) (*http.ServeMux, error) {
 	if authorization != nil {
 		var err error
 		authorization, err = authorization.WithPermissionDefinitions(registry.PermissionDefinitions())

@@ -297,3 +297,56 @@ func TestRBACConfigurationAndDisabledRoutes(t *testing.T) {
 		}
 	}
 }
+
+func TestAuthConfigurationManagementUnavailablePreservesRuntime(t *testing.T) {
+	for _, authenticated := range []bool{true, false} {
+		values := developmentEnvironment()
+		values["APP_ORIGIN"] = "http://127.0.0.1:5173"
+		values["AUTH_CONFIG_DEPLOYMENT"] = "test-installation"
+		values["AUTH_ENCRYPTION_KEY"] = "invalid-test-key"
+		values["AUTH_ENCRYPTION_KEY_ID"] = "test-key"
+		if !authenticated {
+			delete(values, "AUTH_PROVIDER")
+		}
+		app, err := newServer(envReader(values))
+		if err != nil {
+			t.Fatal("management configuration changed runtime startup", err)
+		}
+		defer app.closeResources()
+		for _, route := range []struct{ method, path string }{
+			{"GET", "/api/admin/auth/settings"}, {"GET", "/api/admin/auth/settings/11111111-1111-4111-8111-111111111111"},
+			{"POST", "/api/admin/auth/settings"}, {"POST", "/api/admin/auth/settings/11111111-1111-4111-8111-111111111111/validate"},
+			{"POST", "/api/admin/auth/settings/11111111-1111-4111-8111-111111111111/approve"}, {"GET", "/api/admin/auth/status"},
+		} {
+			r := httptest.NewRequest(route.method, route.path, strings.NewReader(`{}`))
+			r.RemoteAddr = "127.0.0.1:4321"
+			r.Header.Set("Origin", values["APP_ORIGIN"])
+			r.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			app.Handler.ServeHTTP(w, r)
+			want := 401
+			if authenticated {
+				want = 503
+			}
+			if w.Code != want {
+				t.Fatalf("%s: got %d want %d", route.path, w.Code, want)
+			}
+			if w.Header().Get("Content-Type") != "application/json" || strings.Contains(w.Body.String(), values["AUTH_ENCRYPTION_KEY"]) {
+				t.Fatal("unsafe management failure")
+			}
+		}
+		for _, path := range []string{"/api/health", "/api/auth/me", "/api/auth/config"} {
+			r := httptest.NewRequest("GET", path, nil)
+			r.RemoteAddr = "127.0.0.1:4321"
+			w := httptest.NewRecorder()
+			app.Handler.ServeHTTP(w, r)
+			want := 200
+			if path == "/api/auth/me" && !authenticated {
+				want = 401
+			}
+			if w.Code != want {
+				t.Fatal("existing endpoint changed", path, w.Code)
+			}
+		}
+	}
+}
