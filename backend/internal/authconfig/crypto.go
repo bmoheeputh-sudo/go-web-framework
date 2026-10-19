@@ -41,16 +41,47 @@ func (encryptedSecret) Format(w fmt.State, _ rune) { _, _ = io.WriteString(w, "[
 type Cipher struct {
 	keyID string
 	aead  cipher.AEAD
+	keys  map[string]cipher.AEAD
 }
 
-func (*Cipher) Format(w fmt.State, _ rune) { _, _ = io.WriteString(w, "[REDACTED]") }
+func (Cipher) Format(w fmt.State, _ rune) { _, _ = io.WriteString(w, "[REDACTED]") }
 
 // Encoding is canonical padded RFC 4648 standard base64, exactly 32 decoded
 // bytes. Random origin is an operator requirement; entropy cannot be proved by
 // inspecting a key. Reject trivially constant keys as an additional guard.
 func CipherFromEnv(getenv func(string) string) (*Cipher, error) {
-	encoded, id := getenv("AUTH_ENCRYPTION_KEY"), getenv("AUTH_ENCRYPTION_KEY_ID")
-	if len(encoded) != 44 || !keyIdentifier.MatchString(id) {
+	return NewKeyring(getenv("AUTH_ENCRYPTION_KEY_ID"), map[string]string{
+		getenv("AUTH_ENCRYPTION_KEY_ID"): getenv("AUTH_ENCRYPTION_KEY"),
+	})
+}
+
+// NewKeyring constructs an immutable internal keyring. Only activeID encrypts new
+// revisions. All supplied keys can decrypt historical envelopes. No environment
+// multi-key parser or rotation is enabled by this persistence-only phase.
+func NewKeyring(activeID string, encodedKeys map[string]string) (*Cipher, error) {
+	if !keyIdentifier.MatchString(activeID) || len(encodedKeys) == 0 || len(encodedKeys) > 32 {
+		return nil, ErrKey
+	}
+	keys := make(map[string]cipher.AEAD, len(encodedKeys))
+	for id, encoded := range encodedKeys {
+		if !keyIdentifier.MatchString(id) {
+			return nil, ErrKey
+		}
+		aead, err := decodeKey(encoded)
+		if err != nil {
+			return nil, ErrKey
+		}
+		keys[id] = aead
+	}
+	active := keys[activeID]
+	if active == nil {
+		return nil, ErrKey
+	}
+	return &Cipher{keyID: activeID, aead: active, keys: keys}, nil
+}
+
+func decodeKey(encoded string) (cipher.AEAD, error) {
+	if len(encoded) != 44 {
 		return nil, ErrKey
 	}
 	key, err := base64.StdEncoding.Strict().DecodeString(encoded)
@@ -75,7 +106,7 @@ func CipherFromEnv(getenv func(string) string) (*Cipher, error) {
 	if err != nil {
 		return nil, ErrKey
 	}
-	return &Cipher{keyID: id, aead: aead}, nil
+	return aead, nil
 }
 
 // AAD binds purpose, envelope metadata, deployment, immutable revision identity
@@ -117,10 +148,14 @@ func (c *Cipher) seal(metadata Metadata, secret Secret) (encryptedSecret, error)
 	return encryptedSecret{1, c.keyID, nonce, encrypted}, nil
 }
 func (c *Cipher) open(metadata Metadata, encrypted encryptedSecret) (Secret, error) {
-	if c == nil || c.aead == nil || encrypted.format != 1 || encrypted.keyID != c.keyID || len(encrypted.nonce) != 12 || len(encrypted.ciphertext) < 17 || len(encrypted.ciphertext) > 4112 {
+	if c == nil || c.aead == nil || encrypted.format != 1 || len(encrypted.nonce) != 12 || len(encrypted.ciphertext) < 17 || len(encrypted.ciphertext) > 4112 {
 		return Secret{}, ErrSecret
 	}
-	plaintext, err := c.aead.Open(nil, encrypted.nonce, encrypted.ciphertext, aad(metadata, encrypted.format, encrypted.keyID))
+	key := c.keys[encrypted.keyID]
+	if key == nil {
+		return Secret{}, ErrSecret
+	}
+	plaintext, err := key.Open(nil, encrypted.nonce, encrypted.ciphertext, aad(metadata, encrypted.format, encrypted.keyID))
 	if err != nil {
 		return Secret{}, ErrSecret
 	}

@@ -135,7 +135,7 @@ func TestRepository(t *testing.T) {
 		}
 	})
 	t.Run("immutable fields history and provider integrity", func(t *testing.T) {
-		_, err := f.owner.Exec(ctx, `TRUNCATE framework.auth_config_revisions,framework.auth_config_lifecycle`)
+		_, err := f.owner.Exec(ctx, `TRUNCATE framework.auth_config_revisions,framework.auth_config_lifecycle CASCADE`)
 		assertConstraint(t, err)
 		for _, sql := range []string{`UPDATE framework.auth_config_revisions SET client_id='changed' WHERE id=$1`, `UPDATE framework.auth_config_revisions SET secret_ciphertext=decode('00','hex') WHERE id=$1`, `UPDATE framework.auth_config_revisions SET configuration_version=9 WHERE id=$1`, `DELETE FROM framework.auth_config_revisions WHERE id=$1`, `DELETE FROM framework.auth_config_lifecycle WHERE revision_id=$1`, `UPDATE framework.auth_config_lifecycle SET deployment_id='other',generation=generation+1,status='validated',validation='{"check":"static","version":1}' WHERE revision_id=$1`} {
 			_, err := f.owner.Exec(ctx, sql, first.ID)

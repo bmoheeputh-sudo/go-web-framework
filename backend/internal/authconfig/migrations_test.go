@@ -18,11 +18,17 @@ import (
 
 func TestAuthConfigurationMigrationRollbackPolicy(t *testing.T) {
 	for _, name := range []string{"empty", "populated"} {
-		t.Run(name, func(t *testing.T) { testAuthConfigurationRollbackPolicy(t, name == "populated") })
+		t.Run(name, func(t *testing.T) { testAuthConfigurationRollbackPolicy(t, name == "populated", 5) })
 	}
 }
 
-func testAuthConfigurationRollbackPolicy(t *testing.T, populated bool) {
+func TestAuthActivationMigrationRollbackPolicy(t *testing.T) {
+	for _, name := range []string{"empty", "populated"} {
+		t.Run(name, func(t *testing.T) { testAuthConfigurationRollbackPolicy(t, name == "populated", 6) })
+	}
+}
+
+func testAuthConfigurationRollbackPolicy(t *testing.T, populated bool, targetVersion int) {
 	t.Helper()
 	cli, err := exec.LookPath("migrate")
 	if err != nil {
@@ -70,7 +76,7 @@ func testAuthConfigurationRollbackPolicy(t *testing.T, populated bool) {
 		t.Fatal(err)
 	}
 	if err = run("up", "1"); err != nil {
-		t.Fatal("isolated version 5 migration failed")
+		t.Fatal("isolated authentication migration failed")
 	}
 	var version int
 	var dirty bool
@@ -131,6 +137,22 @@ func testAuthConfigurationRollbackPolicy(t *testing.T, populated bool) {
 		}
 		return data
 	}
+	if targetVersion == 6 {
+		oldSnapshot := snapshot()
+		if err := run("up", "1"); err != nil {
+			t.Fatal("isolated version 6 migration failed")
+		}
+		if snapshot() != oldSnapshot {
+			t.Fatal("migration 6 changed existing configuration history or credentials")
+		}
+		if err := pool.QueryRow(ctx, `SELECT version,dirty,'public.schema_migrations'::regclass::oid FROM public.schema_migrations`).Scan(&version, &dirty, &after); err != nil || version != 6 || dirty || after != journal {
+			t.Fatal("migration 6 changed or corrupted migration history")
+		}
+		var heads, events, evidence int
+		if err := pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM framework.auth_activation_heads),(SELECT count(*) FROM framework.auth_activation_history),(SELECT count(*) FROM framework.auth_test_evidence)`).Scan(&heads, &events, &evidence); err != nil || heads != 0 || events != 0 || evidence != 0 {
+			t.Fatal("persistence migration enrolled or activated a deployment")
+		}
+	}
 	before := snapshot()
 	for _, args := range [][]string{{"down", "1"}, {"down"}, {"goto", "4"}, {"force", "4"}, {"drop", "-f"}, {"up", "-1"}} {
 		if err = run(args...); err == nil {
@@ -139,8 +161,8 @@ func testAuthConfigurationRollbackPolicy(t *testing.T, populated bool) {
 		if err = pool.QueryRow(ctx, `SELECT version,dirty,'public.schema_migrations'::regclass::oid FROM public.schema_migrations`).Scan(&version, &dirty, &after); err != nil {
 			t.Fatal(err)
 		}
-		if version != 5 || dirty || journal != after {
-			t.Fatal("refused operation changed the clean version-5 journal")
+		if version != targetVersion || dirty || journal != after {
+			t.Fatal("refused operation changed the clean journal")
 		}
 		if snapshot() != before {
 			t.Fatal("refused operation changed configuration history, credentials or audit records")
@@ -170,7 +192,7 @@ func testAuthConfigurationRollbackPolicy(t *testing.T, populated bool) {
 			_, err := pool.Exec(ctx, sql, history[0].ID)
 			assertConstraint(t, err)
 		}
-		_, err := pool.Exec(ctx, `TRUNCATE framework.auth_config_revisions,framework.auth_config_lifecycle`)
+		_, err := pool.Exec(ctx, `TRUNCATE framework.auth_config_revisions,framework.auth_config_lifecycle CASCADE`)
 		assertConstraint(t, err)
 	}
 	// Unsupported direct CLI bypass must fail visibly, never claim a clean
@@ -182,7 +204,7 @@ func testAuthConfigurationRollbackPolicy(t *testing.T, populated bool) {
 	if err = pool.QueryRow(ctx, `SELECT version,dirty FROM public.schema_migrations`).Scan(&version, &dirty); err != nil {
 		t.Fatal(err)
 	}
-	if version != 4 || !dirty || snapshot() != before {
+	if version != targetVersion-1 || !dirty || snapshot() != before {
 		t.Fatal("direct rollback did not preserve history with a visible dirty failure")
 	}
 	if err = run("up", "1"); err == nil {

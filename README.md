@@ -2029,6 +2029,19 @@ explicitly skip if golang-migrate or PostgreSQL test binaries are unavailable.
 Historical session rollback tests use a separate version-4 fixture so the
 forward-only version-5 history is never discarded.
 
+## Authentication activation persistence (Phase 9.2.5B)
+
+Migration 000006 adds deployment activation heads, immutable transition history,
+durable test evidence and explicit session/flow bindings. It creates no active
+provider, enrolls no deployment and leaves environment-driven authentication
+unchanged. The internal keyring remains compatible with existing single-key
+configuration. Live tests and runtime authentication do not use the new activation
+persistence yet.
+
+See [the persistence design, compatibility policy, keyring format and manual
+migration instructions](docs/auth-activation-persistence.md). Apply only after
+approval; the supported migration workflow remains forward-only.
+
 ## Backup to GitHub and Google Drive
 
 Run from the repository on the `main` branch:
