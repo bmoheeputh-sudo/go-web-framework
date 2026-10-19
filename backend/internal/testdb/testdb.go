@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -62,6 +64,12 @@ func New(t *testing.T) (*pgxpool.Pool, string) {
 }
 
 func Migrations(t *testing.T, pool *pgxpool.Pool, direction string) {
+	MigrationsThrough(t, pool, direction, 0)
+}
+
+// MigrationsThrough supports historical rollback tests without rolling back
+// later forward-only migrations. Zero applies every available migration.
+func MigrationsThrough(t *testing.T, pool *pgxpool.Pool, direction string, version int) {
 	t.Helper()
 	_, file, _, _ := runtime.Caller(0)
 	paths, err := filepath.Glob(filepath.Join(filepath.Dir(file), "../../../database/migrations/*."+direction+".sql"))
@@ -72,6 +80,13 @@ func Migrations(t *testing.T, pool *pgxpool.Pool, direction string) {
 		slices.Reverse(paths)
 	}
 	for _, path := range paths {
+		n, err := strconv.Atoi(strings.SplitN(filepath.Base(path), "_", 2)[0])
+		if err != nil {
+			t.Fatal("invalid migration filename")
+		}
+		if version > 0 && n > version {
+			continue
+		}
 		contents, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)

@@ -1566,6 +1566,199 @@ the application using the existing instructions and visit `/settings` with an
 already authorized administrator. Saving/registering against the actual development
 database is a live mutation and requires your explicit approval.
 
+## Authentication configuration storage (Phase 9.2.1)
+
+This is an **unused internal database foundation**, not a new authentication source.
+`server.go`, `AUTH_PROVIDER`, provider startup, session handling, RBAC and HTTP APIs
+continue using the existing environment-based configuration. There is no admin UI,
+activation method, provider switching, external OIDC handshake, polling or
+LISTEN/NOTIFY. Installing migration 000005 seeds no configuration or active state.
+The server does not require an encryption key until a future explicitly wired
+consumer constructs this repository.
+
+### Versioned storage and scope
+
+Migration `000005_auth_configuration.up.sql` creates two framework tables:
+
+- `framework.auth_config_revisions`: immutable UUID, deployment/environment,
+  monotonically increasing configuration version within that scope, provider,
+  issuer URL, client ID, callback URI, IAP audience, explicit loopback-HTTP
+  development flag, encrypted secret envelope, creator and creation timestamp.
+  PostgreSQL rejects UPDATE and DELETE, including edits to ciphertext or key IDs.
+- `framework.auth_config_lifecycle`: revision-bound status, optimistic generation,
+  last actor, timestamps for validation/approval/activation/supersession, and
+  strictly allowlisted validation metadata. A composite foreign key prevents
+  cross-scope lifecycle records. A partial unique index permits at most one
+  `active` revision per deployment/environment. The active revision is obtained
+  from this indexed state, without a second mutable pointer that could disagree.
+
+All timestamps are `TIMESTAMPTZ`. Provider-specific checks reject mixed settings,
+missing/malformed encryption envelopes, invalid providers and Local DEV outside
+`development`. Application validation also reuses the existing OIDC/IAP validators
+without network requests. Local DEV identity values remain environment-configured;
+this foundation stores its provider choice only, not a replacement local identity.
+
+`AUTH_CONFIG_DEPLOYMENT` is a required, explicit deployment identifier for the
+repository (`[a-z][a-z0-9_-]{0,63}`). Scope also includes canonical `APP_ENV`:
+`development`, `test` or `production`; existing TEST/PRD aliases are normalized by
+`ScopeFromEnv`. Scope is bound by trusted composition code, never request JSON.
+Use distinct deployment IDs and encryption keys for DEV, TEST and PRD. Separate
+production databases are preferable: scoped queries and authenticated encryption
+are not database-role isolation when the same owner can access all rows.
+
+### Encryption and key custody
+
+`CipherFromEnv` requires both `AUTH_ENCRYPTION_KEY` and `AUTH_ENCRYPTION_KEY_ID`.
+The key is **exactly 32 cryptographically random bytes**, encoded as canonical,
+padded RFC 4648 standard base64 (44 characters, no surrounding whitespace or
+newline). The non-secret key ID matches `[A-Za-z0-9][A-Za-z0-9_-]{0,63}`. Missing,
+malformed, wrong-length and trivially constant keys fail closed; no replacement
+key is generated. Structural validation cannot prove that an operator generated
+key bytes randomly. Do not use passwords, repeated values or hashes of passwords.
+
+Format 1 uses standard-library AES-256-GCM: a fresh random 12-byte nonce per
+secret, ciphertext followed by the 16-byte authentication tag, explicit format
+version and key ID. Secrets are limited to 4096 bytes. AAD is a stable format-v1
+JSON structure binding the purpose `gwf.auth-config.oidc-client-secret`, format,
+key ID, deployment/environment, revision UUID, configuration version, creator and
+all non-secret provider settings. Lifecycle status is excluded so validation does
+not require re-encryption. Moving ciphertext to another revision or deployment,
+or changing authenticated settings, makes decryption fail.
+
+For an operator-managed key, an example generation command that does **not print
+key material** is shown below. Run only when provisioning the intended deployment;
+choose a new path and retain a secure backup. Never overwrite a key used by existing
+revisions. These are manual instructions, not application startup behavior:
+
+```bash
+set +x
+umask 077
+mkdir -p ../secure/auth-config
+# noclobber prevents accidentally replacing an existing key file.
+(set -C; openssl rand -base64 32 > ../secure/auth-config/dev-key-v1.base64)
+export AUTH_ENCRYPTION_KEY="$(cat ../secure/auth-config/dev-key-v1.base64)"
+export AUTH_ENCRYPTION_KEY_ID=dev-key-v1
+export AUTH_CONFIG_DEPLOYMENT=framework-local-dev
+```
+
+Keep this file outside Git and use deployment-managed secret injection in TEST/PRD.
+Do not paste keys into tickets, logs or command-line arguments. Use `vi .env` only
+if choosing the existing ignored local environment file; never edit `.env.example`
+to contain real keys. Environment variables and process memory still require host
+access controls.
+
+**Rotation design:** retain the old key under its original ID, provision a fresh
+random key and new ID, and construct separate trusted old-key reader/new-key
+writer repositories for the same scope. An authorized `ReadSecretPrivileged`
+followed by `CreateDraft` re-encrypts into a new immutable revision with a fresh
+nonce. Tests cover this sequence. Nothing becomes active in this phase. A future
+reviewed activation workflow must validate, approve and switch revisions safely.
+Do not re-encrypt old rows in place or reuse an ID for different key bytes. Retain
+all old keys needed for historical recovery in secure backup; retire keys only
+under an explicit retention policy. Rotate well before GCM's per-key message
+limits, and use a new key after suspected compromise.
+
+**Recovery:** restore matching database and key backups together and verify the
+correct deployment, key IDs and revision metadata. If a historical key is lost,
+its secrets are unrecoverable; re-enter the credential into a new draft using a
+new key after operator review. Never silently fall back to a new key, plaintext,
+or another deployment's credentials. There is no automated rotation/recovery CLI
+or multi-key keyring in this phase; old-key access uses an explicitly constructed
+repository with that historical key.
+
+### Repository and authorization contract
+
+`backend/internal/authconfig` exposes:
+
+| Operation | Behavior |
+| --- | --- |
+| `CipherFromEnv`, `ScopeFromEnv`, `NewRepository` | Explicit internal construction; no automatic server registration |
+| `LatestVersion(ctx)` | Version to use for optimistic draft creation; zero when empty |
+| `CreateDraft(ctx, expectedLatestVersion, settings, secret)` | Append a new revision and initial lifecycle row atomically |
+| `Read(ctx, id)` / `List(ctx, beforeVersion, limit)` | Secret-free metadata; descending keyset pagination, limit 1–100 |
+| `Transition(ctx, id, expectedGeneration, status)` | Only draft → validated → approved; increments generation |
+| `CurrentActive(ctx)` | Indexed active metadata, or `ErrNotFound` when none exists |
+| `ReadSecretPrivileged(ctx, id)` | Audited, privileged secret retrieval; never an HTTP response |
+
+Every operation requires verified authentication plus framework principal context
+and an active `admin.manage` grant. The shared access-store advisory-lock and audit
+helpers are reused; actor identity and authorization are rechecked inside the
+transaction. Calls have a five-second maximum deadline, respect cancellation, use
+parameterized, qualified SQL and release resources after rollback. Errors are
+fixed, recognizable values without database internals or secret contents. There
+are no uncontrolled mutation retries.
+
+Creation compares the expected latest version under the lock. Lifecycle updates
+compare the revision generation; stale writers get `ErrConflict`. Audit records
+and writes commit atomically. Secret retrieval records `auth_config.secret_access`
+and returns no secret if audit insertion or commit fails. Other audit actions are
+`auth_config.draft_created`, `auth_config.validated` and `auth_config.approved`.
+Audit details contain only configuration version, generation and status.
+
+`Secret` is an opaque wrapper whose standard formatting is redacted and whose JSON
+serialization fails. `Bytes()` is an explicit trusted-code escape hatch; never log,
+persist or serialize those bytes. The repository's metadata types cannot contain
+ciphertext, nonce or plaintext. Tests exercise redaction, tampering and rollback.
+Go does not guarantee erasure of every key/plaintext copy from memory or crash dumps.
+
+Validation currently records only `{ "check": "static", "version": 1 }`, generated
+internally. It proves syntax/envelope validation, not provider reachability, OIDC
+login success or deployment safety. Approval is an explicit administrator action;
+a separate-approver policy and runtime secret-reader authority remain future design
+questions. Active/superseded states are constrained in SQL for future work, but no
+repository method can enter them. SQL fixture tests alone exercise active uniqueness.
+
+### Manual migration and regression checks
+
+**Approval is required before applying 000005 to the actual database.** Review and
+back up the intended database first. Use the existing protected `PG*` environment
+setup described above; never put credentials in the URL. Inspect the current
+`public.schema_migrations` state before mutation. For a clean version-4 deployment,
+from the repository root:
+
+```bash
+migrate -path database/migrations -database 'postgres://?search_path=public' version
+# Only after approval and confirming clean version 4:
+migrate -path database/migrations -database 'postgres://?search_path=public' up 1
+migrate -path database/migrations -database 'postgres://?search_path=public' version
+# Expect clean version 5. Never run a blanket down or force to bypass an error.
+```
+
+The `.down.sql` file is an intentional **non-destructive no-op**: it preserves
+configuration history, encrypted credentials and schema protections without
+deliberately failing and dirtying the journal. golang-migrate marks a migration
+dirty before executing its SQL; raising an exception cannot refuse rollback while
+leaving the journal clean. Omitting the down file also does not block rollback:
+golang-migrate treats a missing direction as an empty migration.
+
+Production rollback must use a compatible application version while keeping the
+database at version 5, or an approved forward corrective migration. Do not run
+`down`, `goto` to an earlier version, or a blanket rollback in production. The
+no-op is not an enforcement barrier against subsequent, older down migrations.
+
+If an operator inadvertently runs **exactly one down step from version 5**, the
+journal becomes **clean version 4**, but the version-5 schema and data remain.
+Stop: do not continue down or rerun `up 1` (the retained objects would conflict).
+An operator must verify the complete version-5 schema, constraints, triggers and
+history, then obtain approval to reconcile the journal to the actual installed
+version before further migrations. The same inspection is required for a dirty
+journal left by the previous refusal guard. Never automatically `force` a version
+or delete history to make migration replay succeed.
+Migrations 000001–000004 and `public.schema_migrations` placement are unchanged.
+The current single `go_web_app` owner runs migrations; explicit grants also support
+non-owner test fixtures. Owner privileges can disable triggers or modify audit
+history, so this is not database least-privilege separation or protection against
+a compromised application process holding both database access and keys.
+
+Run `go test -race -count=1 ./...` and `go vet ./...` from `backend`, then
+`git diff --check` from the root. PostgreSQL tests use only disposable clusters.
+The CLI test checks 4 → 5, empty initial state, and a single non-destructive down
+step with a clean version-4 journal, for both empty and populated configurations.
+It verifies retained history, encrypted credentials, decryption and immutability
+protections; it explicitly skips if the golang-migrate CLI is unavailable.
+Historical session rollback tests use a separate version-4 fixture so the
+forward-only version-5 history is never discarded.
+
 ## Backup to GitHub and Google Drive
 
 Run from the repository on the `main` branch:

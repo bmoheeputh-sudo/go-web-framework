@@ -238,11 +238,14 @@ func TestPostgresSessions(t *testing.T) {
 		}
 	})
 	t.Run("migration rollback and reapply", func(t *testing.T) {
-		testdb.Migrations(t, pool, "down")
+		// The historical 1–4 rollback uses its own database; migration 5 is forward-only.
+		pool, _ := testdb.New(t)
+		testdb.MigrationsThrough(t, pool, "up", 4)
+		testdb.MigrationsThrough(t, pool, "down", 4)
 		if database.CheckSchema(ctx, pool) == nil {
 			t.Fatal("rolled-back schema accepted")
 		}
-		testdb.Migrations(t, pool, "up")
+		testdb.MigrationsThrough(t, pool, "up", 4)
 		if err := database.CheckSchema(ctx, pool); err != nil {
 			t.Fatal(err)
 		}
