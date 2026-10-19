@@ -391,13 +391,17 @@ Review these [golang-migrate](https://github.com/golang-migrate/migrate) migrati
 - Migration 000003's `.down.sql` moves both tables back to `public` without deleting
   data. It leaves the `framework` schema and grants in place, including any unrelated
   objects. The older 000001/000002 down migrations **delete tables and data**.
-  Rollback requires separate approval and the matching application version.
+  These are historical rollback files for isolated tests, not the supported
+  production migration workflow. See the forward-only policy below.
 
 **Obtain approval before running migration commands against the actual database.**
 The following commands are provided for manual review and execution, not run by
 the application. Even `migrate version` may create its metadata table on first use.
-Use the golang-migrate CLI with its PostgreSQL driver installed, from the repository
-root. The PostgreSQL driver accepts `PG*` environment variables, so no password
+Use `scripts/migrate-framework.sh` with the golang-migrate CLI and its PostgreSQL
+driver installed, from the repository root. The wrapper permits only `version` and
+`up N` with an explicit positive step count; it rejects all other commands before
+starting golang-migrate. It fixes the core path and `public.schema_migrations`
+journal. The PostgreSQL driver accepts `PG*` environment variables, so no password
 appears in a command-line database URL:
 
 ```bash
@@ -414,26 +418,27 @@ export PGSSLROOTCERT="${DB_SSLROOTCERT:-}"
 export PGCONNECT_TIMEOUT=5
 
 # Only after approval, using the intended database and migration role:
-migrate -path database/migrations -database 'postgres://?search_path=public' goto 3
-migrate -path database/migrations -database 'postgres://?search_path=public' version
+# For a confirmed clean version-2 database (use up 3 for a fresh database):
+./scripts/migrate-framework.sh up 1
+./scripts/migrate-framework.sh version
 unset PGPASSWORD
 ```
 
 The explicit `search_path=public` keeps golang-migrate using the existing history
 in `public`, even if a role has a different default search path. This uses the
 [PostgreSQL driver's search_path option](https://github.com/golang-migrate/migrate/blob/master/database/postgres/README.md).
-On the existing version-2 database, `goto 3` applies only migration 000003. On a
-fresh database it applies migrations 000001–000003 in order. Expect version `3`
-without a dirty marker afterward. Do not run these commands against a version
-newer than 3; `goto` can also migrate down.
+On the existing version-2 database, `up 1` applies only migration 000003. On a
+fresh database, `up 3` applies migrations 000001–000003 in order. Expect version `3`
+without a dirty marker afterward. These are historical Phase 3 upgrade steps;
+check the current version and intended target before choosing the step count.
 
 For the version-2 upgrade, stop the backend during the approved maintenance window,
 back up the database, apply migration 000003, then start the updated backend.
 The old application expects `public` tables; the new application requires
 `framework` tables and fails startup until migration 000003 is applied. Table
-moves acquire locks, so coordinate with other database clients. A separately
-approved rollback from version 3 uses `down 1` and the old application; never run
-an unbounded `down` on a database whose data must be preserved.
+moves acquire locks, so coordinate with other database clients. Production rollback
+uses a schema-compatible application version or a reviewed forward corrective
+migration. Historical reverse migrations are exercised only in disposable tests.
 
 The migration role must own both existing tables (or have equivalent authority),
 be able to CREATE schemas in the database, and access `public.schema_migrations`.
@@ -563,11 +568,11 @@ From the repository root, for a database currently at version 3:
 
 ```bash
 # ONLY after approval and with the intended database and migration-owner credentials:
-migrate -path database/migrations -database 'postgres://?search_path=public' up 1
-migrate -path database/migrations -database 'postgres://?search_path=public' version
+./scripts/migrate-framework.sh up 1
+./scripts/migrate-framework.sh version
 ```
 
-Expect clean version `4`. For a fresh database, target `goto 4` to apply 000001–000004.
+Expect clean version `4`. For a fresh database, use `up 4` to apply 000001–000004.
 The existing schema-move instructions targeting version 3 are for Phase 3 only;
 RBAC requires the additional migration. Never use `force` to skip migrations.
 Enable RBAC in `vi .env` and restart the application after the migration.
@@ -580,12 +585,11 @@ audit/bootstrap objects it owns. DML-only runtime separation is not implemented.
 Database credentials are trusted administrative capabilities, not user credentials.
 A separate migration owner would be future hardening and requires explicit approval.
 
-Rollback from version 4 uses `down 1`, with approval and the backend stopped.
-**This drops all Phase 5 users, roles, account associations, audit records, and the
-bootstrap marker.** Export and protect these records first. It preserves sessions,
-OIDC flows, the framework schema, and public migration history. Run the prior
-application version or set `RBAC_ENABLED=false` afterward. Reapplying the migration
-creates an empty RBAC system and requires a new bootstrap; rollback is not a
+The historical version-4 down migration is not part of the supported production
+workflow. **It drops all Phase 5 users, roles, account associations, audit records,
+and the bootstrap marker.** It preserves sessions, OIDC flows, the framework schema,
+and public migration history. Reapplying that migration would create an empty
+RBAC system and require a new bootstrap; rollback is not a
 routine administrator reset mechanism. Never use unbounded `down` on a live DB.
 
 ### Secure one-time administrator bootstrap
@@ -1352,7 +1356,9 @@ supports `x-migrations-table`; `search_path=public` applies only to this operato
 connection so the driver places its selected journal in `public`. Application
 requests do not modify their search path. Migration SQL uses fully qualified table
 names. Never omit/substitute the journal option when migrating a module. Keep the
-core command pointed at `database/migrations` and `public.schema_migrations`.
+core operations on `scripts/migrate-framework.sh`, which fixes `database/migrations`
+and `public.schema_migrations`. This forward-only core policy does not change the
+separate, explicitly reviewed module rollback policy.
 **Even `migrate version` may create a journal on first use**; use the psql read-only
 status command for inspection before approval/installation.
 
@@ -1717,33 +1723,54 @@ setup described above; never put credentials in the URL. Inspect the current
 from the repository root:
 
 ```bash
-migrate -path database/migrations -database 'postgres://?search_path=public' version
+./scripts/migrate-framework.sh version
 # Only after approval and confirming clean version 4:
-migrate -path database/migrations -database 'postgres://?search_path=public' up 1
-migrate -path database/migrations -database 'postgres://?search_path=public' version
+./scripts/migrate-framework.sh up 1
+./scripts/migrate-framework.sh version
 # Expect clean version 5. Never run a blanket down or force to bypass an error.
 ```
 
-The `.down.sql` file is an intentional **non-destructive no-op**: it preserves
-configuration history, encrypted credentials and schema protections without
-deliberately failing and dirtying the journal. golang-migrate marks a migration
-dirty before executing its SQL; raising an exception cannot refuse rollback while
-leaving the journal clean. Omitting the down file also does not block rollback:
-golang-migrate treats a missing direction as an empty migration.
+**Supported core rollback policy: forward-only.** Use `scripts/migrate-framework.sh`
+for all normal core operations. It accepts only `version` and `up N` (an explicit
+positive number of steps). It rejects `down`, `goto` (even upward targets), `force`,
+`drop`, negative/zero counts and extra options **before invoking golang-migrate or
+connecting to PostgreSQL**. A refused rollback leaves both the installed schema
+and the clean version-5 journal unchanged. There is no destructive rollback switch,
+environment override or automatic journal repair. Review the SQL and step count
+before any approved `up N`; normal golang-migrate locking and dirty-state checks
+still apply. `version` delegates to golang-migrate and may create a journal on first
+use; use the read-only psql inspection pattern above if this is not acceptable.
 
-Production rollback must use a compatible application version while keeping the
-database at version 5, or an approved forward corrective migration. Do not run
-`down`, `goto` to an earlier version, or a blanket rollback in production. The
-no-op is not an enforcement barrier against subsequent, older down migrations.
+Production rollback means deploying an application version verified compatible
+with the installed schema, leaving the journal untouched, or applying an approved
+forward corrective migration that retains authentication history and credentials.
+An older binary that requires an older schema is not a supported rollback target.
+No migration runs automatically at application startup.
 
-If an operator inadvertently runs **exactly one down step from version 5**, the
-journal becomes **clean version 4**, but the version-5 schema and data remain.
-Stop: do not continue down or rerun `up 1` (the retained objects would conflict).
-An operator must verify the complete version-5 schema, constraints, triggers and
-history, then obtain approval to reconcile the journal to the actual installed
-version before further migrations. The same inspection is required for a dirty
-journal left by the previous refusal guard. Never automatically `force` a version
-or delete history to make migration replay succeed.
+Migration 000005's `.down.sql` is a **refusal guard**, not a no-op. A direct CLI
+rollback that bypasses the wrapper fails visibly and preserves all version-5
+objects/data. golang-migrate sets the target dirty before running SQL, so such an
+unsupported bypass leaves a **dirty version 4**, not a falsely clean version 4.
+Removing the down file is not a solution: golang-migrate treats a missing direction
+as an empty migration. The supported wrapper prevents that journal write entirely.
+The SQL guard cannot leave version 5 clean when invoked through raw golang-migrate.
+
+Recovery is a separate, explicitly approved operator procedure, not a wrapper
+command. If the old no-op from commit `36d48b5` already produced clean version 4
+with version-5 objects, or a raw rollback left a dirty target: stop migration and
+release automation, back up the database and encryption keys, and inspect the
+actual schema, constraints, triggers, configuration history and journal. Do not
+continue down or replay 000005 against existing objects. Only after confirming the
+complete version-5 schema is intact may an operator approve a one-time journal
+reconciliation to version 5 with the underlying tool. Partial schemas require a
+reviewed recovery plan; never guess a version or delete authentication history to
+make replay succeed. This update does not repair existing databases automatically.
+
+The wrapper is an operational control, not a database privilege boundary: the
+current schema owner can bypass it, edit SQL, run raw `force`/`drop`, or alter the
+journal manually. Deployment procedures must use the wrapper and serialize
+operator changes. Real migration failures or interrupted processes can still leave
+a dirty journal, requiring inspection rather than automatic repair.
 Migrations 000001–000004 and `public.schema_migrations` placement are unchanged.
 The current single `go_web_app` owner runs migrations; explicit grants also support
 non-owner test fixtures. Owner privileges can disable triggers or modify audit
@@ -1752,10 +1779,13 @@ a compromised application process holding both database access and keys.
 
 Run `go test -race -count=1 ./...` and `go vet ./...` from `backend`, then
 `git diff --check` from the root. PostgreSQL tests use only disposable clusters.
-The CLI test checks 4 → 5, empty initial state, and a single non-destructive down
-step with a clean version-4 journal, for both empty and populated configurations.
-It verifies retained history, encrypted credentials, decryption and immutability
-protections; it explicitly skips if the golang-migrate CLI is unavailable.
+The command-policy test proves unsupported arguments never invoke golang-migrate
+and accepted commands retain the fixed path/journal and propagate exit status.
+The CLI integration test checks 4 → 5 and refused rollback with the journal still
+clean at 5, for both empty and populated configurations. It verifies retained
+history, encrypted credentials, decryption, active tracking and immutability, and
+checks the visible dirty failure of an unsupported direct CLI rollback. CLI tests
+explicitly skip if golang-migrate or PostgreSQL test binaries are unavailable.
 Historical session rollback tests use a separate version-4 fixture so the
 forward-only version-5 history is never discarded.
 

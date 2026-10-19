@@ -16,13 +16,13 @@ import (
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/testdb"
 )
 
-func TestAuthConfigurationMigrationNonDestructiveDown(t *testing.T) {
+func TestAuthConfigurationMigrationRollbackPolicy(t *testing.T) {
 	for _, name := range []string{"empty", "populated"} {
-		t.Run(name, func(t *testing.T) { testAuthConfigurationDown(t, name == "populated") })
+		t.Run(name, func(t *testing.T) { testAuthConfigurationRollbackPolicy(t, name == "populated") })
 	}
 }
 
-func testAuthConfigurationDown(t *testing.T, populated bool) {
+func testAuthConfigurationRollbackPolicy(t *testing.T, populated bool) {
 	t.Helper()
 	cli, err := exec.LookPath("migrate")
 	if err != nil {
@@ -40,20 +40,28 @@ func testAuthConfigurationDown(t *testing.T, populated bool) {
 	query := u.Query()
 	query.Set("search_path", "public")
 	u.RawQuery = query.Encode()
-	run := func(args ...string) error {
+	script := frameworkMigrationScript(t)
+	runCommand := func(raw bool, args ...string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		command := exec.CommandContext(ctx, cli, append([]string{"-path", directory, "-database", u.String()}, args...)...)
+		command := exec.CommandContext(ctx, "bash", append([]string{script}, args...)...)
+		if raw {
+			command = exec.CommandContext(ctx, cli, append([]string{"-path", directory, "-database", u.String()}, args...)...)
+		}
 		for _, entry := range os.Environ() {
 			if !strings.HasPrefix(entry, "PG") {
 				command.Env = append(command.Env, entry)
 			}
 		}
+		// Only the disposable cluster: never inherit application DB settings.
+		command.Env = append(command.Env, "PGHOST="+u.Query().Get("host"),
+			"PGDATABASE=postgres", "PGUSER=postgres", "PGSSLMODE=disable")
 		// No credentials or connection strings in test output.
 		_, err := command.CombinedOutput()
 		return err
 	}
-	if err = run("goto", "4"); err != nil {
+	run := func(args ...string) error { return runCommand(false, args...) }
+	if err = run("up", "4"); err != nil {
 		t.Fatal("isolated version 4 migration failed")
 	}
 	ctx := context.Background()
@@ -124,20 +132,22 @@ func testAuthConfigurationDown(t *testing.T, populated bool) {
 		return data
 	}
 	before := snapshot()
-	if err = run("down", "1"); err != nil {
-		t.Fatal("non-destructive down migration failed")
-	}
-	if err = pool.QueryRow(ctx, `SELECT version,dirty,'public.schema_migrations'::regclass::oid FROM public.schema_migrations`).Scan(&version, &dirty, &after); err != nil {
-		t.Fatal(err)
-	}
-	if version != 4 || dirty || journal != after {
-		t.Fatal("down migration did not retain the journal with clean version 4")
-	}
-	if snapshot() != before {
-		t.Fatal("down migration changed configuration history, credentials or audit records")
+	for _, args := range [][]string{{"down", "1"}, {"down"}, {"goto", "4"}, {"force", "4"}, {"drop", "-f"}, {"up", "-1"}} {
+		if err = run(args...); err == nil {
+			t.Fatal("unsupported operation was accepted")
+		}
+		if err = pool.QueryRow(ctx, `SELECT version,dirty,'public.schema_migrations'::regclass::oid FROM public.schema_migrations`).Scan(&version, &dirty, &after); err != nil {
+			t.Fatal(err)
+		}
+		if version != 5 || dirty || journal != after {
+			t.Fatal("refused operation changed the clean version-5 journal")
+		}
+		if snapshot() != before {
+			t.Fatal("refused operation changed configuration history, credentials or audit records")
+		}
 	}
 	if err = run("version"); err != nil {
-		t.Fatal("clean migration version unavailable after down")
+		t.Fatal("clean migration version unavailable after refusal")
 	}
 	if populated {
 		f.run(t, func(ctx context.Context) {
@@ -162,5 +172,20 @@ func testAuthConfigurationDown(t *testing.T, populated bool) {
 		}
 		_, err := pool.Exec(ctx, `TRUNCATE framework.auth_config_revisions,framework.auth_config_lifecycle`)
 		assertConstraint(t, err)
+	}
+	// Unsupported direct CLI bypass must fail visibly, never claim a clean
+	// version 4 while keeping version-5 objects. It requires operator recovery.
+	before = snapshot()
+	if err = runCommand(true, "down", "1"); err == nil {
+		t.Fatal("direct rollback silently succeeded")
+	}
+	if err = pool.QueryRow(ctx, `SELECT version,dirty FROM public.schema_migrations`).Scan(&version, &dirty); err != nil {
+		t.Fatal(err)
+	}
+	if version != 4 || !dirty || snapshot() != before {
+		t.Fatal("direct rollback did not preserve history with a visible dirty failure")
+	}
+	if err = run("up", "1"); err == nil {
+		t.Fatal("dirty journal did not block subsequent migrations")
 	}
 }
