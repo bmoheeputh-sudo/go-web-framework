@@ -223,7 +223,11 @@ func TestRBACIntegration(t *testing.T) {
 		requireStatus(t, call(s, viewerIdentity, "PATCH", "/api/accounts/"+a.ID, `{"name":"Forbidden"}`, origin), 403)
 		requireStatus(t, call(s, userIdentity, "GET", "/api/accounts/"+c.ID, "", ""), 403)
 		requireStatus(t, call(s, userIdentity, "PATCH", "/api/accounts/"+c.ID, `{"name":"Forbidden"}`, origin), 403)
-		requireStatus(t, call(s, userIdentity, "GET", "/api/accounts/invalid", "", ""), 403)
+		invalid := call(s, userIdentity, "GET", "/api/accounts/invalid", "", "")
+		requireStatus(t, invalid, 400)
+		if strings.TrimSpace(invalid.Body.String()) != `{"error":"invalid_account_id"}` {
+			t.Fatal("unexpected invalid account response", invalid.Body.String())
+		}
 		requireStatus(t, call(s, adminIdentity, "GET", "/api/accounts/"+a.ID, "", ""), 403)
 		requireStatus(t, call(s, outsiderIdentity, "PUT", "/api/admin/users/"+outsider.ID+"/accounts", `{"account_ids":["`+a.ID+`"]}`, origin), 403)
 		// Direct service writes repeat authorization even if a handler check was bypassed.

@@ -66,7 +66,7 @@ func (s *Store) Require(permission, accountParameter string, next http.Handler) 
 		if accountParameter != "" {
 			accountID = r.PathValue(accountParameter)
 			if !validID(accountID) {
-				failure(w, ErrDenied)
+				respond(w, http.StatusBadRequest, map[string]string{"error": "invalid_account_id"})
 				return
 			}
 		}

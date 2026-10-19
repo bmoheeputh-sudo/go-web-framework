@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/access"
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/apps/example"
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/auth"
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/module"
@@ -196,5 +197,49 @@ func TestDisabledCapabilitiesAndStartupRequirements(t *testing.T) {
 	}
 	if _, err = registry.Handler(nil, nil, ""); err == nil {
 		t.Fatal("enabled without security dependencies")
+	}
+}
+
+func TestCapabilitiesDirectResponse(t *testing.T) {
+	for _, enabled := range []string{"", "second,example"} {
+		for _, authenticated := range []bool{false, true} {
+			name := enabled + "/anonymous"
+			provider := fixedAuth{err: auth.ErrUnauthenticated}
+			if authenticated {
+				name = enabled + "/authenticated"
+				provider = fixedAuth{identity: verified("test")}
+			}
+			t.Run(name, func(t *testing.T) {
+				registry, err := New([]module.Module{example.Module{}, candidate("second", nil), candidate("disabled", nil)}, enabled)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Capabilities need no database access. A nil pool makes accidental
+				// database use fail this test rather than contact a real database.
+				handler, err := registry.Handler(provider, access.New(nil), "https://app.example.test")
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Exercise the exact and subtree mounts used by the application.
+				outer := http.NewServeMux()
+				outer.Handle("/api/modules", handler)
+				outer.Handle("/api/modules/", handler)
+				w := httptest.NewRecorder()
+				outer.ServeHTTP(w, httptest.NewRequest("GET", "/api/modules", nil))
+				want, body := 401, `{"error":"unauthenticated"}`
+				if authenticated {
+					want, body = 200, `{"modules":[]}`
+					if enabled != "" {
+						body = `{"modules":["example","second"]}`
+					}
+				}
+				if w.Code != want || w.Header().Get("Location") != "" || strings.TrimSpace(w.Body.String()) != body {
+					t.Fatalf("direct response: status=%d location=%q body=%s", w.Code, w.Header().Get("Location"), w.Body.String())
+				}
+				if w.Header().Get("Content-Type") != "application/json" || w.Header().Get("Cache-Control") != "no-store" {
+					t.Fatal("missing JSON/no-store headers")
+				}
+			})
+		}
 	}
 }
