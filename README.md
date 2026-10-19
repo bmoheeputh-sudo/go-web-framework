@@ -1572,13 +1572,14 @@ the application using the existing instructions and visit `/settings` with an
 already authorized administrator. Saving/registering against the actual development
 database is a live mutation and requires your explicit approval.
 
-## Authentication configuration storage and administration (Phases 9.2.1–9.2.2)
+## Authentication configuration storage and administration (Phases 9.2.1–9.2.3)
 
 This is **management-only configuration storage**, not a new authentication source.
 The Phase 9.2.2 admin APIs use the Phase 9.2.1 repository and encryption. Runtime
 `AUTH_PROVIDER`, provider startup and sessions continue using environment settings.
-There is no admin UI, activation method, provider switching, external OIDC handshake,
-polling or LISTEN/NOTIFY. Migration 000005 seeds no configuration or active state.
+Phase 9.2.3 adds a management UI under Settings → Authentication. There is no
+activation method, provider switching, external OIDC handshake, polling or
+LISTEN/NOTIFY. Migration 000005 seeds no configuration or active state.
 The existing admin, RBAC, account and module APIs retain their behavior.
 
 ### Versioned storage and scope
@@ -1801,7 +1802,54 @@ are never included. Authorization is rechecked inside the shared advisory-locked
 
 The current policy allows the same authorized administrator to create, validate
 and approve a revision. Separate approvers, provider connection tests, activation,
-UI controls and runtime keyring/rotation management remain future reviewed phases.
+and runtime keyring/rotation management remain future reviewed phases.
+
+### Authentication Settings UI (Phase 9.2.3)
+
+Open `/settings` as an active user with `admin.manage`, then select
+**Authentication**. **Roles & Permissions** remains the default tab and retains
+unsaved edits while switching tabs. The Authentication panel loads on demand.
+It supports all twelve languages, Arabic RTL and the existing appearance modes.
+
+- Runtime provider/source are displayed separately from the latest and active
+  database revisions. Drafts and approvals never alter environment-based login.
+- Create an immutable OIDC, Google IAP or Local DEV draft. OIDC requires a newly
+  entered secret every time; there is no copy-secret option. The password field
+  offers an explicit visibility toggle. Secrets are not written to browser
+  storage or the query cache and are cleared on submission, provider changes,
+  and leaving the Authentication tab. JavaScript cannot guarantee memory erasure.
+- Browse history in pages of twenty and open a revision to fetch its metadata.
+  Only a secret-present indicator is displayed for stored credentials.
+- **Validate settings** performs offline structural validation only. **Approve
+  revision** requires confirmation and records approval without activation.
+  Writes include the server version/generation. A 409 refreshes the current
+  status/history/selected revision and shows a warning; writes are never retried
+  automatically. Review the refreshed state and re-enter a secret before retrying
+  OIDC draft creation.
+- Errors use localized inline messages and the existing global Snackbar. Raw
+  backend error text and cryptographic details are never rendered.
+
+Development-only controls require trusted evidence: a stored revision's
+`environment`, or the running `local_dev` provider when history is empty. The
+current status contract does not report the environment separately. With OIDC
+or IAP and no history, the UI conservatively disables Local DEV and HTTP callback
+allowance. A future API capability can remove this limitation without trusting
+browser-provided environment flags. The backend remains the authorization and
+configuration-validation authority.
+
+For local review, start the backend with its existing environment configuration
+(`cd backend && go run .`) and the frontend (`cd frontend && npm run dev`), then
+visit `http://127.0.0.1:5173/settings`. Use the existing HTTPS workflow if configured.
+The management API prerequisites above must already be installed/configured; the
+UI never runs migrations. Viewing status/history is read-only. Creating,
+validating or approving a draft writes management records and audit events to
+the configured database, so use a disposable environment for interactive tests.
+
+Test Connection is reserved for Phase 9.2.4; activation and rollback for Phase
+9.2.5. This UI has no controls or requests for those unimplemented operations.
+Frontend tests mock all HTTP requests; they do not contact an identity provider
+or the live database. Automated responsive/RTL tests use a DOM environment;
+visual review in a real browser is still advisable.
 
 ### Manual migration and regression checks
 
