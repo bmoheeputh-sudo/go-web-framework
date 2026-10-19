@@ -36,5 +36,7 @@
   "statusActive": "Aktif",
   "statusInactive": "Tidak aktif",
   "none": "Tiada",
-  "modulesUnavailable": "Modul aplikasi tidak dapat dimuatkan. Ciri utama masih tersedia."
+  "modulesUnavailable": "Modul aplikasi tidak dapat dimuatkan. Ciri utama masih tersedia.",
+  "navSettings": "Tetapan",
+  "cancel": "Batal"
 }

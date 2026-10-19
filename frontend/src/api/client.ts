@@ -30,3 +30,10 @@ export async function api<T>(path: string, method = 'GET', body?: unknown, signa
   if (!response.ok) throw new APIError(response.status)
   return response.status === 204 ? undefined as T : response.json() as Promise<T>
 }
+
+export type CatalogPermission = {
+  name: string; description: string; module: string; enabled: boolean
+  registered: boolean; known: boolean; roles: string[]
+}
+export type PermissionCatalog = { permissions: CatalogPermission[]; roles: string[]; revision: string }
+export type PermissionChange = { permission: string; role: string; assigned: boolean }

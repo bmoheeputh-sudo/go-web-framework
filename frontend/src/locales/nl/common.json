@@ -36,5 +36,7 @@
   "statusActive": "Actief",
   "statusInactive": "Inactief",
   "none": "Geen",
-  "modulesUnavailable": "Applicatiemodules konden niet worden geladen. De kernfuncties blijven beschikbaar."
+  "modulesUnavailable": "Applicatiemodules konden niet worden geladen. De kernfuncties blijven beschikbaar.",
+  "navSettings": "Instellingen",
+  "cancel": "Annuleren"
 }

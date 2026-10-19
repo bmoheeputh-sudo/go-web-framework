@@ -36,5 +36,7 @@
   "statusActive": "Activo",
   "statusInactive": "Inactivo",
   "none": "Ninguno",
-  "modulesUnavailable": "No se pudieron cargar los módulos de la aplicación. Las funciones principales siguen disponibles."
+  "modulesUnavailable": "No se pudieron cargar los módulos de la aplicación. Las funciones principales siguen disponibles.",
+  "navSettings": "Configuración",
+  "cancel": "Cancelar"
 }

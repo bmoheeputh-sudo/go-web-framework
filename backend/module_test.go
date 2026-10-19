@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -95,6 +96,75 @@ func TestModuleCompositionPreservesExistingRoutes(t *testing.T) {
 		handler.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
 		if w.Code != expected {
 			t.Fatalf("%s: got %d want %d", path, w.Code, expected)
+		}
+	}
+}
+
+func TestSettingsUsesCompiledModuleCatalog(t *testing.T) {
+	pool, _ := testdb.New(t)
+	testdb.Migrations(t, pool, "up")
+	ctx := context.Background()
+	store := access.New(pool)
+	identity := auth.Identity{Issuer: "https://issuer.test", Subject: "settings-admin", Provider: auth.OIDC}
+	if _, err := store.Resolve(ctx, identity); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Bootstrap(ctx, identity.Issuer, identity.Subject, "development"); err != nil {
+		t.Fatal(err)
+	}
+	provider := authenticatorFunc(func(*http.Request) (auth.Identity, error) { return identity, nil })
+	for _, enabled := range []string{"", "example"} {
+		registry, err := modules.New([]module.Module{example.Module{}}, enabled)
+		if err != nil {
+			t.Fatal(err)
+		}
+		handler, err := newHandlerWithModules(provider, store, "https://app.example.test", registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest("GET", "/api/admin/permissions", nil))
+		if response.Code != 200 {
+			t.Fatal(response.Code, response.Body.String())
+		}
+		var catalog access.PermissionCatalog
+		if err = json.Unmarshal(response.Body.Bytes(), &catalog); err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, permission := range catalog.Permissions {
+			if permission.Name == "example.read" {
+				found = true
+				if permission.Enabled != (enabled != "") || permission.Registered || len(permission.Roles) != 0 {
+					t.Fatal(permission)
+				}
+			}
+		}
+		if !found {
+			t.Fatal("compiled permission not exposed")
+		}
+		request := httptest.NewRequest("POST", "/api/admin/permissions", strings.NewReader(`{"permission":"example.read"}`))
+		request.Header.Set("Origin", "https://app.example.test")
+		request.Header.Set("Content-Type", "application/json")
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		expected := 400
+		if enabled != "" {
+			expected = 201
+		}
+		if response.Code != expected {
+			t.Fatal(response.Code, response.Body.String())
+		}
+		if expected == 201 {
+			var result map[string]string
+			if err = json.Unmarshal(response.Body.Bytes(), &result); err != nil || result["permission"] != "example.read" {
+				t.Fatal("registration must return JSON", err)
+			}
+			response = httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest("GET", "/api/modules/example/info", nil))
+			if response.Code != 403 {
+				t.Fatal("registration granted access to Admin", response.Code)
+			}
 		}
 	}
 }

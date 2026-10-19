@@ -3,9 +3,10 @@ import DashboardRounded from '@mui/icons-material/DashboardRounded'
 import PeopleAltRounded from '@mui/icons-material/PeopleAltRounded'
 import BusinessRounded from '@mui/icons-material/BusinessRounded'
 import ShieldRounded from '@mui/icons-material/ShieldRounded'
+import SettingsRounded from '@mui/icons-material/SettingsRounded'
 import HistoryRounded from '@mui/icons-material/HistoryRounded'
 
-import { DashboardPage, UsersPage, AccountsPage, RolesPage, AuditLogsPage } from '../pages/lazyPages'
+import { DashboardPage, UsersPage, AccountsPage, RolesPage, AuditLogsPage, SettingsPage } from '../pages/lazyPages'
 
 export interface NavItem {
   path: `/${string}`
@@ -23,6 +24,7 @@ export const defaultNavigation: readonly NavItem[] = [
   { path: '/users', labelKey: 'common:navUsers', icon: <PeopleAltRounded />, element: <UsersPage />, requiredPermission: 'admin.manage' },
   { path: '/accounts', labelKey: 'common:navAccounts', icon: <BusinessRounded />, element: <AccountsPage />, requiredPermission: 'admin.manage' },
   { path: '/roles', labelKey: 'common:navRoles', icon: <ShieldRounded />, element: <RolesPage />, requiredPermission: 'admin.manage' },
+  { path: '/settings', labelKey: 'common:navSettings', icon: <SettingsRounded />, element: <SettingsPage />, requiredPermission: 'admin.manage' },
   { path: '/audit', labelKey: 'common:navAudit', icon: <HistoryRounded />, element: <AuditLogsPage />, requiredPermission: 'admin.manage' },
 ]
 

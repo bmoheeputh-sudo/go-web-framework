@@ -209,6 +209,13 @@ func newHandlerWithAccess(provider auth.Authenticator, authorization *access.Sto
 
 // The core composition root owns both namespaces; modules never receive this mux.
 func newHandlerWithModules(provider auth.Authenticator, authorization *access.Store, origin string, registry *modules.Registry) (http.Handler, error) {
+	if authorization != nil {
+		var err error
+		authorization, err = authorization.WithPermissionDefinitions(registry.PermissionDefinitions())
+		if err != nil {
+			return nil, err
+		}
+	}
 	moduleHandler, err := registry.Handler(provider, authorization, origin)
 	if err != nil {
 		return nil, err

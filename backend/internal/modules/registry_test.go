@@ -298,3 +298,28 @@ func TestMutationRegistration(t *testing.T) {
 		}
 	})
 }
+
+func TestPermissionDefinitions(t *testing.T) {
+	for _, enabled := range []string{"", "example"} {
+		manifest := module.Manifest{ID: "example", Permissions: []module.Permission{"example.read"}, PermissionDescriptions: map[module.Permission]string{"example.read": "Read example"}}
+		r, err := New([]module.Module{testModule{manifest: manifest}}, enabled)
+		if err != nil {
+			t.Fatal(err)
+		}
+		manifest.PermissionDescriptions["example.read"] = "changed"
+		definitions := r.PermissionDefinitions()
+		if len(definitions) != 1 || definitions[0].Enabled != (enabled != "") || definitions[0].Description != "Read example" {
+			t.Fatal(definitions)
+		}
+		definitions[0].Enabled = !definitions[0].Enabled
+		if r.PermissionDefinitions()[0].Enabled != (enabled != "") {
+			t.Fatal("mutable permission definitions")
+		}
+	}
+	for _, descriptions := range []map[module.Permission]string{{"foreign.read": "bad"}, {"example.read": "line\nbreak"}, {"example.read": strings.Repeat("a", 201)}} {
+		_, err := New([]module.Module{testModule{manifest: module.Manifest{ID: "example", Permissions: []module.Permission{"example.read"}, PermissionDescriptions: descriptions}}}, "")
+		if err == nil {
+			t.Fatal("invalid metadata accepted for disabled module")
+		}
+	}
+}

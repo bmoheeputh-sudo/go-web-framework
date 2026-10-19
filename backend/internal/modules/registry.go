@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/access"
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/auth"
@@ -35,6 +36,7 @@ type Registry struct {
 	permissions []string
 	routes      []route
 	migrations  []MigrationPlan
+	definitions []access.PermissionDefinition
 }
 
 // New accepts only a literal comma-separated allowlist. Empty means no modules.
@@ -63,6 +65,14 @@ func New(catalog []module.Module, enabled string) (*Registry, error) {
 			}
 			permissions[permission] = true
 		}
+		descriptions := make(map[module.Permission]string, len(manifest.PermissionDescriptions))
+		for permission, description := range manifest.PermissionDescriptions {
+			if !permissions[permission] || len([]rune(description)) > 200 || strings.TrimSpace(description) != description || strings.ContainsFunc(description, unicode.IsControl) {
+				return nil, errors.New("invalid permission description")
+			}
+			descriptions[permission] = description
+		}
+		manifest.PermissionDescriptions = descriptions
 		if manifest.Migrations != nil {
 			if _, err := migrationPlan(manifest.ID, *manifest.Migrations); err != nil {
 				return nil, err
@@ -74,17 +84,24 @@ func New(catalog []module.Module, enabled string) (*Registry, error) {
 		known[manifest.ID], manifests[manifest.ID] = m, manifest
 	}
 	registry := &Registry{ids: []string{}}
-	if enabled == "" {
-		return registry, nil
-	}
+
 	selected := make(map[string]bool)
-	for _, id := range strings.Split(enabled, ",") {
-		if !validID(id) || known[id] == nil || selected[id] {
-			return nil, errors.New("ENABLED_MODULES must contain unique, known lowercase IDs separated by commas, without whitespace")
+	if enabled != "" {
+		for _, id := range strings.Split(enabled, ",") {
+			if !validID(id) || known[id] == nil || selected[id] {
+				return nil, errors.New("ENABLED_MODULES must contain unique, known lowercase IDs separated by commas, without whitespace")
+			}
+			selected[id] = true
+			registry.ids = append(registry.ids, id)
 		}
-		selected[id] = true
-		registry.ids = append(registry.ids, id)
 	}
+
+	for id, manifest := range manifests {
+		for _, permission := range manifest.Permissions {
+			registry.definitions = append(registry.definitions, access.PermissionDefinition{Name: string(permission), Description: manifest.PermissionDescriptions[permission], Module: id, Enabled: selected[id]})
+		}
+	}
+	slices.SortFunc(registry.definitions, func(a, b access.PermissionDefinition) int { return strings.Compare(a.Name, b.Name) })
 	slices.Sort(registry.ids)
 	validator := http.NewServeMux()
 	for _, id := range registry.ids {
@@ -109,6 +126,12 @@ func New(catalog []module.Module, enabled string) (*Registry, error) {
 }
 
 func (r *Registry) Enabled() []string { return append([]string{}, r.ids...) }
+
+// PermissionDefinitions exposes both enabled and disabled compiled declarations.
+// It is used by the administrator catalog, never by authorization checks.
+func (r *Registry) PermissionDefinitions() []access.PermissionDefinition {
+	return slices.Clone(r.definitions)
+}
 
 type registrar struct {
 	id        string

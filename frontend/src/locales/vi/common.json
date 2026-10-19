@@ -36,5 +36,7 @@
   "statusActive": "Hoạt động",
   "statusInactive": "Không hoạt động",
   "none": "Không có",
-  "modulesUnavailable": "Không thể tải các mô-đun ứng dụng. Các chức năng cốt lõi vẫn khả dụng."
+  "modulesUnavailable": "Không thể tải các mô-đun ứng dụng. Các chức năng cốt lõi vẫn khả dụng.",
+  "navSettings": "Cài đặt",
+  "cancel": "Hủy"
 }

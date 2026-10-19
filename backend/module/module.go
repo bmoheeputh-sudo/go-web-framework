@@ -10,7 +10,9 @@ type Permission string
 type Manifest struct {
 	ID          string
 	Permissions []Permission
-	Migrations  *MigrationSpec
+	// Optional operator-facing descriptions, keyed only by declared permissions.
+	PermissionDescriptions map[Permission]string
+	Migrations             *MigrationSpec
 }
 
 // MigrationSpec is optional. Schema and directory must follow the module ID;

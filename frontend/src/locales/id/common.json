@@ -36,5 +36,7 @@
   "statusActive": "Aktif",
   "statusInactive": "Tidak aktif",
   "none": "Tidak ada",
-  "modulesUnavailable": "Modul aplikasi tidak dapat dimuat. Fitur utama tetap tersedia."
+  "modulesUnavailable": "Modul aplikasi tidak dapat dimuat. Fitur utama tetap tersedia.",
+  "navSettings": "Pengaturan",
+  "cancel": "Batal"
 }

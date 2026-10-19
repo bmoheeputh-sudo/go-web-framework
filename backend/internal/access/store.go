@@ -59,8 +59,9 @@ type Audit struct {
 	Details   json.RawMessage `json:"details"`
 }
 type Store struct {
-	pool              *pgxpool.Pool
-	modulePermissions map[string]bool // immutable, copied during registry construction
+	pool                  *pgxpool.Pool
+	permissionDefinitions map[string]PermissionDefinition
+	modulePermissions     map[string]bool // immutable, copied during registry construction
 }
 
 func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
@@ -220,7 +221,7 @@ func audit(ctx context.Context, tx pgx.Tx, actor, action, target string, details
 }
 func lastAdminGuard(ctx context.Context, tx pgx.Tx) error {
 	var exists bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM framework.users u JOIN framework.user_roles r ON r.user_id=u.id WHERE u.active AND r.role='Admin')`).Scan(&exists); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM framework.users u JOIN framework.user_roles r ON r.user_id=u.id JOIN framework.role_permissions rp ON rp.role=r.role WHERE u.active AND r.role='Admin' AND rp.permission='admin.manage')`).Scan(&exists); err != nil {
 		return ErrUnavailable
 	}
 	if !exists {

@@ -36,5 +36,7 @@
   "statusActive": "نشط",
   "statusInactive": "غير نشط",
   "none": "لا يوجد",
-  "modulesUnavailable": "تعذّر تحميل وحدات التطبيق. تظل الميزات الأساسية متاحة."
+  "modulesUnavailable": "تعذّر تحميل وحدات التطبيق. تظل الميزات الأساسية متاحة.",
+  "navSettings": "الإعدادات",
+  "cancel": "إلغاء"
 }

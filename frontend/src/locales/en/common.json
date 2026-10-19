@@ -36,5 +36,7 @@
   "statusActive": "Active",
   "statusInactive": "Inactive",
   "none": "None",
-  "modulesUnavailable": "Application modules could not be loaded. Core features remain available."
+  "modulesUnavailable": "Application modules could not be loaded. Core features remain available.",
+  "navSettings": "Settings",
+  "cancel": "Cancel"
 }

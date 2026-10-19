@@ -73,11 +73,11 @@ export function formatDate(value: string, language: string) {
 // mappings affect display only; API requests always retain the original codes.
 export const roleKeys: Record<string, string> = { Admin: 'roleAdmin', User: 'roleUser', Viewer: 'roleViewer' }
 export const permissionKeys: Record<string, string> = {
-  'admin.manage': 'permissionAdmin', 'accounts.read': 'permissionRead', 'accounts.write': 'permissionWrite',
+  'admin.manage': 'permissionAdmin', 'accounts.read': 'permissionRead', 'accounts.write': 'permissionWrite', 'example.read': 'permissionExampleRead',
 }
 export const actionKeys: Record<string, string> = {
   'admin.bootstrap': 'actionBootstrap', 'user.roles': 'actionRoles', 'user.active': 'actionActive',
-  'user.accounts': 'actionAssociations', 'account.save': 'actionSave', 'account.rename': 'actionRename',
+  'user.accounts': 'actionAssociations', 'account.save': 'actionSave', 'account.rename': 'actionRename', 'permission.register': 'actionPermissionRegistered', 'role.permission': 'actionPermissionChanged',
 }
 
 // Module namespaces are isolated from the three core namespaces. Only locally

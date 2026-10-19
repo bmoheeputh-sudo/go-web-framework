@@ -162,6 +162,43 @@ func Register(mux *http.ServeMux, provider auth.Authenticator, s *Store, origin 
 		}
 		mux.Handle(pattern, auth.Require(provider, ProtectWrites(origin, handler)))
 	}
+	route("GET /api/admin/permissions", AdminManage, "", func(w http.ResponseWriter, r *http.Request) {
+		result, err := s.PermissionCatalog(r.Context())
+		if err != nil {
+			failure(w, err)
+			return
+		}
+		respond(w, 200, result)
+	})
+	route("POST /api/admin/permissions", AdminManage, "", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Permission string `json:"permission"`
+		}
+		if !decode(w, r, &body) {
+			return
+		}
+		u, _ := Principal(r.Context())
+		if err := s.RegisterPermission(r.Context(), u.ID, body.Permission); err != nil {
+			failure(w, err)
+			return
+		}
+		respond(w, 201, map[string]string{"permission": body.Permission})
+	})
+	route("PUT /api/admin/role-permissions", AdminManage, "", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Revision string             `json:"revision"`
+			Changes  []PermissionChange `json:"changes"`
+		}
+		if !decode(w, r, &body) {
+			return
+		}
+		u, _ := Principal(r.Context())
+		if err := s.SetPermissions(r.Context(), u.ID, body.Revision, body.Changes); err != nil {
+			failure(w, err)
+			return
+		}
+		w.WriteHeader(204)
+	})
 	route("GET /api/access/me", "self", "", func(w http.ResponseWriter, r *http.Request) { u, _ := Principal(r.Context()); respond(w, 200, u) })
 	route("GET /api/admin/users", AdminManage, "", func(w http.ResponseWriter, r *http.Request) {
 		n, err := offset(r)

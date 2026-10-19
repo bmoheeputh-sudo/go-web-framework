@@ -26,5 +26,7 @@ func (s *Store) WithModulePermissions(permissions []string) (*Store, error) {
 		}
 		catalog[permission] = true
 	}
-	return &Store{pool: s.pool, modulePermissions: catalog}, nil
+	copied := *s
+	copied.modulePermissions = catalog
+	return &copied, nil
 }

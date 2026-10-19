@@ -288,7 +288,7 @@ describe('floating and bottom sidebar toggles', () => {
     }))))
     await screen.findByRole('link', { name: 'Users' })
     const nav = screen.getByRole('navigation')
-    expect(within(nav).getAllByRole('link')).toHaveLength(45)
+    expect(within(nav).getAllByRole('link')).toHaveLength(defaultNavigation.length + 40)
     const bottom = document.getElementById('sidebar-toggle-bottom')!
     const footer = bottom.parentElement!
     const paper = bottom.closest('.MuiDrawer-paper')!

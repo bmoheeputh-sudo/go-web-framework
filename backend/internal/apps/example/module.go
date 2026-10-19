@@ -13,7 +13,7 @@ const Read module.Permission = "example.read"
 type Module struct{}
 
 func (Module) Manifest() module.Manifest {
-	return module.Manifest{ID: "example", Permissions: []module.Permission{Read}, Migrations: &module.MigrationSpec{
+	return module.Manifest{ID: "example", Permissions: []module.Permission{Read}, PermissionDescriptions: map[module.Permission]string{Read: "Read the example module"}, Migrations: &module.MigrationSpec{
 		Schema: "example", Directory: "database/modules/example/migrations", RequiredVersion: 1,
 	}}
 }

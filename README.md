@@ -1467,6 +1467,105 @@ The current single database user, `go_web_app`, owns schemas and runs migrations
 Application RBAC and transaction boundaries remain enforced in Go, but database
 DML-only/owner privilege separation is a future design, **not implemented security**.
 
+## Framework Settings: Roles & Permissions (Phase 9.1)
+
+Open **Settings → Roles & Permissions** as a user with `admin.manage`. The
+existing Roles page remains a read-only overview. Settings sections are declared
+in `frontend/src/pages/SettingsPage.tsx`; future authentication, module and
+security sections can be added there when implemented. There are no placeholder
+controls that pretend to change those settings.
+
+The matrix uses actual PostgreSQL assignments for Admin, User and Viewer. Search
+by permission or description and filter/group by framework or module. Missing
+SQL definitions, disabled modules and database permissions absent from the
+compiled catalog are marked explicitly. Registration is a separate, confirmed
+administrator action for enabled module declarations only; it creates no role
+grants. Existing `example.read` registrations/grants are preserved. Core
+permissions cannot be recreated through this interface; a missing core definition
+requires operator investigation.
+
+Checkbox edits remain local until **Save permissions**, followed by confirmation.
+**Cancel** discards them. Language changes preserve the draft. All 12 languages,
+Arabic RTL, theme modes and existing Snackbar notifications are reused. Leaving
+the page discards an unsaved draft. Future module descriptions are developer-owned
+metadata: the existing core/example descriptions are localized; additional modules
+must supply frontend translation keys to localize their descriptions.
+
+New authenticated, `admin.manage`-protected endpoints:
+
+| Endpoint | Behavior |
+| --- | --- |
+| `GET /api/admin/permissions` | Combined compiled/database catalog, role columns and opaque revision token |
+| `POST /api/admin/permissions` | Register `{ "permission": "example.read" }`; returns HTTP 201 JSON confirmation, no grant |
+| `PUT /api/admin/role-permissions` | Atomically apply up to 100 changed cells with the previously read revision |
+
+Example update body (use the revision from the latest catalog response):
+
+```json
+{
+  "revision": "<opaque revision from GET>",
+  "changes": [
+    { "role": "User", "permission": "example.read", "assigned": true }
+  ]
+}
+```
+
+`GET /api/admin/roles` remains unchanged. Writes require the existing exact Origin
+and JSON protections. Unknown fields (including actor IDs), undeclared permissions,
+invalid roles, duplicate cells and no-op cells are rejected. Disabled compiled
+permissions may be revoked but cannot be newly registered or granted. Permissions
+belonging to modules absent from the build are visible but read-only.
+
+**Lockout policy:** `admin.manage` assignments cannot be changed by this API,
+including grants to User or Viewer. The existing Admin assignment is preserved;
+the last-active-Admin guard now also verifies that Admin holds `admin.manage`.
+This phase does not implement administrative delegation or a new recovery bypass.
+Any pre-existing incorrect critical grants require an explicitly approved operator
+repair; startup does not silently rewrite them.
+
+Every write rechecks the active administrator under the existing shared advisory
+transaction lock. Assignment changes and fixed-field audit records commit together;
+an audit failure rolls back the whole batch. Audit actions are `role.permission`
+and `permission.register`; records contain the verified actor, permission, role,
+before/after booleans and the existing database timestamp. Registration uses an
+empty role because it changes catalog membership, not role assignment. No request
+body or identity supplied by the browser is copied into audit details.
+
+The revision covers catalog state and assignments plus the latest permission-audit
+sequence. Concurrent edits, including an API edit-and-revert, reject stale revisions
+with HTTP 409 instead of overwriting changes. On conflict, cancel the preserved
+local draft, refresh, review the current assignments and retry deliberately.
+Permission changes take effect at backend authorization checks immediately; other
+open browser sessions may need **Refresh access** or reload to update navigation.
+
+No new schema migration is required, and migrations 000001–000004 are unchanged.
+The current single `go_web_app` database user owns schemas/tables and runs migrations;
+this is not database least-privilege separation. This phase needs INSERT on
+`framework.permissions` and INSERT/DELETE on `framework.role_permissions`, which
+ownership already permits. A deployment with different ownership needs separately
+approved grants; the application never grants privileges at startup. Direct owner
+SQL can bypass these application controls and must be handled as a trusted operator
+action. Conflict handling assumes application writes use the shared protocol.
+
+Local checks use the existing commands:
+
+```bash
+cd backend
+go test -race -count=1 ./...
+go vet ./...
+cd ../frontend
+npm test
+npm run build
+npm run lint
+cd ..
+git diff --check
+```
+
+Integration tests use disposable PostgreSQL clusters. To try the UI locally, start
+the application using the existing instructions and visit `/settings` with an
+already authorized administrator. Saving/registering against the actual development
+database is a live mutation and requires your explicit approval.
+
 ## Backup to GitHub and Google Drive
 
 Run from the repository on the `main` branch:
