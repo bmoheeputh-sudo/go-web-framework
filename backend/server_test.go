@@ -248,3 +248,52 @@ func TestLocalDevRemoteRequestDeniedButHealthPublic(t *testing.T) {
 		}
 	}
 }
+
+func TestRBACConfigurationAndDisabledRoutes(t *testing.T) {
+	for _, change := range []func(map[string]string){
+		func(v map[string]string) { v["RBAC_ENABLED"] = "invalid" },
+		func(v map[string]string) { v["RBAC_ENABLED"] = "true" },
+		func(v map[string]string) {
+			v["RBAC_ENABLED"] = "true"
+			v["APP_ORIGIN"] = "http://remote.example.invalid"
+		},
+		func(v map[string]string) {
+			v["RBAC_ENABLED"] = "true"
+			v["APP_ORIGIN"] = "http://127.0.0.1:5173"
+			v["DB_PORT"] = "invalid"
+		},
+		func(v map[string]string) {
+			v["RBAC_ENABLED"] = "true"
+			v["APP_ORIGIN"] = "https://app.example.invalid"
+			v["AUTH_PROVIDER"] = ""
+		},
+		func(v map[string]string) {
+			v["RBAC_ENABLED"] = "true"
+			v["APP_ORIGIN"] = "https://app.example.invalid"
+			v["AUTH_PROVIDER"] = "google_iap"
+			v["IAP_AUDIENCE"] = "/projects/123/apps/example"
+			v["DB_PORT"] = "invalid"
+		},
+	} {
+		values := developmentEnvironment()
+		change(values)
+		if server, err := newServer(envReader(values)); err == nil {
+			server.closeResources()
+			t.Fatal("invalid RBAC startup accepted")
+		}
+	}
+	server, err := newServer(envReader(developmentEnvironment()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.closeResources()
+	for path, status := range map[string]int{"/api/health": 200, "/api/auth/me": 200, "/api/access/me": 503, "/api/admin/users": 503, "/api/accounts": 503} {
+		r := httptest.NewRequest("GET", path, nil)
+		r.RemoteAddr = "127.0.0.1:1234"
+		w := httptest.NewRecorder()
+		server.Handler.ServeHTTP(w, r)
+		if w.Code != status {
+			t.Fatalf("%s: got %d want %d", path, w.Code, status)
+		}
+	}
+}

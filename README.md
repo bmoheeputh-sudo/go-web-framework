@@ -7,7 +7,7 @@ Reusable web application framework.
 - Frontend: React + Material UI
 - Database: PostgreSQL
 - Authentication: generic OIDC, Google IAP, and Local DEV
-- Authorization: RBAC
+- Authorization: PostgreSQL RBAC with explicit account associations
 - Deployment: Manual
 
 ## Development
@@ -18,7 +18,8 @@ Reusable web application framework.
 
 Requirements: Go matching `backend/go.mod`, and Node/npm compatible with the
 frontend lockfile (the current setup uses Node 20.20 and npm 11). No external
-identity credentials or PostgreSQL database are needed for Local DEV.
+identity credentials or PostgreSQL database are needed for Local DEV authentication.
+Enabling the optional RBAC/Admin Portal requires PostgreSQL with every provider.
 
 In the repository root, create your local backend configuration without replacing
 an existing `.env`:
@@ -106,7 +107,8 @@ Set `AUTH_PROVIDER=google_iap` and explicitly set `IAP_AUDIENCE` to the **Signed
 Header JWT Audience** of the Google IAP resource protecting this deployment.
 Missing or malformed audiences stop startup. No project, audience, or hosting
 information is discovered: this provider never uses the Google Cloud Metadata
-Server, application default credentials, a service account, or the database.
+Server, application default credentials, or a service account. IAP authentication
+does not use PostgreSQL; the separate RBAC feature requires it when enabled.
 OIDC and Local DEV retain their existing configuration and behavior.
 
 | IAP resource | Exact `IAP_AUDIENCE` format |
@@ -196,8 +198,8 @@ Allow outbound HTTPS to the fixed Google endpoint. Error responses and applicati
 logs never include raw assertions, identity payloads, or key-fetch details.
 
 IAP assertions are bearer credentials and can be replayed until expiry; this phase
-does not add per-token revocation, application logout, RBAC, or CSRF protection for
-future state-changing APIs. Restrict origin access and protect transport and logs.
+does not add per-token revocation or application logout. Phase 5 adds RBAC and
+Origin checks to account/admin writes; future APIs must use those protections too. Restrict origin access and protect transport and logs.
 Deployment IAM policy, proxy forwarding, actual Google key rotation, and end-to-end
 cloud access must still be validated in the target environment; automated tests
 use generated ES256 keys and mocked key responses, with no live IAP credentials.
@@ -208,7 +210,7 @@ OIDC uses the maintained `github.com/coreos/go-oidc/v3/oidc` and
 `golang.org/x/oauth2` libraries. It is provider-independent: configure a standards-
 compliant OIDC issuer. Sessions and one-use login transactions are stored in
 PostgreSQL through `github.com/jackc/pgx/v5/pgxpool`. Apply the version-controlled
-migrations through 000003 below before enabling OIDC; the server never applies migrations itself.
+migrations through 000003 below before enabling OIDC (000004 for RBAC); the server never applies migrations itself.
 OIDC accepts `APP_ENV=development`, `test`/`TEST`, and `production`/`prd`/`PRD`.
 Local DEV still requires exactly `development` and does not connect to PostgreSQL.
 
@@ -489,6 +491,173 @@ logout, and automatic revocation when an account is disabled at the IdP remain
 outside this phase; revocation otherwise occurs at logout or expiration. Revoke
 existing sessions when changing the registered client/application trust boundary.
 
+## RBAC and generic account associations (Phase 5)
+
+RBAC is separate from authentication. Enable it with `RBAC_ENABLED=true`, configure
+`DB_*`, and set `APP_ORIGIN` to the exact browser origin, such as
+`http://127.0.0.1:5173` for development or `https://app.example.com` for TEST/PRD.
+No trailing slash or path is accepted. HTTP is allowed only on loopback in
+`APP_ENV=development`. The origin is used for CSRF validation, never inferred from
+Host or forwarded headers. All RBAC writes require that exact Origin and JSON.
+Do not add permissive CORS middleware. React sends same-origin requests.
+
+`RBAC_ENABLED` defaults to false to preserve existing database-free Local DEV and
+IAP authentication. The account/admin APIs then return 503 for authenticated
+requests, granting no access. When enabled, unavailable PostgreSQL or missing RBAC
+tables stop startup. OIDC shares its existing pool; Local DEV and IAP open a pool
+for authorization only. `/api/health`, `/api/auth/me`, OIDC callbacks/sessions, and
+IAP per-request verification retain their existing behavior. Disabling a framework
+user denies RBAC access immediately, but does not revoke their external identity
+or invalidate `/api/auth/me` authentication responses.
+
+### Model and permission policy
+
+Migration `000004_rbac_accounts.up.sql` adds `framework.users`, `roles`,
+`permissions`, `role_permissions`, `user_roles`, `accounts`, `user_accounts`,
+`audit_log`, and the one-time `admin_bootstrap` marker. Existing migrations
+000001–000003, authentication tables, and `public.schema_migrations` are unchanged.
+
+A user is registered when a verified identity accesses an RBAC endpoint, including
+`GET /api/access/me` from the dashboard. The unique key is **issuer + subject**;
+email is profile data and never links identities. Registration and profile refresh
+assign no roles or accounts. Administrators cannot create a claimed identity by
+email, edit issuer/subject, or merge identities through the API. Accounts are plain
+named records with stable UUIDs and an active flag, without provider credentials,
+delegation, ingestion, or login functionality. One user can link to multiple
+accounts (up to 100 through this API), and an account can have multiple users.
+
+| Role | Permissions | Account scope |
+| --- | --- | --- |
+| Admin | `admin.manage`, `accounts.read`, `accounts.write` | Account APIs still require an explicit link; admin management APIs can manage all accounts. |
+| User | `accounts.read`, `accounts.write` | Explicitly linked, active accounts only. |
+| Viewer | `accounts.read` | Explicitly linked, active accounts only. |
+| No role / inactive user | None | No account access. |
+
+Role and permission definitions are a fixed, version-controlled catalog; the
+Admin Portal assigns roles but cannot redefine their permissions. Multiple roles
+combine permissions. New permission requirements must be deliberately added in
+code and a forward migration. Unknown or empty permissions deny access.
+
+Go handlers use `auth.Require` first, then
+`store.Require(access.AccountRead, "account", handler)` (or the appropriate
+permission), with `account` naming the route parameter. Account checks include
+both the membership and the account's active flag. `access.Principal(ctx)` returns
+the resolved framework user. Administrative and account mutations recheck the
+current permissions inside a transaction after taking a shared advisory lock,
+serializing changes against revocations and concurrent administrator changes.
+Use this pattern for future account data; React visibility is never authorization.
+
+### Apply migration 000004 manually
+
+Do not run this against the live database without approval. Back up the database
+and stop the backend during the approved maintenance window. Load the `PG*`
+variables using the earlier manual migration instructions and a migration owner
+that owns the `framework` schema and can grant privileges to `go_web_app`.
+From the repository root, for a database currently at version 3:
+
+```bash
+# ONLY after approval and with the intended database and migration-owner credentials:
+migrate -path database/migrations -database 'postgres://?search_path=public' up 1
+migrate -path database/migrations -database 'postgres://?search_path=public' version
+```
+
+Expect clean version `4`. For a fresh database, target `goto 4` to apply 000001–000004.
+The existing schema-move instructions targeting version 3 are for Phase 3 only;
+RBAC requires the additional migration. Never use `force` to skip migrations.
+Enable RBAC in `vi .env` and restart the application after the migration.
+
+The runtime `go_web_app` role receives required user/account DML, read-only role
+catalog access, and INSERT/SELECT on audit records. It receives no UPDATE/DELETE
+on audit records or access to the bootstrap marker. **Use a separate migration
+owner in TEST/PRD:** an application role that owns these tables can bypass grants.
+Database credentials are trusted administrative capabilities, not user credentials.
+For another runtime role, provision equivalent grants explicitly with approval.
+
+Rollback from version 4 uses `down 1`, with approval and the backend stopped.
+**This drops all Phase 5 users, roles, account associations, audit records, and the
+bootstrap marker.** Export and protect these records first. It preserves sessions,
+OIDC flows, the framework schema, and public migration history. Run the prior
+application version or set `RBAC_ENABLED=false` afterward. Reapplying the migration
+creates an empty RBAC system and requires a new bootstrap; rollback is not a
+routine administrator reset mechanism. Never use unbounded `down` on a live DB.
+
+### Secure one-time administrator bootstrap
+
+There is no default administrator and no HTTP bootstrap endpoint. First enable
+RBAC, authenticate as the intended administrator through the selected provider,
+and open the dashboard so `/api/access/me` registers the verified identity.
+Inspect that authenticated `/api/auth/me` response and independently confirm its
+exact issuer and stable subject belong to the intended administrator. Do not
+substitute an email address or copy identity headers from an untrusted request.
+
+After approval to change the actual database, run this operator command from
+`backend`, using trusted `DB_*` settings for the migration owner (or a separately
+provisioned bootstrap role), not the limited runtime role:
+
+```bash
+# Replace both placeholders with values verified above; do not pass DB passwords as flags.
+go run ./cmd/bootstrap-admin \
+  --issuer 'VERIFIED_ISSUER' \
+  --subject 'VERIFIED_SUBJECT' \
+  --confirm-verified-identity
+```
+
+The command refuses missing confirmation, unknown/unverified or inactive users,
+Local DEV identities outside `APP_ENV=development`, an existing Admin assignment,
+or a previously consumed bootstrap marker. The grant, durable marker, and audit
+entry commit together; concurrent runs cannot grant multiple bootstrap admins.
+The marker remains consumed even if someone later removes Admin roles manually.
+Restore runtime database credentials before starting the application; do not keep
+bootstrap-owner credentials in the application's `.env` or service environment.
+The command checks authentication/RBAC schema availability but applies no migration.
+
+For Local DEV, use issuer `urn:go-web-framework:local-dev` and the configured
+`LOCAL_DEV_SUBJECT` only after that identity has accessed `/api/access/me`, and only
+in development. For OIDC/IAP, use the verified issuer and subject returned by that
+provider. Refresh account access in the dashboard after bootstrap. Create a second
+verified administrator when needed: users cannot change their own roles or active
+status, and API changes cannot eliminate the last active administrator.
+
+### API and Admin Portal
+
+| Endpoint | Access / operation |
+| --- | --- |
+| `GET /api/access/me` | Authenticated active user; own framework ID, roles, permissions and account IDs. Registers a role-free user if new. |
+| `GET /api/accounts` | `accounts.read`; linked active accounts only. |
+| `GET /api/accounts/{account}` | `accounts.read` plus explicit account link. |
+| `PATCH /api/accounts/{account}` | `accounts.write` plus explicit account link; JSON `{ "name": "New name" }`. |
+| `GET /api/admin/users` | `admin.manage`; verified users, roles and associations. |
+| `PUT /api/admin/users/{user}` | `admin.manage`; JSON `{ "active": false }`. No self-change. |
+| `PUT /api/admin/users/{user}/roles` | `admin.manage`; replaces roles with `{ "roles": ["User"] }`. No self-change. |
+| `PUT /api/admin/users/{user}/accounts` | `admin.manage`; replaces links with `{ "account_ids": ["UUID"] }`; empty array removes all. |
+| `GET /api/admin/roles` | `admin.manage`; fixed role/permission catalog. |
+| `GET, POST /api/admin/accounts` | `admin.manage`; list or create with `{ "name": "Account", "active": true }`. |
+| `PUT /api/admin/accounts/{account}` | `admin.manage`; update name and active flag (both required). |
+| `GET /api/admin/audit` | `admin.manage`; newest audit entries first. |
+
+List endpoints return pages of 100 records with `?offset=0`, `100`, etc. Every
+request is authenticated; new RBAC routes return 401 without authentication, 403
+for denied access, 400 for invalid input, and generic 503 on storage failures.
+Writes require JSON, reject unknown fields and oversized bodies, and enforce
+origin checks. User/account deletion is intentionally represented by deactivation.
+
+The React dashboard shows assigned roles and linked accounts. Administrators also
+see the Admin Portal: select a user, verify their issuer/subject, toggle role
+assignments, activate/deactivate users, create/edit accounts, link/unlink accounts,
+and inspect audit history. Admin grants require an explicit browser confirmation.
+Selectors and audit history have pagination. Use Refresh access after your roles
+change. Backend authorization remains authoritative if the UI becomes stale.
+
+Every successful admin mutation records the actor's framework user ID, target,
+action, UTC timestamp, and before/after values in the same transaction. A failed
+audit insert rolls back the change. Authorized account renames are audited too.
+The audit contains identity identifiers and business metadata, but no authentication
+tokens, credentials, or assertion headers. Limit access and apply an appropriate
+retention policy manually. This is a database audit trail, not tamper-proof against
+a database owner. No external log service, delegated login, ingestion, or worker
+is added. Restoring a database backup can restore old role grants and memberships;
+review restored access before reopening the application.
+
 ### Application checks
 
 ```bash
@@ -524,6 +693,11 @@ cover all migrations up/down, hash storage, idle/absolute expiry, activity updat
 concurrent lookup, atomic rotation and rollback, shared login-state consumption,
 database outages and cookie policy. Destructive old down migrations run only in
 the disposable clusters, never against the configured application database.
+Phase 5 tests additionally cover issuer/subject matching, zero default privileges,
+role and account isolation, CSRF and strict JSON, bootstrap races and the durable
+one-time latch, runtime DB grants, immediate revocation, concurrent administrator
+demotions, audit rollback, outages, and migration 4 upgrade/rollback preserving
+existing authentication data. The bootstrap command is not run against live data.
 
 ## Backup to GitHub and Google Drive
 

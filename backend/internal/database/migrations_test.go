@@ -117,6 +117,27 @@ func TestFrameworkSchemaMigration(t *testing.T) {
 	}
 	run("up", "1")
 	check("framework", "public", 3)
+	// Phase 5 must preserve authentication tables and history on upgrade/rollback.
+	run("up", "1")
+	check("framework", "public", 4)
+	var roles, users, admins int
+	if err := pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM framework.roles),
+		(SELECT count(*) FROM framework.users), (SELECT count(*) FROM framework.user_roles WHERE role='Admin')`).Scan(&roles, &users, &admins); err != nil {
+		t.Fatal(err)
+	}
+	if roles != 3 || users != 0 || admins != 0 {
+		t.Fatal("RBAC migration created users or assigned default privileges")
+	}
+	run("down", "1")
+	check("framework", "public", 3)
+	var removed bool
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('framework.users') IS NULL AND to_regclass('framework.audit_log') IS NULL`).Scan(&removed); err != nil || !removed {
+		t.Fatal("RBAC rollback did not remove its own tables")
+	}
+	run("up", "1")
+	check("framework", "public", 4)
+	run("down", "1")
+	check("framework", "public", 3)
 	if err := CheckSchema(ctx, pool); err != nil {
 		t.Fatal(err)
 	}

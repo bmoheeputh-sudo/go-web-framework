@@ -16,7 +16,7 @@ import (
 func Config(getenv func(string) string) (*pgxpool.Config, error) {
 	host, name, user, password := getenv("DB_HOST"), getenv("DB_NAME"), getenv("DB_USER"), getenv("DB_PASSWORD")
 	if host == "" || name == "" || user == "" || password == "" {
-		return nil, errors.New("DB_HOST, DB_NAME, DB_USER and DB_PASSWORD are required for OIDC sessions")
+		return nil, errors.New("DB_HOST, DB_NAME, DB_USER and DB_PASSWORD are required for PostgreSQL")
 	}
 	port := getenv("DB_PORT")
 	if port == "" {

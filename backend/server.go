@@ -9,8 +9,10 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/access"
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/auth"
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/database"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type application struct {
@@ -21,6 +23,21 @@ type application struct {
 // newServer validates configuration before opening a listener. Unset authentication
 // preserves public health checks but grants no identity or protected-route access.
 func newServer(getenv func(string) string) (*application, error) {
+	rbacEnabled := false
+	if value := getenv("RBAC_ENABLED"); value != "" {
+		var err error
+		rbacEnabled, err = strconv.ParseBool(value)
+		if err != nil {
+			return nil, errors.New("RBAC_ENABLED must be true or false")
+		}
+	}
+	origin := getenv("APP_ORIGIN")
+	if rbacEnabled {
+		if err := access.ValidateOrigin(origin, getenv("APP_ENV")); err != nil {
+			return nil, err
+		}
+	}
+	var pool *pgxpool.Pool
 	address := getenv("HTTP_ADDR")
 	if address == "" {
 		address = "127.0.0.1:8080"
@@ -73,7 +90,7 @@ func newServer(getenv func(string) string) (*application, error) {
 				return nil, errors.New("HTTP development requires a loopback HTTP_ADDR")
 			}
 		}
-		pool, err := database.Open(context.Background(), getenv)
+		pool, err = database.Open(context.Background(), getenv)
 		if err != nil {
 			return nil, err
 		}
@@ -98,8 +115,29 @@ func newServer(getenv func(string) string) (*application, error) {
 	default:
 		return nil, errors.New("unsupported AUTH_PROVIDER; use oidc, google_iap or local_dev, or leave unset for public health only")
 	}
+	var authorization *access.Store
+	if rbacEnabled {
+		if provider == nil {
+			return nil, errors.New("RBAC_ENABLED requires an explicit AUTH_PROVIDER")
+		}
+		if pool == nil {
+			var err error
+			pool, err = database.Open(context.Background(), getenv)
+			if err != nil {
+				return nil, err
+			}
+			closeResources = pool.Close
+		}
+		authorization = access.New(pool)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := authorization.Check(ctx); err != nil {
+			closeResources()
+			return nil, errors.New("RBAC schema unavailable; apply migration 000004 manually before enabling RBAC")
+		}
+	}
 	return &application{closeResources: closeResources, Server: &http.Server{
-		Addr: address, Handler: newHandler(provider),
+		Addr: address, Handler: newHandlerWithAccess(provider, authorization, origin),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second, WriteTimeout: 30 * time.Second,
 		IdleTimeout: 60 * time.Second,
@@ -107,7 +145,12 @@ func newServer(getenv func(string) string) (*application, error) {
 }
 
 func newHandler(provider auth.Authenticator) http.Handler {
+	return newHandlerWithAccess(provider, nil, "")
+}
+
+func newHandlerWithAccess(provider auth.Authenticator, authorization *access.Store, origin string) http.Handler {
 	mux := http.NewServeMux()
+	access.Register(mux, provider, authorization, origin)
 	var providerName auth.Provider
 	switch selected := provider.(type) {
 	case *auth.OIDCAuthenticator:

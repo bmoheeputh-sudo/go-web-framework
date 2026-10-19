@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import AccessPortal from './AccessPortal'
 import {
   AppBar,
   Toolbar,
@@ -201,6 +202,9 @@ function App() {
             )}
           </Box>
         </Paper>
+        {authentication.status === 'authenticated' && (
+          <AccessPortal key={JSON.stringify([authentication.identity.issuer, authentication.identity.subject])} />
+        )}
       </Container>
     </>
   )
