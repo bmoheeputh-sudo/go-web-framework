@@ -19,3 +19,12 @@ dist/
 
 # Logs
 *.log
+
+# Python virtual environments and caches
+.venv/
+__pycache__/
+*.pyc
+
+# Local credentials
+secure/
+*service-account*.json
