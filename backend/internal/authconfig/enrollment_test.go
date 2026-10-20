@@ -152,6 +152,26 @@ func TestEnrollmentEvidenceIsolationAndAuthorization(t *testing.T) {
 	apiRequest(t, configHandler(f, f.repo, fixedAuth{f.identity}), "POST", path, enrollBody(e, "Admin"), 409)
 }
 
+func TestEnrollmentEvidenceRequiresExactVerifiedIssuer(t *testing.T) {
+	f := newFixture(t)
+	m := approvedRevision(t, f, 0)
+	f.run(t, func(ctx context.Context) {
+		now := time.Now()
+		_, err := f.repo.recordTestEvidence(ctx, verifiedTestEvidence{
+			revisionID: m.ID, revisionGeneration: m.Generation,
+			identity: auth.Identity{Issuer: m.IssuerURL + "/", Subject: "same-subject", Provider: auth.OIDC},
+			purpose:  IsolatedConnection, completedAt: now, expiresAt: now.Add(time.Minute),
+		})
+		if err == nil {
+			t.Fatal("trailing-slash issuer qualified as approved issuer")
+		}
+	})
+	var count int
+	if err := f.owner.QueryRow(context.Background(), `SELECT count(*) FROM framework.auth_test_evidence WHERE revision_id=$1`, m.ID).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("mismatched issuer left durable evidence: %v", err)
+	}
+}
+
 func TestEnrollmentAssociatesOnlyExactIdentityAndPreservesRoles(t *testing.T) {
 	f := newFixture(t)
 	m := approvedRevision(t, f, 0)

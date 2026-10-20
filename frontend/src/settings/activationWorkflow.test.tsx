@@ -49,7 +49,7 @@ const committed = (outcome: ActivationResult['outcome']): ActivationResult => ({
 
 type SetupOptions = {
   preparationEnabled?: boolean
-  activation?: ActivationResult | 'network' | 'auth_loss'
+  activation?: ActivationResult | 'network' | 'auth_loss' | 'forbidden' | 'proxy_502' | 'proxy_504' | 'truncated_json' | 'invalid_json_contract'
   activationStatus?: number
   popupBlocked?: boolean
   wrongInstance?: boolean
@@ -83,6 +83,10 @@ function setup(options: SetupOptions = {}) {
       activationSubmitted = true
       if (options.activation === 'network') throw new TypeError('network disconnected')
       if (options.activation === 'auth_loss') return Response.json({ error: 'unauthenticated' }, { status: 401 })
+      if (options.activation === 'forbidden') return Response.json({ error: 'forbidden' }, { status: 403 })
+      if (options.activation === 'proxy_502' || options.activation === 'proxy_504') return new Response('<html>proxy failure</html>', { status: options.activation === 'proxy_502' ? 502 : 504, headers: { 'Content-Type': 'text/html' } })
+      if (options.activation === 'truncated_json') return new Response('{"outcome":', { status: 200 })
+      if (options.activation === 'invalid_json_contract') return Response.json({ outcome: 'committed_applied' })
       const result = options.activation || committed('committed_applied')
       return Response.json(options.activationStatus ? { error: 'auth_activation_runtime_mismatch', ...result } : result, { status: options.activationStatus || 200 })
     }
@@ -111,7 +115,28 @@ async function prepareAndVerify() {
   await tick(1000)
 }
 
+async function submitActivation() {
+  await prepareAndVerify()
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationReview })) })
+  const dialog = screen.getByRole('dialog')
+  fireEvent.change(within(dialog).getByLabelText(new RegExp(en.activationReason)), { target: { value: 'Approved security cutover' } })
+  for (const checkbox of within(dialog).getAllByRole('checkbox')) fireEvent.click(checkbox)
+  await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: en.activationConfirmAction })) })
+}
+
 describe('OIDC activation state machine', () => {
+  it.each(['proxy_502', 'proxy_504', 'network', 'truncated_json', 'invalid_json_contract', 'auth_loss', 'forbidden'] as const)(
+    'keeps activation outcome unknown and disables resubmission after %s', async (failure) => {
+      const { fetcher, session } = setup({ activation: failure })
+      await submitActivation()
+      expect(screen.getByText(en.activationOutcome_outcome_unknown)).toBeTruthy()
+      expect(screen.queryByText(en.activationOutcome_committed_applied)).toBeNull()
+      expect(screen.queryByRole('button', { name: en.activationConfirmAction })).toBeNull()
+      await tick(60_000)
+      expect(fetcher.mock.calls.filter(([path]) => String(path).endsWith('/activate'))).toHaveLength(1)
+      if (failure === 'auth_loss' || failure === 'forbidden') expect(session.expire).toHaveBeenCalledOnce()
+    },
+  )
   it('prepares and verifies both evidence paths without activating', async () => {
     const { fetcher, popup } = setup()
     await prepareAndVerify()

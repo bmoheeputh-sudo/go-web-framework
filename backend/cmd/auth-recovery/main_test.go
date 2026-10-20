@@ -98,3 +98,29 @@ func TestRecoveryCLIRejectsUnauthorizedOrMismatchedScopeBeforeDatabase(t *testin
 		t.Fatal("unauthorized operator reached database")
 	}
 }
+
+func TestRecoveryCLIRefusesUnavailableDatabaseOrIdentityProviderBeforeConfirmation(t *testing.T) {
+	args := []string{"--deployment", "installation-a", "--environment", "development", "--expected-generation", "1", "--revision", "11111111-1111-4111-8111-111111111111", "--reason", "incident INC-123"}
+	for _, tc := range []struct {
+		name                string
+		openErr, prepareErr error
+	}{
+		{"database unavailable", errors.New("database unavailable"), nil},
+		{"recovery IdP unavailable", nil, authconfig.ErrUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeWorkflow{prepareErr: tc.prepareErr}
+			var output bytes.Buffer
+			err := run(args, recoveryEnvironment(t), strings.NewReader("RECOVER installation-a/development GENERATION 2 REVISION 11111111-1111-4111-8111-111111111111\n"), &output,
+				func(context.Context, func(string) string, *authconfig.OfflineOperator) (workflow, error) {
+					if tc.openErr != nil {
+						return nil, tc.openErr
+					}
+					return fake, nil
+				})
+			if err == nil || fake.recovered || strings.Contains(output.String(), "Type exactly:") || strings.Contains(output.String(), "Recovery committed") {
+				t.Fatal("unavailable recovery dependency reached confirmation or commit")
+			}
+		})
+	}
+}

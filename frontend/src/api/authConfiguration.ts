@@ -182,7 +182,10 @@ async function configurationRequest<T>(path: string, method = 'GET', body?: unkn
   })
   if (!response.ok) {
     let failure: SafeFailure = {}
-    try { failure = await response.json() as SafeFailure } catch { /* Status remains authoritative. */ }
+    try {
+      const parsed: unknown = await response.json()
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) failure = parsed as SafeFailure
+    } catch { /* Status remains authoritative. */ }
     throw new AuthConfigurationError(response.status, failure)
   }
   return response.status === 204 ? undefined as T : response.json() as Promise<T>
@@ -198,8 +201,14 @@ export const startNormalReadiness = (preparationID: string, signal?: AbortSignal
   configurationRequest<NormalReadinessStart>(`/api/admin/auth/activation-preparations/${encodeURIComponent(preparationID)}/readiness`, 'POST', {}, signal)
 export const getActivationPreparation = (preparationID: string, signal?: AbortSignal) =>
   configurationRequest<ActivationPreparation>(`/api/admin/auth/activation-preparations/${encodeURIComponent(preparationID)}`, 'GET', undefined, signal)
-export const activateOIDC = (preparationID: string, request: ActivateRequest, signal?: AbortSignal) =>
-  configurationRequest<ActivationResult>(`/api/admin/auth/activation-preparations/${encodeURIComponent(preparationID)}/activate`, 'POST', request, signal)
+export async function activateOIDC(preparationID: string, request: ActivateRequest, signal?: AbortSignal): Promise<ActivationResult> {
+  // A successful HTTP status is not proof that a proxy delivered the activation
+  // contract. After submitting a mutation, an invalid response is ambiguous.
+  const response = await configurationRequest<unknown>(`/api/admin/auth/activation-preparations/${encodeURIComponent(preparationID)}/activate`, 'POST', request, signal)
+  const result = response && typeof response === 'object' ? parseActivationResult(response as Partial<ActivationResult>) : undefined
+  if (!result) throw new Error('invalid activation response')
+  return result
+}
 export const reconcileActivation = (expectedDesiredGeneration: number, signal?: AbortSignal) =>
   configurationRequest<ActivationStatus>('/api/admin/auth/activation/reconcile', 'POST', {
     expected_desired_generation: expectedDesiredGeneration, confirm: true,

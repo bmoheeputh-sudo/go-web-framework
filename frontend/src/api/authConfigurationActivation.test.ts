@@ -1,13 +1,25 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import {
-  activateOIDC, createRecoveryDraft, getActivationPreparation, getActivationStatus,
+  activateOIDC, AuthConfigurationError, createRecoveryDraft, getActivationPreparation, getActivationStatus,
   getRecoveryReadiness, prepareActivation, reconcileActivation, startNormalReadiness,
 } from './authConfiguration'
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
+const activationRequest = {
+  revision_id: 'revision-1', expected_revision_generation: 2, expected_activation_generation: 3,
+  isolated_evidence_id: 'i', normal_evidence_id: 'n', enrolled_user_id: 'u', transition_seconds: 0,
+  acknowledge_reauthentication: true, acknowledge_emergency_recovery: true, confirm: true as const, reason: 'Approved cutover',
+}
+const applied = {
+  outcome: 'committed_applied', commit_persisted: true, authoritative_state_known: true,
+  authoritative_generation: 4, authoritative_revision_id: 'revision-1', desired_generation: 4,
+  applied_generation: 4, revision_id: 'revision-1', applied: true, commit_uncertain: false,
+  reconciliation_required: false, automatic_retry_allowed: false,
+}
+
 it('uses the committed activation endpoint contracts and explicit confirmation fields', async () => {
-  const fetcher = vi.fn(async () => Response.json({}))
+  const fetcher = vi.fn(async () => Response.json(applied))
   vi.stubGlobal('fetch', fetcher)
   await prepareActivation('revision/1', 2, 3)
   await startNormalReadiness('instance/preparation')
@@ -54,4 +66,37 @@ it('retains a structured non-2xx activation outcome without retaining arbitrary 
     },
   })
   expect(error).not.toHaveProperty('activation.provider_secret')
+})
+
+it.each([502, 504])('handles proxy HTTP %i HTML without JSON parsing exceptions', async (status) => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('<html>upstream unavailable</html>', {
+    status, headers: { 'Content-Type': 'text/html' },
+  })))
+  const error = await activateOIDC('preparation', activationRequest).catch((value: unknown) => value)
+  expect(error).toBeInstanceOf(AuthConfigurationError)
+  expect(error).toMatchObject({ status, activation: undefined })
+})
+
+it('handles a proxy JSON null response as an unstructured failure', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json(null, { status: 502 })))
+  const error = await activateOIDC('preparation', activationRequest).catch((value: unknown) => value)
+  expect(error).toBeInstanceOf(AuthConfigurationError)
+  expect(error).toMatchObject({ status: 502, activation: undefined })
+})
+
+it('rejects truncated or malformed successful responses without treating them as activation success', async () => {
+  const fetcher = vi.fn()
+    .mockResolvedValueOnce(new Response('{"outcome":', { status: 200 }))
+    .mockResolvedValueOnce(Response.json({ outcome: 'committed_applied' }))
+  vi.stubGlobal('fetch', fetcher)
+  await expect(activateOIDC('preparation', activationRequest)).rejects.toThrow()
+  await expect(activateOIDC('preparation', activationRequest)).rejects.toThrow('invalid activation response')
+  expect(fetcher).toHaveBeenCalledTimes(2) // One request per explicit invocation; no internal retry.
+})
+
+it('propagates a disconnected activation request without retrying it', async () => {
+  const fetcher = vi.fn(async () => { throw new TypeError('network disconnected') })
+  vi.stubGlobal('fetch', fetcher)
+  await expect(activateOIDC('preparation', activationRequest)).rejects.toThrow('network disconnected')
+  expect(fetcher).toHaveBeenCalledTimes(1)
 })

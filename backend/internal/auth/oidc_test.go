@@ -455,3 +455,16 @@ func TestOIDCDiscoveryFailsClosed(t *testing.T) {
 		})
 	}
 }
+
+func TestOIDCIssuerTrailingSlashIsDistinct(t *testing.T) {
+	f := newTestIssuer(t)
+	config := f.config()
+	config.Issuer += "/"
+	if _, err := NewOIDC(oidc.ClientContext(context.Background(), f.server.Client()), config, newMemoryStore()); err == nil {
+		t.Fatal("discovery accepted a different issuer with a trailing slash")
+	}
+	p := f.provider(t)
+	f.changeClaims = func(claims map[string]any) { claims["iss"] = f.server.URL + "/" }
+	callback, cookie := beginLogin(t, f, p)
+	assertFailedCallback(t, finishLogin(p, callback, cookie))
+}

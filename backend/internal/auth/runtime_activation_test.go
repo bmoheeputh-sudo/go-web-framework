@@ -320,6 +320,109 @@ func TestProviderLeaseDeadlineCleanup(t *testing.T) {
 		t.Fatal("cleanup not idempotent")
 	}
 }
+
+func TestRuntimeCaptureReleasesProviderLeaseOnCompletionAndCancellation(t *testing.T) {
+	for _, mode := range []string{"normal", "cancel", "deadline"} {
+		t.Run(mode, func(t *testing.T) {
+			var closed atomic.Int32
+			lease := &providerLease{cleanup: func() { closed.Add(1) }}
+			m := &Runtime{}
+			m.current.Store(&runtimeSnapshot{prepared: &PreparedOIDC{lease: lease}})
+			entered := make(chan struct{})
+			h := m.Capture(m.Capture(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				close(entered)
+				if mode != "normal" {
+					<-r.Context().Done()
+				}
+			})))
+			ctx := context.Background()
+			var cancel context.CancelFunc
+			if mode == "deadline" {
+				ctx, cancel = context.WithTimeout(ctx, 20*time.Millisecond)
+			} else {
+				ctx, cancel = context.WithCancel(ctx)
+			}
+			defer cancel()
+			done := make(chan struct{})
+			go func() {
+				h.ServeHTTP(httptest.NewRecorder(), runtimeRequestFor("GET", "/held").WithContext(ctx))
+				close(done)
+			}()
+			<-entered
+			if mode != "normal" {
+				m.Close() // An in-flight request keeps its leased transport alive.
+				if closed.Load() != 0 {
+					t.Fatal("retired provider closed before handler completion")
+				}
+				if mode == "cancel" {
+					cancel()
+				}
+			}
+			<-done
+			m.Close()
+			if closed.Load() != 1 {
+				t.Fatalf("provider cleanup calls = %d, want one", closed.Load())
+			}
+			lease.mu.Lock()
+			refs := lease.refs
+			lease.mu.Unlock()
+			if refs != 0 {
+				t.Fatalf("outstanding request leases = %d", refs)
+			}
+		})
+	}
+}
+
+func TestConcurrentReconciliationAndRequestCancellationReleasesRetiredLease(t *testing.T) {
+	pool, _ := testdb.New(t)
+	testdb.Migrations(t, pool, "up")
+	f := newTestIssuer(t)
+	store, err := NewPostgresStore(pool, testSessionConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := runtimeFor(t, runtimeLocal(t))
+	defer m.Close()
+	var firstClosed, secondClosed atomic.Int32
+	first := preparedRuntime(t, f, store, revisionOne, 1, &firstClosed)
+	staged, err := m.Stage(first, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := staged.Commit(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	entered, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		m.Capture(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { close(entered); <-r.Context().Done() })).ServeHTTP(httptest.NewRecorder(), runtimeRequestFor("GET", "/held").WithContext(ctx))
+		close(done)
+	}()
+	<-entered
+	second := preparedRuntime(t, f, store, revisionTwo, 2, &secondClosed)
+	now := time.Now()
+	candidate, err := NewDatabaseRuntime(second, nil, now, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Reconcile(candidate, 1); err != nil {
+		t.Fatal(err)
+	}
+	candidate.Close()
+	if firstClosed.Load() != 0 {
+		t.Fatal("reconciliation closed an active request")
+	}
+	cancel()
+	<-done
+	if firstClosed.Load() != 1 {
+		t.Fatalf("retired provider cleanup count %d", firstClosed.Load())
+	}
+	m.Close()
+	if secondClosed.Load() != 1 {
+		t.Fatalf("active provider cleanup count %d", secondClosed.Load())
+	}
+}
 func TestDatabaseRuntimeCASConflictWithoutFallback(t *testing.T) {
 	pool, _ := testdb.New(t)
 	testdb.Migrations(t, pool, "up")
