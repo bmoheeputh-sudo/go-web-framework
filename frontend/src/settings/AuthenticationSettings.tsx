@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
-import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Stack, TableCell, TableRow, Typography } from '@mui/material'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Stack, Tab, Tabs, TableCell, TableRow, Typography } from '@mui/material'
 import ExpandMore from '@mui/icons-material/ExpandMore'
 import { useTranslation } from 'react-i18next'
+import { useSearchParams } from 'react-router-dom'
 import { APIError, errorKey } from '../api/client'
 import type { User } from '../api/client'
 import { authProviderSetupPath, authSettingsPath, authStatusPath } from '../api/authConfiguration'
@@ -24,7 +25,12 @@ import OIDCProviderSetup from './OIDCProviderSetup'
 import RecoveryDraftDialog from './RecoveryDraftDialog'
 import RevisionDetailDrawer from './RevisionDetailDrawer'
 
+const UserAccess = lazy(() => import('./UserAccess'))
+
 export default function AuthenticationSettings() {
+  const [params, setParams] = useSearchParams()
+  const accessSection = params.get('auth_section') === 'user-access'
+  const [accessVisited, setAccessVisited] = useState(accessSection)
   const { t, i18n } = useTranslation(['auth', 'common', 'admin'])
   const cache = useQueryCache(), notify = useNotifications()
   const { refreshViews } = useAuthenticationCacheSync()
@@ -78,7 +84,18 @@ export default function AuthenticationSettings() {
     } finally { mutating.current = false; setBusy(false) }
   }
 
-  return <Stack spacing={2} sx={{ minWidth: 0 }}>
+  return <>
+    <Tabs value={accessSection ? 1 : 0} onChange={(_, value: number) => {
+      const next = new URLSearchParams(params)
+      if (value === 1) { next.set('auth_section', 'user-access'); setAccessVisited(true) }
+      else next.delete('auth_section')
+      setParams(next, { preventScrollReset: true })
+    }} variant="scrollable" scrollButtons="auto" aria-label={t('title')} sx={{ mb: 2 }}>
+      <Tab id="auth-config-tab" aria-controls="auth-config-panel" label={t('accessConfiguration')} />
+      <Tab id="auth-access-tab" aria-controls="auth-access-panel" label={t('accessTitle')} />
+    </Tabs>
+    <Box role="tabpanel" id="auth-config-panel" aria-labelledby="auth-config-tab" hidden={accessSection}>
+    <Stack spacing={2} sx={{ minWidth: 0 }}>
     <PageTools busy={locked} error={queryMessage} onRefresh={() => setMutationError('')} />
     {mutationError && !draftOpen && <Alert severity={mutationError === 'auth:revisionConflict' ? 'warning' : 'error'}>{t(mutationError)}</Alert>}
     <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'repeat(2, minmax(0, 1fr))' }, gap: 2, alignItems: 'start' }}>
@@ -163,5 +180,9 @@ export default function AuthenticationSettings() {
       open onClose={() => setRecoverySource(null)} onCreated={(revision) => {
         setRecoverySource(null); setSelected(revision.id); setCursors([0])
       }} />}
-  </Stack>
+  </Stack></Box>
+    <Box role="tabpanel" id="auth-access-panel" aria-labelledby="auth-access-tab" hidden={!accessSection}>
+      {(accessSection || accessVisited) && <Suspense fallback={<Typography>{t('common:loading')}</Typography>}><UserAccess /></Suspense>}
+    </Box>
+  </>
 }

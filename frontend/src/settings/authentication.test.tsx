@@ -482,3 +482,18 @@ it('uses theme paper colors in dark mode and supports keyboard tab navigation', 
   await userEvent.keyboard('{ArrowRight}{Enter}')
   expect(screen.getByRole('tab', { name: en.title }).getAttribute('aria-selected')).toBe('true')
 })
+
+it('navigates to User Access with SPA history and shows operator setup guidance without writes', async () => {
+  const fixture = authAPI()
+  const original = fixture.fetcher.getMockImplementation()!
+  fixture.fetcher.mockImplementation(async (path, init) => path.startsWith('/api/admin/auth/access-policy')
+    ? Response.json({ error: 'access_policy_setup_required' }, { status: 404 }) : original(path, init))
+  mount('/settings?tab=authentication&auth_section=user-access')
+  await screen.findByRole('heading', { name: en.accessSetupTitle })
+  await userEvent.click(screen.getByRole('tab', { name: en.accessConfiguration }))
+  await screen.findByRole('heading', { name: en.history })
+  expect(screen.getByTestId('settings-location').textContent).toBe('/settings?tab=authentication')
+  await userEvent.click(screen.getByRole('button', { name: 'Settings back' }))
+  expect(await screen.findByRole('heading', { name: en.accessSetupTitle })).toBeTruthy()
+  expect(writes(fixture.fetcher)).toHaveLength(0)
+})

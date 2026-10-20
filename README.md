@@ -281,6 +281,7 @@ administrator session **before restarting with enforcement**. Login provisioning
 and all OIDC session use now enforce that policy; no roles or provider are
 changed automatically during rollout. Missing policy fails closed.
 The database still supports one security deployment, not multi-tenant RBAC.
+Manage existing-user approvals and policy settings at **Settings → Authentication → User Access** after bootstrap. Changes require a reason, generation checks and an authoritative impact preview; no role grants or provider changes occur automatically.
 
 The pool defaults to 10 maximum connections, no minimum, a 30-minute connection
 lifetime and a five-minute idle connection lifetime. `DB_MAX_CONNS` accepts 1–100.

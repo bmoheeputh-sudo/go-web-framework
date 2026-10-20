@@ -1,8 +1,8 @@
-# OIDC access policy enforcement (Phase 10.2C)
+# OIDC access policy enforcement and administration
 
 Normal OIDC login now requires an explicitly initialized access policy. There is
 no default allow mode, startup bootstrap, automatic approval, or Local DEV
-fallback. This release adds no administrator UI or policy HTTP endpoints.
+fallback. Administrator management is provided by the Phase 10.2D section below.
 
 ## Deployment boundary and prerequisites
 
@@ -76,8 +76,9 @@ sequence under an approved maintenance/change procedure; none is automatic:
    instead of bootstrapping again.
 6. For `approved_users_only`, explicitly approve every other intended OIDC
    identity using the trusted `AccessPolicyRepository.SetApproval` adapter before
-   expecting it to log in. The policy UI is deferred to Phase 10.2D; there is no
-   new bulk-approval tool. Bootstrap approves only the proven administrator.
+   expecting it to log in. After bootstrap, use the User Access section for
+   additional existing OIDC users. There is no bulk-approval tool. Bootstrap
+   approves only the proven administrator.
    Do not manually grant Admin to solve missing login approval.
 7. Deploy/restart all instances with this release, verify startup and an
    administrator login, then test an eligible non-admin and a denied identity.
@@ -174,11 +175,74 @@ issuer and cannot grant access as a side effect.
   measure contention before scaling. There are no uncontrolled retries.
 - Requests already admitted can finish; the framework rechecks permissions and
   policy for protected mutations. DB superusers/schema owners remain trusted.
-- Phase 10.2D still needs protected policy management UI/API adapters, explicit
-  additional approvals, and user-facing policy-denial translations. Login denial
-  currently preserves the existing generic safe `login_failed` response.
+- Normal login denial preserves the existing generic safe `login_failed`
+  response. The User Access UI localizes administrative errors; it does not
+  disclose login-policy details to unauthenticated callers.
 
 Tests use synthetic signed tokens and disposable PostgreSQL clusters only. They
 cover actual normal callbacks, two runtime instances, domain/approval/user checks,
 concurrent provisioning, transactional rollback, bootstrap proof, last-admin
 protection and unchanged sessionless readiness/activation/recovery behavior.
+
+## Administrator UI and APIs (Phase 10.2D)
+
+Open **Settings → Authentication → User Access**, or
+`/settings?tab=authentication&auth_section=user-access`. The section uses the
+shared design system and existing user records. It never changes providers,
+assigns roles, reactivates users or bootstraps policy. Approval selection uses an
+immutable framework user ID; the server resolves its exact OIDC issuer/subject
+inside the mutation transaction. Unknown-subject email invitations, CSV and SCIM
+remain outside this phase. Only email from a linked, verified identity is shown.
+
+All endpoints below require verified authentication and `admin.manage`, return
+`Cache-Control: no-store`, and use trusted deployment/environment scope:
+
+| Method | Path (under `/api/admin/auth/access-policy`) | Response/action |
+| --- | --- | --- |
+| GET | root | Policy, activation generation, active issuer and overview counts |
+| PUT | root | Version-checked policy update and atomic audit/session revocation |
+| POST | `/preview` | Affected users, eligible users/admins, current-admin access loss |
+| GET | `/overview` | Same scoped policy/overview snapshot as root |
+| GET | `/approvals?search=&status=&offset=0&limit=20` | Searchable identity candidates/approvals and total count |
+| GET | `/approvals/{user_id}` | Current linked OIDC user/approval metadata |
+| POST | `/approvals/{user_id}/approve` | Explicit approval of an existing OIDC identity |
+| POST | `/approvals/{user_id}/revoke` | Explicit denial and session revocation |
+
+Policy writes/preview send `mode`, `allowed_email_domains`, `default_role`,
+`expected_policy_generation` and `expected_activation_generation`. Writes also
+require an 8–512-byte `reason`; if the caller would lose OIDC access,
+`confirm_access_loss=true` is required. Approval mutations require both expected
+generations, `expected_approval_generation` (zero for an absent row), and reason.
+No endpoint accepts an actor, email key, issuer/subject override or scope in JSON.
+
+Under Allow All, a user without an approval row can be denied explicitly through
+Revoke Approval: the user-ID adapter creates an initial `revoked` record under
+the existing constraints. This avoids a misleading approve-then-revoke sequence.
+The trusted raw-identity repository method retains its previous create-approved
+validation; the new initial-denial path is restricted to known OIDC user IDs.
+Inactive status and role grants remain unchanged in either case.
+
+The preview is read-only and uses the latest stored verified user information,
+not a live provider probe or authorization token. Every save rechecks scope,
+generations, effective administrator permission and the final eligible OIDC
+administrator under the shared lock. Self-access loss requires a separate manual
+acknowledgment. Counts may change between preview and save; stale writes return
+409 and are never automatically retried. Session deletion and audit writes roll
+back together on failure.
+
+Stable API errors distinguish invalid requests (400), denial (401/403), missing
+policy/setup required or unknown identity (404), conflicts/final-admin/self-loss
+confirmation (409), and unavailable/uncertain service outcomes (503). Uncertain
+writes must be inspected in authoritative policy and audit records before any
+manual repetition. The UI freezes writes after a transport/server ambiguity;
+read-only refresh and operator inspection remain available.
+
+The UI preserves rows during refresh and checks for mismatched policy/activation
+generations across its reads. Provider-current status means the configured active
+issuer, not a live health check. Active OIDC user counts describe user records,
+not a guarantee that each identity is eligible to log in. Approval history with
+no linked user stays visible without offering an arbitrary-identity write path.
+
+All initial bootstrap and single-security-deployment restrictions above remain
+in force. No new migration, automatic policy initialization or browser bootstrap
+capability is introduced.

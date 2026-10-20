@@ -263,6 +263,9 @@ func (r *AccessPolicyRepository) bootstrap(ctx context.Context, tx pgx.Tx, actor
 }
 
 func (r *AccessPolicyRepository) Update(ctx context.Context, expected PolicyExpectation, settings AccessPolicySettings, reason string) (AccessPolicy, error) {
+	return r.update(ctx, expected, settings, reason, nil)
+}
+func (r *AccessPolicyRepository) update(ctx context.Context, expected PolicyExpectation, settings AccessPolicySettings, reason string, confirmLoss *bool) (AccessPolicy, error) {
 	settings, err := normalizePolicy(settings)
 	if err != nil || !validPolicyReason(reason) || expected.Generation < 1 {
 		return AccessPolicy{}, ErrInvalid
@@ -282,6 +285,19 @@ func (r *AccessPolicyRepository) Update(ctx context.Context, expected PolicyExpe
 		}
 		if err = policyRoleAllowed(ctx, tx, settings.DefaultRole); err != nil {
 			return err
+		}
+
+		if confirmLoss != nil {
+			preview, err := r.preview(ctx, tx, actor, expected, settings)
+			if err != nil {
+				return err
+			}
+			if !preview.CanApply {
+				return ErrLastOIDCAdministrator
+			}
+			if preview.CurrentAdministratorLosesAccess && !*confirmLoss {
+				return ErrSelfAccessLoss
+			}
 		}
 		tag, err := tx.Exec(ctx, `UPDATE framework.oidc_access_policies SET mode=$3,allowed_email_domains=$4,
  default_role=$5,generation=generation+1,updated_by=$6,reason=$7
@@ -398,8 +414,21 @@ func (r *AccessPolicyRepository) SetApproval(ctx context.Context, expected Polic
 		(status != "approved" && status != "revoked") || (generation == 0 && status != "approved") {
 		return OIDCIdentityApproval{}, ErrInvalid
 	}
+	return r.setApproval(ctx, expected, func(context.Context, pgx.Tx) (OIDCIdentityKey, error) { return key, nil }, generation, status, reason, false)
+}
+func (r *AccessPolicyRepository) setApproval(ctx context.Context, expected PolicyExpectation, resolve func(context.Context, pgx.Tx) (OIDCIdentityKey, error), generation int64, status, reason string, initialRevocation bool) (OIDCIdentityApproval, error) {
+	if !validPolicyReason(reason) || expected.Generation < 1 || generation < 0 || (status != "approved" && status != "revoked") || (generation == 0 && status != "approved" && !initialRevocation) {
+		return OIDCIdentityApproval{}, ErrInvalid
+	}
 	var result OIDCIdentityApproval
 	err := adminTransaction(ctx, r.store, func(ctx context.Context, tx pgx.Tx, actor access.User) error {
+		key, err := resolve(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if !key.valid() {
+			return ErrInvalid
+		}
 		issuer, err := r.activeIssuer(ctx, tx, expected.ActivationGeneration)
 		if err != nil {
 			return err

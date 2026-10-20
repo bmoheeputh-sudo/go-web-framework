@@ -184,7 +184,7 @@ func repositoryError(ctx context.Context, err error) error {
 	case errors.Is(err, pgx.ErrNoRows):
 		return ErrNotFound
 	}
-	for _, known := range []error{ErrInvalid, ErrDenied, ErrConflict, ErrNotFound, ErrSecret, ErrCrypto, ErrAudit, ErrLastOIDCAdministrator} {
+	for _, known := range []error{ErrInvalid, ErrDenied, ErrConflict, ErrNotFound, ErrSecret, ErrCrypto, ErrAudit, ErrLastOIDCAdministrator, ErrSelfAccessLoss} {
 		if errors.Is(err, known) {
 			return known
 		}

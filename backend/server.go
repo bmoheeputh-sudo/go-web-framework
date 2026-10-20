@@ -264,6 +264,13 @@ func newServerWithPolicy(getenv func(string) string, policy func(func(string) st
 	// Management APIs remain separate from the read-only startup loader.
 	// Missing/invalid management configuration yields protected 503 responses;
 	// it must not disable the existing environment-configured login provider.
+
+	policyScope, policyScopeErr := authconfig.ScopeFromEnv(getenv)
+	var accessPolicy *authconfig.AccessPolicyRepository
+	if policyScopeErr == nil {
+		accessPolicy, _ = authconfig.NewAccessPolicyRepository(authorization, policyScope)
+	}
+	authconfig.RegisterAccessPolicy(handler.ServeMux, runtime, authorization, origin, accessPolicy)
 	configRepository, _ := authconfig.RepositoryFromEnv(authorization, getenv)
 	var activationService *authconfig.ActivationService
 	if configRepository != nil && pool != nil {

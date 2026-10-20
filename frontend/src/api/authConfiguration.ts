@@ -186,7 +186,7 @@ function parseActivationResult(value: Partial<ActivationResult>): ActivationResu
   }
 }
 
-async function configurationRequest<T>(path: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
+export async function configurationRequest<T>(path: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(path, {
     method, credentials: 'same-origin', cache: 'no-store', signal,
     headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
