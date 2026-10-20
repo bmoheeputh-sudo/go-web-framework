@@ -77,7 +77,7 @@ export default function Sidebar({ items, desktop, expanded, mobileOpen, onToggle
         alignItems: showLabels ? 'flex-start' : 'center' }}>
         {/* Keep the original wide wordmark intact; a white backing preserves contrast in dark mode. */}
         {showLabels ? <Box sx={{ width: 140, maxWidth: '100%', p: 0.5, bgcolor: 'common.white', borderRadius: 0.5 }}>
-          <Box component="img" src={`${import.meta.env.BASE_URL}assets/vopak-logo.png`} alt="Vopak"
+          <Box component="img" src={`${import.meta.env.BASE_URL}assets/vopak-logo.png`} alt={t('brandLogoAlt')}
             width={1182} height={265} sx={{ display: 'block', width: '100%', height: 'auto', objectFit: 'contain' }} />
         </Box> : <Tooltip title={t('appName')} placement={placement}>
           <ShieldOutlined color="primary" titleAccess={t('appName')} sx={{ fontSize: 28 }} />

@@ -8,6 +8,7 @@ import { useQueryCache } from '../api/queries'
 import { useSession } from '../auth/session'
 import { useNotifications } from '../notifications/notifications'
 import { formatNumber } from '../i18n'
+import IdentityEnrollment from './IdentityEnrollment'
 
 type Run = { popup: Window; id?: string; stopped: boolean; timer?: ReturnType<typeof setTimeout>; deadlineTimer?: ReturnType<typeof setTimeout>; controller: AbortController }
 const testPath = (id: string) => `/api/admin/auth/tests/${encodeURIComponent(id)}`
@@ -105,6 +106,7 @@ export default function OIDCConnectionTest({ revision, disabled }: { revision: A
         <Typography>{t('testIdentity')}</Typography>
         <Typography><bdi>{result.tested_identity.issuer}</bdi> · <bdi>{result.tested_identity.subject}</bdi></Typography>
       </>}
+      {result.evidence_id && <IdentityEnrollment key={result.evidence_id} revision={revision} result={result} disabled={disabled || busy} />}
     </Stack>}
   </Stack>
 }

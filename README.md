@@ -18,8 +18,11 @@ Reusable web application framework.
 
 Requirements: Go matching `backend/go.mod`, and Node/npm compatible with the
 frontend lockfile (the current setup uses Node 20.20 and npm 11). No external
-identity credentials or PostgreSQL database are needed for Local DEV authentication.
-Enabling the optional RBAC/Admin Portal requires PostgreSQL with every provider.
+identity credentials are needed for Local DEV authentication. Phase 9.2.5D requires
+PostgreSQL with migration 000006 and a valid `AUTH_CONFIG_DEPLOYMENT` for the
+read-only startup policy check, even when RBAC is disabled. Configure `DB_*`
+and a stable, deployment-specific identity before starting; do not change scope
+to work around a policy failure.
 
 In the repository root, create your local backend configuration without replacing
 an existing `.env`:
@@ -509,11 +512,10 @@ No trailing slash or path is accepted. HTTP is allowed only on loopback in
 Host or forwarded headers. All RBAC writes require that exact Origin and JSON.
 Do not add permissive CORS middleware. React sends same-origin requests.
 
-`RBAC_ENABLED` defaults to false to preserve existing database-free Local DEV and
-IAP authentication. The account/admin APIs then return 503 for authenticated
-requests, granting no access. When enabled, unavailable PostgreSQL or missing RBAC
-tables stop startup. OIDC shares its existing pool; Local DEV and IAP open a pool
-for authorization only. `/api/health`, `/api/auth/me`, OIDC callbacks/sessions, and
+`RBAC_ENABLED` defaults to false; account/admin APIs then return 503 for
+authenticated requests, granting no access. PostgreSQL is always required for
+the startup policy check. When RBAC is enabled, missing RBAC tables also stop
+startup. Policy checks, OIDC sessions and authorization reuse the same pool. `/api/health`, `/api/auth/me`, OIDC callbacks/sessions, and
 IAP per-request verification retain their existing behavior. Disabling a framework
 user denies RBAC access immediately, but does not revoke their external identity
 or invalidate `/api/auth/me` authentication responses.
@@ -1735,9 +1737,10 @@ Configure `RBAC_ENABLED=true`, the existing database/origin settings,
 `AUTH_CONFIG_DEPLOYMENT`, `APP_ENV`, `AUTH_ENCRYPTION_KEY_ID` and
 `AUTH_ENCRYPTION_KEY` using the key custody instructions above. Migration 000005
 must already be installed through the approved manual workflow; these APIs never
-apply migrations. Configuration is read at process startup. Missing/invalid scope
-or encryption configuration makes the protected management service return 503;
-it does not break environment-based login. Missing tables, database outages,
+apply migrations. Configuration is read at process startup. As of Phase 9.2.5D,
+missing/invalid scope or unreadable startup policy stops startup (migration 000006
+is required). Missing/invalid encryption configuration still makes the protected
+management service return 503 without replacing the environment login provider. Missing tables, database outages,
 audit failures and unavailable historical encryption keys likewise fail closed.
 No replacement key or runtime provider is created automatically.
 
@@ -2039,12 +2042,31 @@ Migration 000006 adds deployment activation heads, immutable transition history,
 durable test evidence and explicit session/flow bindings. It creates no active
 provider, enrolls no deployment and leaves environment-driven authentication
 unchanged. The internal keyring remains compatible with existing single-key
-configuration. Live tests and runtime authentication do not use the new activation
-persistence yet.
+configuration. Phase 9.2.5D now uses the policy for read-only startup enforcement
+and persists successful isolated connection-test evidence; provider activation
+remains disabled.
 
 See [the persistence design, compatibility policy, keyring format and manual
 migration instructions](docs/auth-activation-persistence.md). Apply only after
 approval; the supported migration workflow remains forward-only.
+
+## Administrator identity enrollment and startup protection (Phase 9.2.5D)
+
+See [the enrollment workflow and startup policy](docs/auth-identity-enrollment.md).
+Settings → Authentication now supports an explicit role grant for the identity
+verified by a fresh successful approved-revision OIDC connection test. No user or
+role is created by the test itself, and identities are never linked by email.
+
+`POST /api/admin/auth/settings/{id}/enroll` requires `admin.manage`, the original
+test administrator, same-origin JSON and explicit confirmation. It accepts only
+`evidence_id`, `expected_generation`, `role` and `confirm`. Supported roles are
+`Admin`, `User` and `Viewer`; existing roles are retained. Enrollment and both
+identity/role audit events commit atomically. No new migration is required.
+
+Startup always checks the trusted deployment/environment policy before preparing
+an environment provider. Database-required policy fails closed until database
+runtime loading is implemented. Missing or unreadable policy storage is never a
+reason to start Local DEV. There is no fallback flag or activation endpoint.
 
 ## Backup to GitHub and Google Drive
 

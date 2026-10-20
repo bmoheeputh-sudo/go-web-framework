@@ -1,10 +1,11 @@
 # Authentication activation persistence (Phase 9.2.5B)
 
-This phase supplies storage only. It does not switch providers, enroll deployments,
-create an active revision, modify environment settings, add HTTP endpoints, or
-change live connection-test behavior. `AUTH_PROVIDER` remains authoritative.
-Local DEV still uses the configured fixed identity and does not create PostgreSQL
-OIDC sessions. OIDC and IAP startup, middleware, callbacks, and logout are unchanged.
+Phase B supplied storage only. Subsequent phases add an environment-only runtime
+dispatcher and [startup protection and explicit identity enrollment](auth-identity-enrollment.md).
+No phase implemented so far switches providers, enrolls deployment activation
+heads or creates an active revision. Environment authentication remains authoritative
+only when startup policy permits it. Local DEV still uses the configured fixed
+identity and does not create PostgreSQL OIDC sessions.
 
 ## Migration 000006
 
@@ -48,13 +49,15 @@ names, parameterized values and sanitized errors. Missing heads yield a virtual
 bounded and paginated. No reader decrypts secrets or writes configuration.
 
 `Repository.recordTestEvidence` and its input `verifiedTestEvidence` are
-package-private, for future trusted verification code inside `authconfig` only.
+package-private, for trusted verification code inside `authconfig` only.
 The input has no exported or JSON-decodable fields and accepts no actor or scope.
 The verifier must construct it only after signature, issuer, audience, expiry,
 state, nonce, PKCE and browser-correlation verification. The method obtains the
 actor from `AdminTransaction`, rechecks the approved revision, issuer and generation,
 and inserts evidence and a fixed-schema audit event atomically. Audit failure rolls
-back the evidence. Existing live test endpoints do **not** call this method yet.
+back the evidence. Phase D wires successful isolated callbacks through the shared
+transaction helper so test completion, evidence and both audit events commit
+together. An explicit subsequent administrator action is required to enroll a user.
 
 `Evidence` requires exact scope, revision, generation and purpose, and filters
 expired evidence and revisions no longer at the approved generation. An isolated
@@ -160,9 +163,9 @@ prevents ordinary package/HTTP callers from submitting success, not a malicious
 server or database owner. Secure evidence is a verifier trust boundary, not database
 cryptographic attestation.
 
-No dispatcher, live evidence writer, activation API, listener, provider switching,
-retention worker, operator recovery tool or administrator enrollment is introduced.
-No API can activate a provider in this phase. Evidence/history retention is immutable;
+The dispatcher and explicit identity enrollment were added after Phase B, but no
+activation API, listener, provider switching, retention worker or operator recovery
+tool exists. No API can activate a provider. Evidence/history retention is immutable;
 a future reviewed retention policy must preserve required recovery/audit records.
 
 Tests use `internal/testdb` disposable PostgreSQL clusters with private Unix sockets,

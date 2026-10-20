@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/auth"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func developmentEnvironment() map[string]string {
@@ -23,12 +24,26 @@ func envReader(environment map[string]string) func(string) string {
 	return func(key string) string { return environment[key] }
 }
 
+func TestStartupProviderFailuresNeverFallBackToConfiguredLocalIdentity(t *testing.T) {
+	for _, provider := range []string{"oidc", "google_iap", "unsupported"} {
+		t.Run(provider, func(t *testing.T) {
+			env := developmentEnvironment() // valid local identity remains present
+			env["AUTH_PROVIDER"] = provider
+			env["AUTH_CONFIG_DEPLOYMENT"] = "test-deployment"
+			server, err := newProviderTestServer(envReader(env))
+			if err == nil || server != nil {
+				t.Fatal("failed provider preparation returned a running fallback")
+			}
+		})
+	}
+}
+
 func TestLocalDevStartupGuards(t *testing.T) {
 	for _, environment := range []string{"", "TEST", "PRD", "test", "production", "staging", "dev"} {
 		t.Run("environment/"+environment, func(t *testing.T) {
 			values := developmentEnvironment()
 			values["APP_ENV"] = environment
-			if _, err := newServer(envReader(values)); err == nil {
+			if _, err := newProviderTestServer(envReader(values)); err == nil {
 				t.Fatal("unsafe environment accepted")
 			}
 		})
@@ -37,7 +52,7 @@ func TestLocalDevStartupGuards(t *testing.T) {
 		t.Run("address/"+address, func(t *testing.T) {
 			values := developmentEnvironment()
 			values["HTTP_ADDR"] = address
-			if _, err := newServer(envReader(values)); err == nil {
+			if _, err := newProviderTestServer(envReader(values)); err == nil {
 				t.Fatal("unsafe address accepted")
 			}
 		})
@@ -45,7 +60,7 @@ func TestLocalDevStartupGuards(t *testing.T) {
 	for _, address := range []string{"", "127.0.0.1:8080", "[::1]:8080"} {
 		values := developmentEnvironment()
 		values["HTTP_ADDR"] = address
-		server, err := newServer(envReader(values))
+		server, err := newProviderTestServer(envReader(values))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -62,7 +77,7 @@ func TestInvalidProviderConfigurationFailsClosed(t *testing.T) {
 	for _, provider := range []string{"oidc", "google_iap", "iap", "LOCAL_DEV", "local_dev ", "unknown"} {
 		values := developmentEnvironment()
 		values["AUTH_PROVIDER"] = provider
-		if _, err := newServer(envReader(values)); err == nil {
+		if _, err := newProviderTestServer(envReader(values)); err == nil {
 			t.Errorf("unsupported provider %q accepted", provider)
 		}
 	}
@@ -77,7 +92,7 @@ func TestIAPStartupAndRoutesWithoutDatabase(t *testing.T) {
 				// IAP must not initialize OIDC sessions or require DB configuration.
 				"DB_HOST": "invalid.example.invalid", "DB_PORT": "invalid",
 			}
-			server, err := newServer(envReader(values))
+			server, err := newProviderTestServer(envReader(values))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -100,7 +115,7 @@ func TestIAPStartupAndRoutesWithoutDatabase(t *testing.T) {
 				}
 			}
 			delete(values, "IAP_AUDIENCE")
-			if _, err := newServer(envReader(values)); err == nil {
+			if _, err := newProviderTestServer(envReader(values)); err == nil {
 				t.Fatal("IAP started without explicit audience")
 			}
 		})
@@ -108,7 +123,7 @@ func TestIAPStartupAndRoutesWithoutDatabase(t *testing.T) {
 }
 
 func TestPublicAuthConfigAndStableRouteMethods(t *testing.T) {
-	server, err := newServer(envReader(developmentEnvironment()))
+	server, err := newProviderTestServer(envReader(developmentEnvironment()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +150,7 @@ func TestPublicAuthConfigAndStableRouteMethods(t *testing.T) {
 func TestPublicHealthAndUnauthenticatedMe(t *testing.T) {
 	values := developmentEnvironment()
 	delete(values, "AUTH_PROVIDER") // Neither development nor profile variables implicitly enable authentication.
-	server, err := newServer(envReader(values))
+	server, err := newProviderTestServer(envReader(values))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +184,7 @@ func TestPublicHealthAndUnauthenticatedMe(t *testing.T) {
 }
 
 func TestAuthenticatedMe(t *testing.T) {
-	server, err := newServer(envReader(developmentEnvironment()))
+	server, err := newProviderTestServer(envReader(developmentEnvironment()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +253,7 @@ func TestAuthenticationFailuresDoNotLeakOrReachHandler(t *testing.T) {
 }
 
 func TestLocalDevRemoteRequestDeniedButHealthPublic(t *testing.T) {
-	server, err := newServer(envReader(developmentEnvironment()))
+	server, err := newProviderTestServer(envReader(developmentEnvironment()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,12 +297,12 @@ func TestRBACConfigurationAndDisabledRoutes(t *testing.T) {
 	} {
 		values := developmentEnvironment()
 		change(values)
-		if server, err := newServer(envReader(values)); err == nil {
+		if server, err := newProviderTestServer(envReader(values)); err == nil {
 			server.closeResources()
 			t.Fatal("invalid RBAC startup accepted")
 		}
 	}
-	server, err := newServer(envReader(developmentEnvironment()))
+	server, err := newProviderTestServer(envReader(developmentEnvironment()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +328,7 @@ func TestAuthConfigurationManagementUnavailablePreservesRuntime(t *testing.T) {
 		if !authenticated {
 			delete(values, "AUTH_PROVIDER")
 		}
-		app, err := newServer(envReader(values))
+		app, err := newProviderTestServer(envReader(values))
 		if err != nil {
 			t.Fatal("management configuration changed runtime startup", err)
 		}
@@ -354,4 +369,9 @@ func TestAuthConfigurationManagementUnavailablePreservesRuntime(t *testing.T) {
 			}
 		}
 	}
+}
+
+// Provider tests isolate policy I/O; production newServer never uses this seam.
+func newProviderTestServer(getenv func(string) string) (*application, error) {
+	return newServerWithPolicy(getenv, func(func(string) string) (*pgxpool.Pool, error) { return nil, nil })
 }

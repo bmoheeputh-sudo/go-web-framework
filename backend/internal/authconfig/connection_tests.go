@@ -21,15 +21,17 @@ import (
 const testLifetime = 5 * time.Minute
 
 type connectionResult struct {
-	ID          string         `json:"id"`
-	RevisionID  string         `json:"revision_id"`
-	Version     int64          `json:"configuration_version"`
-	Generation  int64          `json:"generation"`
-	Status      string         `json:"status"`
-	Expires     time.Time      `json:"expires_at"`
-	CallbackURI string         `json:"callback_uri"`
-	Reason      string         `json:"reason,omitempty"`
-	Identity    *auth.Identity `json:"tested_identity,omitempty"`
+	ID                string         `json:"id"`
+	RevisionID        string         `json:"revision_id"`
+	Version           int64          `json:"configuration_version"`
+	Generation        int64          `json:"generation"`
+	Status            string         `json:"status"`
+	Expires           time.Time      `json:"expires_at"`
+	CallbackURI       string         `json:"callback_uri"`
+	Reason            string         `json:"reason,omitempty"`
+	Identity          *auth.Identity `json:"tested_identity,omitempty"`
+	EvidenceID        string         `json:"evidence_id,omitempty"`
+	EvidenceExpiresAt *time.Time     `json:"evidence_expires_at,omitempty"`
 }
 type connectionTest struct {
 	mu                     sync.Mutex
@@ -68,46 +70,74 @@ func (r *Repository) testTransaction(ctx context.Context, id string, generation 
 	var m Metadata
 	err := r.transaction(ctx, func(ctx context.Context, tx pgx.Tx, actor access.User) error {
 		var err error
-		m, err = r.get(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		if m.Generation != generation {
-			return ErrConflict
-		}
-		if m.Provider != auth.OIDC || m.Status != Approved {
-			return ErrInvalid
-		}
-		if secret != nil {
-			*secret, err = r.readSecret(ctx, tx, m)
-			if err != nil {
-				return err
-			}
-		}
-		if action == "" {
-			return nil
-		}
-		details := struct {
-			TestID       string `json:"test_id"`
-			Generation   int64  `json:"generation"`
-			Version      int64  `json:"configuration_version"`
-			Outcome      string `json:"outcome"`
-			IdentityHash string `json:"identity_hash,omitempty"`
-		}{TestID: testID, Generation: generation, Version: m.Version, Outcome: outcome}
-		if identity != nil {
-			sum := sha256.Sum256([]byte(identity.Issuer + "\x00" + identity.Subject))
-			details.IdentityHash = hex.EncodeToString(sum[:])
-		}
-		if access.RecordAudit(ctx, tx, actor.ID, action, id, details) != nil {
-			return ErrAudit
-		}
-		return nil
+		m, err = r.testTransactionTx(ctx, tx, actor, id, generation, testID, action, outcome, identity, secret)
+		return err
 	})
 	if err != nil && secret != nil {
 		clear(secret.value)
 	}
 	return m, err
 }
+func (r *Repository) testTransactionTx(ctx context.Context, tx pgx.Tx, actor access.User, id string, generation int64, testID, action, outcome string, identity *auth.Identity, secret *Secret) (Metadata, error) {
+	var m Metadata
+	var err error
+	m, err = r.get(ctx, tx, id)
+	if err != nil {
+		return Metadata{}, err
+	}
+	if m.Generation != generation {
+		return Metadata{}, ErrConflict
+	}
+	if m.Provider != auth.OIDC || m.Status != Approved {
+		return Metadata{}, ErrInvalid
+	}
+	if secret != nil {
+		*secret, err = r.readSecret(ctx, tx, m)
+		if err != nil {
+			return Metadata{}, err
+		}
+	}
+	if action == "" {
+		return m, nil
+	}
+	details := struct {
+		TestID       string `json:"test_id"`
+		Generation   int64  `json:"generation"`
+		Version      int64  `json:"configuration_version"`
+		Outcome      string `json:"outcome"`
+		IdentityHash string `json:"identity_hash,omitempty"`
+	}{TestID: testID, Generation: generation, Version: m.Version, Outcome: outcome}
+	if identity != nil {
+		sum := sha256.Sum256([]byte(identity.Issuer + "\x00" + identity.Subject))
+		details.IdentityHash = hex.EncodeToString(sum[:])
+	}
+	if access.RecordAudit(ctx, tx, actor.ID, action, id, details) != nil {
+		return Metadata{}, ErrAudit
+	}
+	return m, nil
+}
+
+// Only the correlated callback calls this after cryptographic verification.
+func (r *Repository) completeVerifiedTest(ctx context.Context, e *connectionTest, identity auth.Identity) (TestEvidence, error) {
+	var evidence TestEvidence
+	err := r.transaction(ctx, func(ctx context.Context, tx pgx.Tx, actor access.User) error {
+		if time.Now().After(e.result.Expires) {
+			return ErrConflict
+		}
+		if _, err := r.testTransactionTx(ctx, tx, actor, e.result.RevisionID, e.result.Generation, e.result.ID, "auth_config.test_finished", "succeeded", &identity, nil); err != nil {
+			return err
+		}
+		now := time.Now()
+		var err error
+		evidence, err = r.recordTestEvidenceTx(ctx, tx, actor, verifiedTestEvidence{revisionID: e.result.RevisionID, revisionGeneration: e.result.Generation, identity: identity, purpose: IsolatedConnection, completedAt: now, expiresAt: now.Add(5 * time.Minute)})
+		return err
+	})
+	if err != nil {
+		return TestEvidence{}, err
+	}
+	return evidence, nil
+}
+
 func (s *connectionTests) get(id string) *connectionTest {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -175,7 +205,17 @@ func (s *connectionTests) finish(ctx context.Context, e *connectionTest, status,
 	if time.Now().After(e.result.Expires) {
 		status, reason, identity = "expired", "expired", nil
 	}
-	_, err := s.repo.testTransaction(ctx, e.result.RevisionID, e.result.Generation, e.result.ID, "auth_config.test_finished", status, identity, nil)
+	var err error
+	if status == "succeeded" && identity != nil {
+		var evidence TestEvidence
+		evidence, err = s.repo.completeVerifiedTest(ctx, e, *identity)
+		if err == nil {
+			e.result.EvidenceID = evidence.ID
+			e.result.EvidenceExpiresAt = &evidence.ExpiresAt
+		}
+	} else {
+		_, err = s.repo.testTransaction(ctx, e.result.RevisionID, e.result.Generation, e.result.ID, "auth_config.test_finished", status, identity, nil)
+	}
 	if err != nil {
 		status, reason, identity = "failed", "authorization_or_audit_unavailable", nil
 	}

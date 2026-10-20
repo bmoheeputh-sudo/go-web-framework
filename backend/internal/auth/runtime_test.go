@@ -220,6 +220,59 @@ func TestRuntimeRequestConsistentConcurrentSnapshots(t *testing.T) {
 	wg.Wait()
 }
 
+func TestRuntimeNestedCaptureDoesNotReloadUnavailableSnapshot(t *testing.T) {
+	m := runtimeFor(t, runtimeLocal(t))
+	mux := http.NewServeMux()
+	m.RegisterRoutes(mux)
+	h := m.Capture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured, _ := m.snapshot(r.Context())
+		// Test-only fault injection. No production API can remove the snapshot.
+		m.current.Store(nil)
+		defer m.current.Store(captured)
+		status, ok := m.Status(r.Context())
+		if !ok || status.Provider != LocalDev {
+			t.Fatal("status reloaded unavailable global state")
+		}
+		m.Capture(mux).ServeHTTP(w, r)
+	}))
+	for _, path := range []string{"/api/auth/me", "/api/auth/config"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, runtimeRequestFor("GET", path))
+		if w.Code != 200 {
+			t.Fatal("downstream authentication reloaded snapshot", path, w.Code)
+		}
+	}
+	m.current.Store(nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, runtimeRequestFor("GET", "/api/auth/me"))
+	if w.Code != 503 {
+		t.Fatal("a new request did not fail closed without a snapshot")
+	}
+}
+
+func TestRuntimeRefusedActivationRetainsOIDCWithoutLocalFallback(t *testing.T) {
+	m := runtimeFor(t, newTestIssuer(t).provider(t))
+	original := m.current.Load()
+	local := runtimeFor(t, runtimeLocal(t)).current.Load()
+	database := *original
+	database.status.Source = "database"
+	database.status.ActiveRevisionID = "unapproved-test-revision"
+	database.status.AppliedGeneration = 1
+	for _, candidate := range []*runtimeSnapshot{local, &database, nil} {
+		if m.publish(original, candidate) || m.current.Load() != original {
+			t.Fatal("refused activation changed applied authentication")
+		}
+	}
+	if m.publish(nil, local) { // initialization cannot overwrite an existing value
+		t.Fatal("initialization bypassed the publication policy")
+	}
+	w := httptest.NewRecorder()
+	runtimeRouter(m).ServeHTTP(w, runtimeRequestFor("GET", "/api/auth/me"))
+	if w.Code != 401 {
+		t.Fatal("failed publication fell back to loopback Local DEV identity")
+	}
+}
+
 func TestRuntimeIAPVerificationAndNoFallback(t *testing.T) {
 	f := newIAPFixture(t)
 	m := runtimeFor(t, f.provider)

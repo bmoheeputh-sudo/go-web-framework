@@ -208,6 +208,11 @@ func TestConnectionWorkflow(t *testing.T) {
 	if got.Status != "succeeded" || got.Identity == nil || got.Identity.Subject != "tested-subject" || got.RevisionID != m.ID || got.Generation != m.Generation {
 		t.Fatal("invalid successful result")
 	}
+	reader, _ := NewActivationReader(f.pool, f.repo.scope)
+	evidence, err := reader.Evidence(context.Background(), got.EvidenceID, m.ID, m.Generation, IsolatedConnection)
+	if err != nil || got.EvidenceExpiresAt == nil || evidence.Subject != got.Identity.Subject || evidence.Issuer != got.Identity.Issuer || evidence.ActorUserID != m.CreatedBy {
+		t.Fatal("verified callback did not persist scoped durable evidence", err)
+	}
 	callbackProbe(t, h, cookie, state, "synthetic-code")
 	if p.exchanges != 1 {
 		t.Fatal("token replay")
@@ -223,6 +228,35 @@ func TestConnectionWorkflow(t *testing.T) {
 		if strings.Contains(details, secret) {
 			t.Fatal("audit leaked sensitive material")
 		}
+	}
+	// Only a subsequent explicit admin operation can enroll the verified subject.
+	w := apiRequest(t, configHandler(f, f.repo, fixedAuth{f.identity}), "POST", settingsPath+"/"+m.ID+"/enroll", enrollBody(evidence, "Admin"), 200)
+	var enrolled access.User
+	if json.Unmarshal(w.Body.Bytes(), &enrolled) != nil || enrolled.Issuer != got.Identity.Issuer || enrolled.Subject != got.Identity.Subject || len(enrolled.Roles) != 1 || enrolled.Roles[0] != "Admin" {
+		t.Fatal("verified live-test evidence did not enroll exact identity")
+	}
+}
+
+func TestConnectionEvidenceAuditFailureCannotPublishSuccess(t *testing.T) {
+	f := newFixture(t)
+	m := approvedProbeRevision(t, f)
+	p := newMockConnectionIssuer(t)
+	s := newConnectionTests(f.repo, apiOrigin)
+	s.client = func(context.Context, string) (*http.Client, error) { return p.client(), nil }
+	h := probeHandler(f, s, f.identity)
+	result, cookie, state := startProbe(t, h, p, m)
+	_, err := f.owner.Exec(context.Background(), `CREATE FUNCTION framework.fail_test_evidence() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='auth_config.test_evidence_recorded' THEN RAISE EXCEPTION 'synthetic'; END IF; RETURN NEW; END $$; CREATE TRIGGER fail_test_evidence BEFORE INSERT ON framework.audit_log FOR EACH ROW EXECUTE FUNCTION framework.fail_test_evidence()`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callbackProbe(t, h, cookie, state, "synthetic-code")
+	got := resultProbe(t, h, result.ID)
+	if got.Status != "failed" || got.EvidenceID != "" || got.Identity != nil {
+		t.Fatal("audit failure released usable evidence")
+	}
+	var count int
+	if err := f.owner.QueryRow(context.Background(), `SELECT (SELECT count(*) FROM framework.auth_test_evidence)+(SELECT count(*) FROM framework.audit_log WHERE action='auth_config.test_finished')`).Scan(&count); err != nil || count != 0 {
+		t.Fatal("partial test completion persisted", err)
 	}
 }
 func TestConnectionFailures(t *testing.T) {

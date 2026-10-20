@@ -244,26 +244,31 @@ func (s *Store) SetRoles(ctx context.Context, actor, target string, roles []stri
 		seen[r] = true
 	}
 	return s.mutate(ctx, actor, AdminManage, "", func(tx pgx.Tx) error {
-		before, err := scanUser(tx.QueryRow(ctx, userSelect+`WHERE u.id=$1`, target))
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrInvalid
-		}
-		if err != nil {
-			return ErrUnavailable
-		}
-		if _, err = tx.Exec(ctx, `DELETE FROM framework.user_roles WHERE user_id=$1`, target); err != nil {
-			return ErrUnavailable
-		}
-		for _, role := range roles {
-			if _, err = tx.Exec(ctx, `INSERT INTO framework.user_roles(user_id,role) VALUES($1,$2)`, target, role); err != nil {
-				return dbError(err)
-			}
-		}
-		if err = lastAdminGuard(ctx, tx); err != nil {
-			return err
-		}
-		return audit(ctx, tx, actor, "user.roles", target, map[string]any{"before": before.Roles, "after": roles})
+		return setRolesTx(ctx, tx, actor, target, roles)
 	})
+}
+
+// Caller must hold the shared mutation lock and have revalidated admin.manage.
+func setRolesTx(ctx context.Context, tx pgx.Tx, actor, target string, roles []string) error {
+	before, err := scanUser(tx.QueryRow(ctx, userSelect+`WHERE u.id=$1`, target))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrInvalid
+	}
+	if err != nil {
+		return ErrUnavailable
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM framework.user_roles WHERE user_id=$1`, target); err != nil {
+		return ErrUnavailable
+	}
+	for _, role := range roles {
+		if _, err = tx.Exec(ctx, `INSERT INTO framework.user_roles(user_id,role) VALUES($1,$2)`, target, role); err != nil {
+			return dbError(err)
+		}
+	}
+	if err = lastAdminGuard(ctx, tx); err != nil {
+		return err
+	}
+	return audit(ctx, tx, actor, "user.roles", target, map[string]any{"before": before.Roles, "after": roles})
 }
 func (s *Store) SetActive(ctx context.Context, actor, target string, active bool) error {
 	if !validID(target) {

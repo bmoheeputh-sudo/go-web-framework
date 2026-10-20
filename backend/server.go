@@ -27,6 +27,12 @@ type application struct {
 // newServer validates configuration before opening a listener. Unset authentication
 // preserves public health checks but grants no identity or protected-route access.
 func newServer(getenv func(string) string) (*application, error) {
+	return newServerWithPolicy(getenv, openStartupPolicy)
+}
+
+// The dependency seam is internal and used only by provider unit tests. Production
+// always opens and validates the authoritative policy before preparing a provider.
+func newServerWithPolicy(getenv func(string) string, policy func(func(string) string) (*pgxpool.Pool, error)) (result *application, resultErr error) {
 	rbacEnabled := false
 	if value := getenv("RBAC_ENABLED"); value != "" {
 		var err error
@@ -49,13 +55,24 @@ func newServer(getenv func(string) string) (*application, error) {
 			return nil, err
 		}
 	}
-	var pool *pgxpool.Pool
+	pool, err := policy(getenv)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if result == nil && pool != nil {
+			pool.Close()
+		}
+	}()
 	address := getenv("HTTP_ADDR")
 	if address == "" {
 		address = "127.0.0.1:8080"
 	}
 	var provider auth.Authenticator
 	closeResources := func() {}
+	if pool != nil {
+		closeResources = pool.Close
+	}
 	switch auth.Provider(getenv("AUTH_PROVIDER")) {
 	case "":
 	case auth.LocalDev:
@@ -102,9 +119,11 @@ func newServer(getenv func(string) string) (*application, error) {
 				return nil, errors.New("HTTP development requires a loopback HTTP_ADDR")
 			}
 		}
-		pool, err = database.Open(context.Background(), getenv)
-		if err != nil {
-			return nil, err
+		if pool == nil {
+			pool, err = database.Open(context.Background(), getenv)
+			if err != nil {
+				return nil, err
+			}
 		}
 		store, err := auth.NewPostgresStore(pool, sessions)
 		if err != nil {
@@ -216,4 +235,24 @@ func newHandlerWithModules(runtime *auth.Runtime, authorization *access.Store, o
 	handler.Handle("/api/modules", moduleHandler)
 	handler.Handle("/api/modules/", moduleHandler)
 	return handler, nil
+}
+
+func openStartupPolicy(getenv func(string) string) (*pgxpool.Pool, error) {
+	scope, err := authconfig.ScopeFromEnv(getenv)
+	if err != nil {
+		return nil, errors.New("authentication startup requires a valid deployment and environment scope")
+	}
+	pool, err := database.Open(context.Background(), getenv)
+	if err != nil {
+		return nil, errors.New("authentication startup policy unavailable; verify PostgreSQL configuration and schema")
+	}
+	reader, err := authconfig.NewActivationReader(pool, scope)
+	if err == nil {
+		err = reader.RequireEnvironmentStartup(context.Background())
+	}
+	if err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return pool, nil
 }

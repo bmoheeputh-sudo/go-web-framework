@@ -1,10 +1,16 @@
 # Runtime authentication dispatcher (Phase 9.2.5C)
 
+See the [focused security review](auth-runtime-security-review.md) for the
+startup-policy history, revision-bound callback requirements and
+resource cleanup needed before introducing provider transitions.
+
 Runtime authentication still comes exclusively from `AUTH_PROVIDER` and its
 environment settings. A database draft, approval, activation head, or successful
-connection test cannot change the running provider in this phase. Startup does
-not read activation heads or write configuration/activation records. Restart is
-still necessary to change environment configuration.
+connection test cannot change the running provider. Phase 9.2.5D now reads
+authoritative activation policy before provider construction and refuses startup
+when database authentication is required. Startup never writes policy. See
+[enrollment and startup protection](auth-identity-enrollment.md). Restart is still
+necessary to change environment configuration.
 
 ## Request consistency
 

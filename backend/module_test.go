@@ -21,23 +21,23 @@ func TestModuleConfigurationStartup(t *testing.T) {
 	for _, enabled := range []string{"unknown", "example,example", " example", "example,"} {
 		env := developmentEnvironment()
 		env["ENABLED_MODULES"] = enabled
-		if _, err := newServer(envReader(env)); err == nil || !strings.Contains(err.Error(), "ENABLED_MODULES") {
+		if _, err := newProviderTestServer(envReader(env)); err == nil || !strings.Contains(err.Error(), "ENABLED_MODULES") {
 			t.Fatalf("bad configuration %q: %v", enabled, err)
 		}
 	}
 	env := developmentEnvironment()
 	env["ENABLED_MODULES"] = "example"
-	if _, err := newServer(envReader(env)); err == nil || !strings.Contains(err.Error(), "RBAC_ENABLED") {
+	if _, err := newProviderTestServer(envReader(env)); err == nil || !strings.Contains(err.Error(), "RBAC_ENABLED") {
 		t.Fatal("modules started without RBAC", err)
 	}
 	env["RBAC_ENABLED"] = "true"
 	env["APP_ORIGIN"] = "http://127.0.0.1:5173"
 	delete(env, "AUTH_PROVIDER")
-	if _, err := newServer(envReader(env)); err == nil || !strings.Contains(err.Error(), "AUTH_PROVIDER") {
+	if _, err := newProviderTestServer(envReader(env)); err == nil || !strings.Contains(err.Error(), "AUTH_PROVIDER") {
 		t.Fatal("modules started without authentication", err)
 	}
 	env["AUTH_PROVIDER"] = "local_dev"
-	if _, err := newServer(envReader(env)); err == nil {
+	if _, err := newProviderTestServer(envReader(env)); err == nil {
 		t.Fatal("modules started without a configured database")
 	}
 }
@@ -48,7 +48,7 @@ func TestDisabledModuleRoutesInApplication(t *testing.T) {
 		if !authenticated {
 			delete(env, "AUTH_PROVIDER")
 		}
-		app, err := newServer(envReader(env))
+		app, err := newProviderTestServer(envReader(env))
 		if err != nil {
 			t.Fatal(err)
 		}

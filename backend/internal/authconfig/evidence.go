@@ -38,7 +38,7 @@ type TestEvidence struct {
 // cannot be decoded from request JSON or constructed by another package. Only a
 // trusted verifier in authconfig may construct it AFTER completing signature,
 // issuer, audience, expiration, state, nonce, PKCE and browser-correlation checks.
-// This phase does not wire it to any live endpoint. The database cannot attest
+// The isolated callback records it only after verification. The database cannot attest
 // to an OIDC handshake; the verifier and database owner remain trusted code.
 type verifiedTestEvidence struct {
 	revisionID         string
@@ -53,12 +53,36 @@ type verifiedTestEvidence struct {
 // verification metadata, or success flag. Authorization, revision and issuer are
 // checked again under AdminTransaction, and evidence/audit share one commit.
 func (r *Repository) recordTestEvidence(ctx context.Context, proof verifiedTestEvidence) (TestEvidence, error) {
+	if err := validateEvidence(proof); err != nil {
+		return TestEvidence{}, err
+	}
+	var evidence TestEvidence
+	err := r.transaction(ctx, func(ctx context.Context, tx pgx.Tx, actor access.User) error {
+		var err error
+		evidence, err = r.recordTestEvidenceTx(ctx, tx, actor, proof)
+		return err
+	})
+	if err != nil {
+		return TestEvidence{}, err
+	}
+	return evidence, nil
+}
+
+func validateEvidence(proof verifiedTestEvidence) error {
 	now := time.Now()
 	if !validID(proof.revisionID) || proof.revisionGeneration < 1 || !proof.purpose.valid() ||
 		proof.identity.Validate() != nil || proof.identity.Provider != auth.OIDC || len(proof.identity.Subject) > 1024 ||
 		proof.completedAt.IsZero() || proof.completedAt.After(now) || !proof.expiresAt.After(now) ||
 		!proof.expiresAt.After(proof.completedAt) || proof.expiresAt.Sub(proof.completedAt) > 5*time.Minute {
-		return TestEvidence{}, ErrInvalid
+		return ErrInvalid
+	}
+	return nil
+}
+
+// Shared by isolated test completion: evidence and both audit events commit together.
+func (r *Repository) recordTestEvidenceTx(ctx context.Context, tx pgx.Tx, actor access.User, proof verifiedTestEvidence) (TestEvidence, error) {
+	if err := validateEvidence(proof); err != nil {
+		return TestEvidence{}, err
 	}
 	var id [16]byte
 	if _, err := rand.Read(id[:]); err != nil {
@@ -69,36 +93,31 @@ func (r *Repository) recordTestEvidence(ctx context.Context, proof verifiedTestE
 	e := TestEvidence{ID: fmt.Sprintf("%x-%x-%x-%x-%x", id[0:4], id[4:6], id[6:8], id[8:10], id[10:16]), Scope: r.scope,
 		RevisionID: proof.revisionID, RevisionGeneration: proof.revisionGeneration, Issuer: proof.identity.Issuer,
 		Subject: proof.identity.Subject, Purpose: proof.purpose, CompletedAt: proof.completedAt, ExpiresAt: proof.expiresAt, VerificationVersion: 1}
-	err := r.transaction(ctx, func(ctx context.Context, tx pgx.Tx, actor access.User) error {
-		m, err := r.get(ctx, tx, e.RevisionID)
-		if err != nil {
-			return err
-		}
-		if m.Generation != e.RevisionGeneration {
-			return ErrConflict
-		}
-		if m.Status != Approved || m.Provider != auth.OIDC || m.IssuerURL != e.Issuer {
-			return ErrInvalid
-		}
-		e.ActorUserID = actor.ID
-		_, err = tx.Exec(ctx, `INSERT INTO framework.auth_test_evidence(id,deployment_id,environment,revision_id,revision_generation,
-          actor_user_id,issuer,subject,purpose,completed_at,expires_at,verification_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,1)`,
-			e.ID, e.DeploymentID, e.Environment, e.RevisionID, e.RevisionGeneration, e.ActorUserID, e.Issuer, e.Subject, e.Purpose, e.CompletedAt, e.ExpiresAt)
-		if err != nil {
-			return err
-		}
-		details := struct {
-			EvidenceID string          `json:"evidence_id"`
-			Generation int64           `json:"generation"`
-			Purpose    EvidencePurpose `json:"purpose"`
-		}{e.ID, e.RevisionGeneration, e.Purpose}
-		if access.RecordAudit(ctx, tx, actor.ID, "auth_config.test_evidence_recorded", e.RevisionID, details) != nil {
-			return ErrAudit
-		}
-		return nil
-	})
+
+	m, err := r.get(ctx, tx, e.RevisionID)
 	if err != nil {
 		return TestEvidence{}, err
+	}
+	if m.Generation != e.RevisionGeneration {
+		return TestEvidence{}, ErrConflict
+	}
+	if m.Status != Approved || m.Provider != auth.OIDC || m.IssuerURL != e.Issuer {
+		return TestEvidence{}, ErrInvalid
+	}
+	e.ActorUserID = actor.ID
+	_, err = tx.Exec(ctx, `INSERT INTO framework.auth_test_evidence(id,deployment_id,environment,revision_id,revision_generation,
+          actor_user_id,issuer,subject,purpose,completed_at,expires_at,verification_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,1)`,
+		e.ID, e.DeploymentID, e.Environment, e.RevisionID, e.RevisionGeneration, e.ActorUserID, e.Issuer, e.Subject, e.Purpose, e.CompletedAt, e.ExpiresAt)
+	if err != nil {
+		return TestEvidence{}, err
+	}
+	details := struct {
+		EvidenceID string          `json:"evidence_id"`
+		Generation int64           `json:"generation"`
+		Purpose    EvidencePurpose `json:"purpose"`
+	}{e.ID, e.RevisionGeneration, e.Purpose}
+	if access.RecordAudit(ctx, tx, actor.ID, "auth_config.test_evidence_recorded", e.RevisionID, details) != nil {
+		return TestEvidence{}, ErrAudit
 	}
 	return e, nil
 }
