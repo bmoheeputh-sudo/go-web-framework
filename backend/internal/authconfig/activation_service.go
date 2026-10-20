@@ -32,7 +32,22 @@ type PreparedActivation struct {
 	expires     time.Time
 	provider    *auth.PreparedOIDC
 	publication *auth.Publication
+	readiness   ActivationReadiness
 }
+
+// ActivationReadiness describes session impact before explicit confirmation.
+// It is not proof of activation eligibility: evidence and authorization are
+// rechecked by Activate. This value never contains credentials.
+type ActivationReadiness struct {
+	CurrentProvider          auth.Provider
+	CurrentSource            string
+	TargetRevisionID         string
+	ExpectedGeneration       int64
+	RequiresReauthentication bool
+	MaximumSessionGrace      time.Duration
+}
+
+func (p *PreparedActivation) Readiness() ActivationReadiness { return p.readiness }
 
 func (p *PreparedActivation) Close() {
 	if p != nil {
@@ -79,26 +94,10 @@ func (s *ActivationService) Prepare(ctx context.Context, id string, generation, 
 	if m.RedirectURI != s.callback {
 		return nil, ErrInvalid
 	}
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	client, err := s.client(ctx, m.IssuerURL)
+	provider, err := prepareRuntimeOIDC(ctx, m, secret, expectedActivation+1, s.sessions, s.store, s.client)
 	if err != nil {
-		return nil, ErrUnavailable
-	}
-	cleanup := func() { client.CloseIdleConnections() }
-	probe, err := newConnectionProbe(ctx, m, secret, m.RedirectURI, client)
-	if err != nil {
-		cleanup()
 		return nil, err
 	}
-	binding := auth.Binding{Source: "database", DeploymentID: m.DeploymentID, Environment: m.Environment, RevisionID: m.ID, ActivationGeneration: expectedActivation + 1, Issuer: m.IssuerURL, ClientID: m.ClientID, Purpose: "login"}
-	config := auth.OIDCConfig{AppEnv: m.Environment, Issuer: m.IssuerURL, ClientID: m.ClientID, ClientSecret: string(secret.value), RedirectURI: m.RedirectURI, AllowHTTPDevelopment: m.AllowHTTPDevelopment, Sessions: s.sessions}
-	provider, err := auth.NewPreparedDatabaseOIDC(config, probe.config.Endpoint, synchronousProbeKeys{probe}, probe.algorithms, client, s.store, binding, cleanup)
-	if err != nil {
-		cleanup()
-		return nil, ErrInvalid
-	}
-	probe.config.ClientSecret = "" // Key retrieval retains no client secret.
 	publication, err := s.runtime.Stage(provider, expectedActivation)
 	if err != nil {
 		provider.Close()
@@ -109,10 +108,43 @@ func (s *ActivationService) Prepare(ctx context.Context, id string, generation, 
 		provider.Close()
 		return nil, ErrConflict
 	}
-	return &PreparedActivation{service: s, metadata: m, actor: actor.ID, expected: expectedActivation, previous: status.ActiveRevisionID, expires: time.Now().Add(5 * time.Minute), provider: provider, publication: publication}, nil
+	readiness := ActivationReadiness{CurrentProvider: status.Provider, CurrentSource: status.Source,
+		TargetRevisionID: m.ID, ExpectedGeneration: expectedActivation,
+		RequiresReauthentication: status.Source == "environment", MaximumSessionGrace: 30 * time.Minute}
+	if readiness.RequiresReauthentication {
+		readiness.MaximumSessionGrace = 0
+	}
+	return &PreparedActivation{service: s, metadata: m, actor: actor.ID, expected: expectedActivation, previous: status.ActiveRevisionID, expires: time.Now().Add(5 * time.Minute), provider: provider, publication: publication, readiness: readiness}, nil
+}
+
+// Shared by administrator preparation and read-only startup. The caller owns
+// the secret; returned providers own their transport, never the shared DB pool.
+func prepareRuntimeOIDC(ctx context.Context, m Metadata, secret Secret, generation int64, sessions auth.SessionConfig, store *auth.PostgresStore, clientFactory func(context.Context, string) (*http.Client, error)) (*auth.PreparedOIDC, error) {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	client, err := clientFactory(ctx, m.IssuerURL)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	cleanup := func() { client.CloseIdleConnections() }
+	probe, err := newConnectionProbe(ctx, m, secret, m.RedirectURI, client)
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	binding := auth.Binding{Source: "database", DeploymentID: m.DeploymentID, Environment: m.Environment, RevisionID: m.ID, ActivationGeneration: generation, Issuer: m.IssuerURL, ClientID: m.ClientID, Purpose: "login"}
+	config := auth.OIDCConfig{AppEnv: m.Environment, Issuer: m.IssuerURL, ClientID: m.ClientID, ClientSecret: string(secret.value), RedirectURI: m.RedirectURI, AllowHTTPDevelopment: m.AllowHTTPDevelopment, Sessions: sessions}
+	provider, err := auth.NewPreparedDatabaseOIDC(config, probe.config.Endpoint, synchronousProbeKeys{probe}, probe.algorithms, client, store, binding, cleanup)
+	probe.config.ClientSecret = ""
+	if err != nil {
+		cleanup()
+		return nil, ErrInvalid
+	}
+	return provider, nil
 }
 
 type ActivationRequest struct {
+	AcknowledgeReauthentication                          bool
 	IsolatedEvidenceID, NormalEvidenceID, EnrolledUserID string
 	Transition                                           time.Duration
 	Reason                                               string
@@ -128,6 +160,11 @@ type ActivationResult struct {
 // finished. All administrator/evidence/head checks and writes share one lock/tx.
 func (s *ActivationService) Activate(ctx context.Context, p *PreparedActivation, request ActivationRequest) (ActivationResult, error) {
 	if p == nil || p.service != s || request.Transition < 0 || request.Transition > 30*time.Minute || !validID(request.IsolatedEvidenceID) || !validID(request.NormalEvidenceID) || !validID(request.EnrolledUserID) || strings.TrimSpace(request.Reason) == "" || len(request.Reason) > 512 {
+		return ActivationResult{}, ErrInvalid
+	}
+	// First cutover has no safely revision-bound credentials to drain. Do not
+	// silently accept a grace request or record a misleading history deadline.
+	if p.readiness.RequiresReauthentication && (!request.AcknowledgeReauthentication || request.Transition != 0) {
 		return ActivationResult{}, ErrInvalid
 	}
 	// Preflight refuses a second transition while one drains, and detects stale

@@ -99,8 +99,8 @@ Unproven legacy provenance requires reauthentication at database enrollment.
 ## Encryption keyring
 
 The format-v1 AES-256-GCM envelope and authenticated metadata are unchanged.
-`CipherFromEnv` still reads only `AUTH_ENCRYPTION_KEY_ID` and
-`AUTH_ENCRYPTION_KEY` (canonical padded standard Base64 of 32 random bytes).
+`CipherFromEnv` retains `AUTH_ENCRYPTION_KEY_ID` and
+`AUTH_ENCRYPTION_KEY` compatibility (canonical padded standard Base64 of 32 random bytes).
 Existing environment configuration and ciphertext remain compatible.
 
 The internal `NewKeyring(activeID, encodedKeys)` constructor supports up to 32
@@ -111,16 +111,16 @@ Unknown IDs, incorrect keys, malformed encodings and tampering fail safely. Ther
 is no automatic key creation, key replacement/deletion or re-encryption. Both pointer
 and value formatting are redacted; API metadata contains no key material.
 
-A **future, not currently parsed** multi-key environment contract can use:
+Startup rehydration also supports this optional multi-key environment contract:
 
 - `AUTH_ENCRYPTION_KEY_ID`: explicit active key identifier.
-- `AUTH_ENCRYPTION_KEYS_JSON`: a bounded JSON object mapping identifiers to canonical
+- `AUTH_ENCRYPTION_KEYS_JSON`: a JSON object of at most 8 KiB and 32 entries mapping identifiers to canonical
   Base64 keys, supplied through a protected deployment secret mechanism.
 - Existing `AUTH_ENCRYPTION_KEY` remains the single-key compatibility mode. Reject
   simultaneous single-key and multi-key configuration, duplicate JSON IDs, unknown
   fields, malformed keys and an active ID absent from the keyring.
 
-Do not set that future variable expecting it to work now. No real keys were rotated.
+The single-key and JSON settings are mutually exclusive. No real keys were rotated.
 Before future rotation, provision all required historical keys to every instance,
 verify decryption and backups, then select a new active key. Preserve keys while
 any active/draining/recovery revision needs them. Losing a key cannot be repaired

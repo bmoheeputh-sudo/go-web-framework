@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/access"
@@ -22,6 +23,7 @@ import (
 type application struct {
 	*http.Server
 	closeResources func()
+	authProvider   auth.Provider
 }
 
 // newServer validates configuration before opening a listener. Unset authentication
@@ -59,7 +61,11 @@ func newServerWithPolicy(getenv func(string) string, policy func(func(string) st
 	if err != nil {
 		return nil, err
 	}
+	var runtime *auth.Runtime
 	defer func() {
+		if result == nil && runtime != nil {
+			runtime.Close()
+		}
 		if result == nil && pool != nil {
 			pool.Close()
 		}
@@ -73,82 +79,109 @@ func newServerWithPolicy(getenv func(string) string, policy func(func(string) st
 	if pool != nil {
 		closeResources = pool.Close
 	}
-	switch auth.Provider(getenv("AUTH_PROVIDER")) {
-	case "":
-	case auth.LocalDev:
-		local, err := auth.NewLocalDev(getenv("APP_ENV"), auth.LocalDevConfig{
-			Subject: getenv("LOCAL_DEV_SUBJECT"), Email: getenv("LOCAL_DEV_EMAIL"),
-			DisplayName: getenv("LOCAL_DEV_DISPLAY_NAME"),
-		})
+	if pool != nil {
+		scope, err := authconfig.ScopeFromEnv(getenv)
 		if err != nil {
 			return nil, err
 		}
-		host, port, err := net.SplitHostPort(address)
-		if err != nil || !net.ParseIP(host).IsLoopback() {
-			return nil, errors.New("local_dev requires HTTP_ADDR with a literal loopback IP (for example 127.0.0.1:8080)")
-		}
-		number, err := strconv.Atoi(port)
-		if err != nil || number < 1 || number > 65535 {
-			return nil, errors.New("HTTP_ADDR requires a port between 1 and 65535")
-		}
-		provider = local
-	case auth.OIDC:
-		sessions, err := auth.SessionConfigFromEnv(getenv)
+		reader, err := authconfig.NewActivationReader(pool, scope)
 		if err != nil {
 			return nil, err
 		}
-		allowHTTP := false
-		if value := getenv("OIDC_ALLOW_HTTP_DEVELOPMENT"); value != "" {
-			allowHTTP, err = strconv.ParseBool(value)
-			if err != nil {
-				return nil, errors.New("OIDC_ALLOW_HTTP_DEVELOPMENT must be true or false")
+		runtime, err = authconfig.StartupRuntimeFromEnv(context.Background(), reader, getenv)
+		if err != nil {
+			return nil, errors.New("authentication runtime startup failed; verify authoritative policy, credentials and provider availability")
+		}
+		if runtime != nil {
+			if err := access.ValidateOrigin(origin, getenv("APP_ENV")); err != nil {
+				return nil, err
+			}
+			if strings.HasPrefix(origin, "http://") {
+				host, _, err := net.SplitHostPort(address)
+				if err != nil || !net.ParseIP(host).IsLoopback() {
+					return nil, errors.New("HTTP development requires a loopback HTTP_ADDR")
+				}
 			}
 		}
-		config := auth.OIDCConfig{
-			AppEnv: getenv("APP_ENV"), Issuer: getenv("OIDC_ISSUER_URL"),
-			ClientID: getenv("OIDC_CLIENT_ID"), ClientSecret: getenv("OIDC_CLIENT_SECRET"),
-			RedirectURI: getenv("OIDC_REDIRECT_URI"),
-			Sessions:    sessions, AllowHTTPDevelopment: allowHTTP,
-		}
-		if err := config.Validate(); err != nil {
-			return nil, err
-		}
-		if allowHTTP {
-			host, _, err := net.SplitHostPort(address)
-			if err != nil || !net.ParseIP(host).IsLoopback() {
-				return nil, errors.New("HTTP development requires a loopback HTTP_ADDR")
-			}
-		}
-		if pool == nil {
-			pool, err = database.Open(context.Background(), getenv)
+	}
+	if runtime == nil {
+		switch auth.Provider(getenv("AUTH_PROVIDER")) {
+		case "":
+		case auth.LocalDev:
+			local, err := auth.NewLocalDev(getenv("APP_ENV"), auth.LocalDevConfig{
+				Subject: getenv("LOCAL_DEV_SUBJECT"), Email: getenv("LOCAL_DEV_EMAIL"),
+				DisplayName: getenv("LOCAL_DEV_DISPLAY_NAME"),
+			})
 			if err != nil {
 				return nil, err
 			}
+			host, port, err := net.SplitHostPort(address)
+			if err != nil || !net.ParseIP(host).IsLoopback() {
+				return nil, errors.New("local_dev requires HTTP_ADDR with a literal loopback IP (for example 127.0.0.1:8080)")
+			}
+			number, err := strconv.Atoi(port)
+			if err != nil || number < 1 || number > 65535 {
+				return nil, errors.New("HTTP_ADDR requires a port between 1 and 65535")
+			}
+			provider = local
+		case auth.OIDC:
+			sessions, err := auth.SessionConfigFromEnv(getenv)
+			if err != nil {
+				return nil, err
+			}
+			allowHTTP := false
+			if value := getenv("OIDC_ALLOW_HTTP_DEVELOPMENT"); value != "" {
+				allowHTTP, err = strconv.ParseBool(value)
+				if err != nil {
+					return nil, errors.New("OIDC_ALLOW_HTTP_DEVELOPMENT must be true or false")
+				}
+			}
+			config := auth.OIDCConfig{
+				AppEnv: getenv("APP_ENV"), Issuer: getenv("OIDC_ISSUER_URL"),
+				ClientID: getenv("OIDC_CLIENT_ID"), ClientSecret: getenv("OIDC_CLIENT_SECRET"),
+				RedirectURI: getenv("OIDC_REDIRECT_URI"),
+				Sessions:    sessions, AllowHTTPDevelopment: allowHTTP,
+			}
+			if err := config.Validate(); err != nil {
+				return nil, err
+			}
+			if allowHTTP {
+				host, _, err := net.SplitHostPort(address)
+				if err != nil || !net.ParseIP(host).IsLoopback() {
+					return nil, errors.New("HTTP development requires a loopback HTTP_ADDR")
+				}
+			}
+			if pool == nil {
+				pool, err = database.Open(context.Background(), getenv)
+				if err != nil {
+					return nil, err
+				}
+			}
+			store, err := auth.NewPostgresStore(pool, sessions)
+			if err != nil {
+				pool.Close()
+				return nil, err
+			}
+			oidcProvider, err := auth.NewOIDC(context.Background(), config, store)
+			if err != nil {
+				pool.Close()
+				return nil, err
+			}
+			closeResources = pool.Close
+			provider = oidcProvider
+		case auth.GoogleIAP:
+			iap, err := auth.NewGoogleIAP(getenv("IAP_AUDIENCE"))
+			if err != nil {
+				return nil, err
+			}
+			provider = iap
+		default:
+			return nil, errors.New("unsupported AUTH_PROVIDER; use oidc, google_iap or local_dev, or leave unset for public health only")
 		}
-		store, err := auth.NewPostgresStore(pool, sessions)
-		if err != nil {
-			pool.Close()
-			return nil, err
-		}
-		oidcProvider, err := auth.NewOIDC(context.Background(), config, store)
-		if err != nil {
-			pool.Close()
-			return nil, err
-		}
-		closeResources = pool.Close
-		provider = oidcProvider
-	case auth.GoogleIAP:
-		iap, err := auth.NewGoogleIAP(getenv("IAP_AUDIENCE"))
-		if err != nil {
-			return nil, err
-		}
-		provider = iap
-	default:
-		return nil, errors.New("unsupported AUTH_PROVIDER; use oidc, google_iap or local_dev, or leave unset for public health only")
 	}
 	var authorization *access.Store
 	if rbacEnabled {
-		if provider == nil {
+		if provider == nil && runtime == nil {
 			return nil, errors.New("RBAC_ENABLED requires an explicit AUTH_PROVIDER")
 		}
 		if pool == nil {
@@ -171,22 +204,38 @@ func newServerWithPolicy(getenv func(string) string, policy func(func(string) st
 		closeResources()
 		return nil, err
 	}
-	runtime, err := auth.NewEnvironmentRuntime(provider, getenv("AUTH_CONFIG_DEPLOYMENT"), getenv("APP_ENV"))
-	if err != nil {
-		closeResources()
-		return nil, err
+	if runtime == nil {
+		runtime, err = auth.NewEnvironmentRuntime(provider, getenv("AUTH_CONFIG_DEPLOYMENT"), getenv("APP_ENV"))
+		if err != nil {
+			closeResources()
+			return nil, err
+		}
+	}
+	status, _, _ := runtime.ControlStatus()
+	if pool != nil && status.Source == "environment" {
+		scope, err := authconfig.ScopeFromEnv(getenv)
+		if err != nil {
+			return nil, err
+		}
+		reader, err := authconfig.NewActivationReader(pool, scope)
+		if err != nil {
+			return nil, err
+		}
+		if err = reader.RequireEnvironmentStartup(context.Background()); err != nil {
+			return nil, err
+		}
 	}
 	handler, err := newHandlerWithModules(runtime, authorization, origin, registry)
 	if err != nil {
 		closeResources()
 		return nil, err
 	}
-	// Management is optional and never supplies runtime authentication settings.
+	// Management APIs remain separate from the read-only startup loader.
 	// Missing/invalid management configuration yields protected 503 responses;
 	// it must not disable the existing environment-configured login provider.
 	configRepository, _ := authconfig.RepositoryFromEnv(authorization, getenv)
 	authconfig.Register(handler.ServeMux, runtime, authorization, origin, configRepository, runtime.Status)
-	return &application{closeResources: func() { runtime.Close(); closeResources() }, Server: &http.Server{
+	return &application{authProvider: status.Provider, closeResources: func() { runtime.Close(); closeResources() }, Server: &http.Server{
 		Addr: address, Handler: handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second, WriteTimeout: 30 * time.Second,
@@ -250,7 +299,7 @@ func openStartupPolicy(getenv func(string) string) (*pgxpool.Pool, error) {
 	if err == nil {
 		err = reader.RequireEnvironmentStartup(context.Background())
 	}
-	if err != nil {
+	if err != nil && !errors.Is(err, authconfig.ErrDatabaseRuntimeRequired) {
 		pool.Close()
 		return nil, err
 	}

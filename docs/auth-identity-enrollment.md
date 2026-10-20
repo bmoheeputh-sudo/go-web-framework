@@ -1,11 +1,11 @@
 # Administrator identity enrollment and startup policy (Phase 9.2.5D)
 
 Phase 9.2.5E adds a separate [internal activation foundation](auth-controlled-activation.md).
-The deployed portal and startup protections described here remain in effect;
+The deployed portal protections described here remain in effect. Startup now also
+supports [read-only database rehydration](auth-controlled-activation.md#read-only-startup-rehydration-and-lifecycle-hardening);
 no activation endpoint or operational recovery bypass has been added.
 
-This phase cannot activate a provider, load a database authenticator, or switch
-sessions. Environment authentication remains authoritative only when startup
+The enrollment workflow cannot activate a provider or switch sessions. Environment authentication remains authoritative only when startup
 policy permits it. Migration 000006 supplies all required tables; no new SQL or
 live database changes are needed for this phase.
 
@@ -21,7 +21,7 @@ The check is bounded and read-only; it does not use HTTP identities or
 | --- | --- |
 | No scoped head, no scoped active lifecycle/history, no database-required head elsewhere | Preserve configured environment provider |
 | Explicit environment head, generation zero, no revision/timestamp/history/active lifecycle | Preserve configured environment provider |
-| Scoped database-required head | Refuse: database runtime loading is not implemented |
+| Scoped database-required head | Rehydrate the committed OIDC runtime with validated keys/history, or refuse; never use the environment provider |
 | Missing/invalid scope, unreadable DB/schema, inconsistent or orphan activation state | Refuse with safe error |
 | Missing scoped head but another head requires database authentication | Refuse ambiguous scope; never assume Local DEV recovery |
 
@@ -34,9 +34,9 @@ Do not rename deployments or change DB targets to evade a failure. Operators mus
 protect both configuration values: software cannot establish that an entirely
 different, empty database is the intended deployment's authoritative database.
 
-The startup gate does not monitor later policy changes. Runtime activation,
-version-bound callback draining, multi-instance synchronization and reviewed
-offline recovery remain prerequisites before any activation. Keep heads in their
+The startup gate does not monitor later policy changes. Internal activation and
+version-bound callback draining now exist, but multi-instance synchronization and
+reviewed offline recovery remain prerequisites before live activation. Keep heads in their
 current unenrolled state until those features are reviewed and delivered.
 
 ## Trusted evidence and enrollment

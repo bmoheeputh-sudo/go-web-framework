@@ -23,7 +23,10 @@ func testCipher(t *testing.T, id string) *Cipher {
 		if name == "AUTH_ENCRYPTION_KEY_ID" {
 			return id
 		}
-		return base64.StdEncoding.EncodeToString(key[:])
+		if name == "AUTH_ENCRYPTION_KEY" {
+			return base64.StdEncoding.EncodeToString(key[:])
+		}
+		return ""
 	})
 	clear(key[:])
 	if err != nil {
@@ -116,7 +119,10 @@ func TestEncryptionKeyValidation(t *testing.T) {
 			if name == "AUTH_ENCRYPTION_KEY_ID" {
 				return "v1"
 			}
-			return encoded
+			if name == "AUTH_ENCRYPTION_KEY" {
+				return encoded
+			}
+			return ""
 		})
 		if !errors.Is(err, ErrKey) {
 			t.Fatal("invalid or missing key accepted")
@@ -130,7 +136,10 @@ func TestEncryptionKeyValidation(t *testing.T) {
 			if name == "AUTH_ENCRYPTION_KEY_ID" {
 				return id
 			}
-			return valid
+			if name == "AUTH_ENCRYPTION_KEY" {
+				return valid
+			}
+			return ""
 		})
 		if !errors.Is(err, ErrKey) {
 			t.Fatal("invalid key identifier accepted")
@@ -144,5 +153,34 @@ func TestAADFormatV1(t *testing.T) {
 	want := `{"Purpose":"gwf.auth-config.oidc-client-secret","Format":1,"KeyID":"key-v1","DeploymentID":"test-installation","Environment":"development","RevisionID":"11111111-1111-4111-8111-111111111111","ConfigurationVersion":1,"Creator":"22222222-2222-4222-8222-222222222222","Provider":"oidc","IssuerURL":"https://issuer.example.test","ClientID":"test-client","RedirectURI":"https://app.example.test/api/auth/callback","IAPAudience":"","AllowHTTPDevelopment":false}`
 	if string(aad(testMetadata(), 1, "key-v1")) != want {
 		t.Fatal("format-v1 AAD changed")
+	}
+}
+
+func TestCipherFromEnvMultipleKeys(t *testing.T) {
+	oldBytes, newBytes := make([]byte, 32), make([]byte, 32)
+	if _, err := rand.Read(oldBytes); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rand.Read(newBytes); err != nil {
+		t.Fatal(err)
+	}
+	oldKey, newKey := base64.StdEncoding.EncodeToString(oldBytes), base64.StdEncoding.EncodeToString(newBytes)
+	raw := `{"old":"` + oldKey + `","current":"` + newKey + `"}`
+	env := map[string]string{"AUTH_ENCRYPTION_KEY_ID": "current", "AUTH_ENCRYPTION_KEYS_JSON": raw}
+	get := func(k string) string { return env[k] }
+	c, err := CipherFromEnv(get)
+	if err != nil || c.keyID != "current" || len(c.keys) != 2 {
+		t.Fatal("valid keyring rejected")
+	}
+	for _, bad := range []string{`{}`, `null`, `[]`, `{"old":"` + oldKey + `"}`, `{"current":null}`, `{"current":"` + newKey + `","current":"` + newKey + `"}`, raw + `{}`, `{"current":"invalid"}`} {
+		env["AUTH_ENCRYPTION_KEYS_JSON"] = bad
+		if _, err := CipherFromEnv(get); !errors.Is(err, ErrKey) {
+			t.Fatal("malformed keyring accepted")
+		}
+	}
+	env["AUTH_ENCRYPTION_KEYS_JSON"] = raw
+	env["AUTH_ENCRYPTION_KEY"] = newKey
+	if _, err := CipherFromEnv(get); !errors.Is(err, ErrKey) {
+		t.Fatal("ambiguous key sources accepted")
 	}
 }

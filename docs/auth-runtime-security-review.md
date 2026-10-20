@@ -1,3 +1,9 @@
+> Startup follow-up: read-only database rehydration now implements committed-head
+> loading, historical-key selection and recorded-deadline restoration. See the
+> [current startup and lifecycle design](auth-controlled-activation.md#read-only-startup-rehydration-and-lifecycle-hardening).
+> The dated findings below describe earlier phases; multi-instance synchronization
+> and emergency recovery remain outstanding.
+
 # Phase 9.2.5C focused review — commit 52d81ff
 
 The original Phase C review changed tests, logo accessibility text and documentation only. It

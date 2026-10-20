@@ -9,6 +9,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/auth"
 )
 
 func main() {
@@ -23,10 +25,10 @@ func run() error {
 		return err
 	}
 	defer server.closeResources()
-	if os.Getenv("AUTH_PROVIDER") == "local_dev" {
+	if server.authProvider == auth.LocalDev {
 		log.Print("Local DEV authentication enabled: fixed development identity, no user sessions")
 	}
-	if os.Getenv("AUTH_PROVIDER") == "oidc" {
+	if server.authProvider == auth.OIDC {
 		log.Print("OIDC enabled with PostgreSQL sessions")
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -35,7 +37,7 @@ func run() error {
 	go func() {
 		defer close(done)
 		<-ctx.Done()
-		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdown, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 		defer cancel()
 		if server.Shutdown(shutdown) != nil {
 			_ = server.Close()

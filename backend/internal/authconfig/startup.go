@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-var ErrDatabaseRuntimeRequired = errors.New("database authentication is required; runtime activation loading is not implemented")
+var ErrDatabaseRuntimeRequired = errors.New("database authentication is required; environment startup is forbidden")
 
 // RequireEnvironmentStartup is read-only and independent of HTTP authorization.
 // One SQL statement observes a consistent policy snapshot. Unknown/missing schema

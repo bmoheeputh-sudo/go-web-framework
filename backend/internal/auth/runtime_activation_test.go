@@ -404,3 +404,174 @@ func TestDatabaseCallbackCrossingRetirementCannotMintSession(t *testing.T) {
 		t.Fatal("completed retired exchange leaked transport")
 	}
 }
+
+func TestInitialCutoverRejectsLocalDevAndEnvironmentCredentials(t *testing.T) {
+	for _, source := range []string{"local_dev", "legacy", "environment"} {
+		t.Run(source, func(t *testing.T) {
+			pool, _ := testdb.New(t)
+			testdb.Migrations(t, pool, "up")
+			ctx := context.Background()
+			f := newTestIssuer(t)
+			store, _ := NewPostgresStore(pool, testSessionConfig())
+			var provider Authenticator = runtimeLocal(t)
+			if source != "local_dev" {
+				p := f.provider(t)
+				p.store = store
+				provider = p
+			}
+			m := runtimeFor(t, provider)
+			defer m.Close()
+			h := runtimeRouter(m)
+			var session, flow *http.Cookie
+			var callback string
+			if source != "local_dev" {
+				location, login := runtimeLogin(t, h, f)
+				session = responseCookie(t, runtimeCallback(t, h, location, login), sessionCookie)
+				callback, flow = runtimeLogin(t, h, f)
+				if source == "environment" {
+					// Explicit environment bindings are supported by the schema but
+					// current environment writers use legacy rows. Create synthetic
+					// bound rows at insertion, never by relabeling a credential.
+					st, ft := oauth2.GenerateVerifier(), oauth2.GenerateVerifier()
+					_, err := pool.Exec(ctx, `INSERT INTO framework.sessions(token_hash,issuer,subject,provider,expires_at,binding_source,deployment_id,environment,client_id)
+ SELECT $1,issuer,subject,provider,expires_at,'environment','test-deployment','development','client-id' FROM framework.sessions WHERE token_hash=$2`, tokenHash(st), tokenHash(session.Value))
+					if err != nil {
+						t.Fatal(err)
+					}
+					_, err = pool.Exec(ctx, `INSERT INTO framework.oidc_login_flows(token_hash,state_hash,nonce,pkce_verifier,expires_at,binding_source,deployment_id,environment,issuer,client_id)
+ SELECT $1,state_hash,nonce,pkce_verifier,expires_at,'environment','test-deployment','development',$3,'client-id' FROM framework.oidc_login_flows WHERE token_hash=$2`, tokenHash(ft), tokenHash(flow.Value), f.server.URL)
+					if err != nil {
+						t.Fatal(err)
+					}
+					session.Value, flow.Value = st, ft
+				}
+			}
+			request := runtimeRequestFor("GET", "/api/auth/me")
+			if session != nil {
+				request.AddCookie(session)
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, request)
+			if w.Code != 200 {
+				t.Fatal("environment authentication broken before cutover", w.Code)
+			}
+			var sessionBefore, flowBefore Binding
+			var activity time.Time
+			if session != nil {
+				var err error
+				sessionBefore, err = store.SessionBinding(ctx, session.Value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				flowBefore, err = store.FlowBinding(ctx, flow.Value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = pool.QueryRow(ctx, `SELECT last_activity_at FROM framework.sessions WHERE token_hash=$1`, tokenHash(session.Value)).Scan(&activity); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Even the exact same issuer/client must not infer revision membership.
+			runtimeRevision(t, pool, revisionOne, 1, "", f.server.URL)
+			var closed atomic.Int32
+			candidate := preparedRuntime(t, f, store, revisionOne, 1, &closed)
+			publication, err := m.Stage(candidate, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = publication.Commit(time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			status, _, _ := m.ControlStatus()
+			if status.TransitionState != "none" || status.PreviousProvider != "" || status.PreviousRevisionID != "" {
+				t.Fatal("initial transition incorrectly drains an environment provider")
+			}
+			w = httptest.NewRecorder()
+			h.ServeHTTP(w, request)
+			if w.Code != 401 {
+				t.Fatal("environment identity survived initial cutover", w.Code)
+			}
+			if session != nil {
+				if runtimeCallback(t, h, callback, flow).Code != 401 {
+					t.Fatal("environment callback admitted after cutover")
+				}
+				after, err := store.SessionBinding(ctx, session.Value)
+				if err != nil || after != sessionBefore {
+					t.Fatal("session reclassified", err)
+				}
+				fb, err := store.FlowBinding(ctx, flow.Value)
+				if err != nil || fb != flowBefore {
+					t.Fatal("flow consumed or reclassified", err)
+				}
+				var afterActivity time.Time
+				if err = pool.QueryRow(ctx, `SELECT last_activity_at FROM framework.sessions WHERE token_hash=$1`, tokenHash(session.Value)).Scan(&afterActivity); err != nil || !afterActivity.Equal(activity) {
+					t.Fatal("denied credential touched activity", err)
+				}
+			}
+			// Fresh database login is available; rejection does not create lockout
+			// by disabling the newly configured login route.
+			location, login := runtimeLogin(t, h, f)
+			fresh := responseCookie(t, runtimeCallback(t, h, location, login), sessionCookie)
+			binding, err := store.SessionBinding(ctx, fresh.Value)
+			if err != nil || !binding.MatchesDatabase(candidate.binding) {
+				t.Fatal("fresh login not revision-bound", err)
+			}
+		})
+	}
+}
+
+func TestDrainingDeadlineRejectsPendingCallbackAndSession(t *testing.T) {
+	pool, _ := testdb.New(t)
+	testdb.Migrations(t, pool, "up")
+	f := newTestIssuer(t)
+	store, _ := NewPostgresStore(pool, testSessionConfig())
+	m := runtimeFor(t, runtimeLocal(t))
+	defer m.Close()
+	h := runtimeRouter(m)
+	var closed1, closed2 atomic.Int32
+	runtimeRevision(t, pool, revisionOne, 1, "", f.server.URL)
+	p1 := preparedRuntime(t, f, store, revisionOne, 1, &closed1)
+	first, err := m.Stage(p1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = first.Commit(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	location, flow := runtimeLogin(t, h, f)
+	session := responseCookie(t, runtimeCallback(t, h, location, flow), sessionCookie)
+	pending, pendingFlow := runtimeLogin(t, h, f)
+	runtimeRevision(t, pool, revisionTwo, 2, revisionOne, f.server.URL)
+	p2 := preparedRuntime(t, f, store, revisionTwo, 2, &closed2)
+	next, err := m.Stage(p2, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(100 * time.Millisecond)
+	if err = next.Commit(deadline); err != nil {
+		t.Fatal(err)
+	}
+	// Wait for the actual published deadline, without changing a provider lease.
+	time.Sleep(time.Until(deadline) + 10*time.Millisecond)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, runtimeRequestFor("GET", "/api/auth/me", session))
+	if w.Code != 401 {
+		t.Fatal("session outlived transition", w.Code)
+	}
+	if runtimeCallback(t, h, pending, pendingFlow).Code != 401 {
+		t.Fatal("pending callback outlived transition")
+	}
+	var count int
+	if err = pool.QueryRow(context.Background(), `SELECT count(*) FROM framework.sessions`).Scan(&count); err != nil || count != 1 {
+		t.Fatal("retired callback created session", err)
+	}
+	if _, err = store.FlowBinding(context.Background(), pendingFlow.Value); err != nil {
+		t.Fatal("rejected retired callback consumed flow", err)
+	}
+	if _, err = p1.provider.store.identity(context.Background(), session.Value); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatal("direct retired store accepts session", err)
+	}
+	if _, err = p1.provider.store.takeFlow(context.Background(), pendingFlow.Value, "untrusted"); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatal("direct retired store accepts flow", err)
+	}
+}

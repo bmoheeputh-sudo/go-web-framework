@@ -271,7 +271,12 @@ func (m *Runtime) Close() {
 	for token, e := range m.readiness {
 		e.timer.Stop()
 		delete(m.readiness, token)
+		e.prepared.Close()
 		e.prepared.lease.release()
+	}
+	if m.pending != nil {
+		m.pending.prepared.Close()
+		m.pending = nil
 	}
 	s := m.current.Load()
 	if s != nil {
@@ -280,6 +285,9 @@ func (m *Runtime) Close() {
 				p.lease.retire(time.Now())
 			}
 		}
+		// Retain safe status only. In-flight contexts own their old snapshot;
+		// shutdown must not retain credential strings after those requests end.
+		m.current.Store(&runtimeSnapshot{status: s.status})
 	}
 }
 

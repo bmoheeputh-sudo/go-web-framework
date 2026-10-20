@@ -26,7 +26,10 @@ func TestKeyringHistoricalCompatibility(t *testing.T) {
 		if k == "AUTH_ENCRYPTION_KEY_ID" {
 			return "old"
 		}
-		return oldKey
+		if k == "AUTH_ENCRYPTION_KEY" {
+			return oldKey
+		}
+		return ""
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -1,5 +1,5 @@
-// Package authconfig manages future authentication settings. It is deliberately
-// not connected to provider startup or the running auth session.
+// Package authconfig manages versioned authentication settings and trusted
+// activation/startup capabilities, separately from HTTP authentication.
 package authconfig
 
 import (
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strings"
 )
 
 var (
@@ -50,14 +51,47 @@ func (Cipher) Format(w fmt.State, _ rune) { _, _ = io.WriteString(w, "[REDACTED]
 // bytes. Random origin is an operator requirement; entropy cannot be proved by
 // inspecting a key. Reject trivially constant keys as an additional guard.
 func CipherFromEnv(getenv func(string) string) (*Cipher, error) {
+	if raw := getenv("AUTH_ENCRYPTION_KEYS_JSON"); raw != "" {
+		if len(raw) > 8192 || getenv("AUTH_ENCRYPTION_KEY") != "" {
+			return nil, ErrKey
+		}
+		d := json.NewDecoder(strings.NewReader(raw))
+		start, err := d.Token()
+		if err != nil || start != json.Delim('{') {
+			return nil, ErrKey
+		}
+		keys := map[string]string{}
+		for d.More() {
+			token, err := d.Token()
+			id, ok := token.(string)
+			if err != nil || !ok || len(keys) >= 32 {
+				return nil, ErrKey
+			}
+			if _, exists := keys[id]; exists {
+				return nil, ErrKey
+			}
+			var value string
+			if d.Decode(&value) != nil {
+				return nil, ErrKey
+			}
+			keys[id] = value
+		}
+		if end, err := d.Token(); err != nil || end != json.Delim('}') {
+			return nil, ErrKey
+		}
+		if _, err := d.Token(); err != io.EOF {
+			return nil, ErrKey
+		}
+		return NewKeyring(getenv("AUTH_ENCRYPTION_KEY_ID"), keys)
+	}
 	return NewKeyring(getenv("AUTH_ENCRYPTION_KEY_ID"), map[string]string{
 		getenv("AUTH_ENCRYPTION_KEY_ID"): getenv("AUTH_ENCRYPTION_KEY"),
 	})
 }
 
 // NewKeyring constructs an immutable internal keyring. Only activeID encrypts new
-// revisions. All supplied keys can decrypt historical envelopes. No environment
-// multi-key parser or rotation is enabled by this persistence-only phase.
+// revisions. All supplied keys can decrypt historical envelopes. Loading keys
+// never rotates or rewrites any existing revision.
 func NewKeyring(activeID string, encodedKeys map[string]string) (*Cipher, error) {
 	if !keyIdentifier.MatchString(activeID) || len(encodedKeys) == 0 || len(encodedKeys) > 32 {
 		return nil, ErrKey

@@ -2064,8 +2064,9 @@ test administrator, same-origin JSON and explicit confirmation. It accepts only
 identity/role audit events commit atomically. No new migration is required.
 
 Startup always checks the trusted deployment/environment policy before preparing
-an environment provider. Database-required policy fails closed until database
-runtime loading is implemented. Missing or unreadable policy storage is never a
+an environment provider. Database-required policy is rehydrated read-only using
+the configured encryption keyring and hardened OIDC discovery/JWKS verification.
+Failure to load the required runtime stops startup. Missing or unreadable policy storage is never a
 reason to start Local DEV. There is no fallback flag or activation endpoint.
 
 ## Controlled OIDC activation foundation (Phase 9.2.5E)
@@ -2075,8 +2076,10 @@ documents prepared snapshots, revision-bound sessions/flows, isolated normal-cal
 readiness tests, transactional activation, bounded draining, transport cleanup and
 recovery through a fresh immutable revision. There are no activation or rollback
 HTTP endpoints, and the existing portal cannot switch providers. No new migration
-is needed. Startup database-runtime loading, multi-instance reconciliation and
-offline recovery remain blockers before any live activation.
+is needed. Startup restores the committed generation and any still-permitted
+draining provider without extending deadlines or modifying history. Multi-instance
+reconciliation and offline recovery remain blockers before any live activation.
+See the guide for startup limits and the optional `AUTH_ENCRYPTION_KEYS_JSON` keyring.
 
 ## Backup to GitHub and Google Drive
 

@@ -1,10 +1,11 @@
 # Runtime authentication dispatcher
 
 Phase 9.2.5E adds an [internal controlled activation foundation](auth-controlled-activation.md).
-The environment-only behavior below still describes the deployed HTTP composition
-root; no activation service or public activation endpoint is wired there. The new
-internal service, revision-bound credentials and lease cleanup are documented in
-that guide. Startup database loading and multi-instance reconciliation remain blocked.
+The historical environment-only description below is superseded at startup by
+[read-only rehydration](auth-controlled-activation.md#read-only-startup-rehydration-and-lifecycle-hardening).
+An authoritative database head loads its committed runtime or fails closed. No
+activation service or public activation endpoint is wired into the HTTP composition
+root. Multi-instance reconciliation remains blocked.
 
 See the [focused security review](auth-runtime-security-review.md) for the
 startup-policy history, revision-bound callback requirements and

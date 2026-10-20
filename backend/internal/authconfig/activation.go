@@ -11,8 +11,8 @@ import (
 
 // ActivationReader is a deployment-bound, read-only internal capability. It is
 // deliberately independent of HTTP principal context and cannot decrypt secrets
-// or mutate configuration. Startup uses it to enforce policy before preparing
-// an environment provider; it cannot load or activate a database authenticator.
+// or mutate configuration. Startup uses it to enforce policy before choosing
+// the environment path or the separate privileged read-only StartupLoader.
 type ActivationReader struct {
 	pool  *pgxpool.Pool
 	scope Scope

@@ -3,8 +3,9 @@
 This is an internal backend capability, not an operational deployment feature.
 The HTTP composition root does **not** construct an activation service or expose
 activation, rollback, or normal-readiness-start endpoints. The existing Admin
-Portal cannot activate a provider. Startup still rejects database-required policy;
-there is no environment or Local DEV fallback. No migration is required.
+Portal cannot activate a provider. Startup now rehydrates an already committed
+database-required policy; any failure stops startup without environment or Local
+DEV fallback. No migration is required.
 
 ## Trusted internal API
 
@@ -16,6 +17,10 @@ there is no environment or Local DEV fallback. No migration is required.
   the secret internally and audits preparation through `AdminTransaction`. Network
   work follows **outside** the transaction. Candidates expire after five minutes;
   callers must defer `PreparedActivation.Close` for unused/error paths.
+- `PreparedActivation.Readiness()` returns a copy of the prepared session-impact
+  policy: current provider/source, target revision, expected generation,
+  `RequiresReauthentication`, and `MaximumSessionGrace`. Read it **before** asking
+  an administrator to confirm; it does not replace transactional evidence checks.
 - `BeginNormalCallbackTest(candidate, writer, request)` is an internal, explicitly
   invoked readiness operation. There is no HTTP start API. It exercises the
   configured `/api/auth/callback` using the ordinary OIDC callback verifier but
@@ -23,7 +28,10 @@ there is no environment or Local DEV fallback. No migration is required.
   safe evidence metadata only after verified completion and atomic audit insertion.
 - `Activate(ctx, candidate, ActivationRequest)` requires both evidence IDs, the
   intended enrolled user ID, an explicit reason and a transition duration from
-  zero to thirty minutes. IDs are references to server-verified evidence, not
+  zero to thirty minutes for database-to-database transitions. The initial
+  environment-to-database cutover requires `Transition=0` and explicit
+  `AcknowledgeReauthentication=true`; otherwise it is rejected before mutation.
+  IDs are references to server-verified evidence, not
   identity claims. It returns desired/applied generations, `Applied`, `Committed` and
   `CommitUncertain` separately.
 - `Repository.PrepareRecoveryDraft(ctx, historicalID, expectedLatestVersion)`
@@ -121,11 +129,40 @@ expiry is capped at the earlier original/token/absolute limit and grace deadline
 Idle timeout still applies. Revoked/expired rows are never recreated by lookup.
 No new login flow may start on a draining authenticator.
 
-The first environment-to-database activation rejects all legacy and environment
-credentials; it does not guess a revision or grant them grace. Later grace applies
-only to explicitly bound database sessions. This intentional reauthentication
-boundary is necessary because existing environment credentials lack an activation
-history binding. Cookies remain opaque, hashed in PostgreSQL, HttpOnly, SameSite,
+**Security exception to the maximum 30-minute session-grace policy:** the first
+environment-to-database activation requires immediate reauthentication for new
+requests. It rejects all legacy and environment credentials without guessing a
+revision, rewriting bindings, or updating their activity. Later grace applies
+only to explicitly bound database sessions.
+
+- Local DEV has no verified browser session: it supplies a fixed identity on each
+  allowed loopback request. Continuing it during grace would also authenticate
+  new requests without OIDC, creating a forbidden fallback.
+- Current environment OIDC writers create legacy rows. These contain no client,
+  deployment, environment, revision or activation generation; legacy flows also
+  lack an issuer. A matching issuer/email/cookie cannot prove missing provenance.
+- Even explicitly environment-bound rows lack an immutable configuration revision
+  and activation generation. Supporting those in a future design would require a
+  separately reviewed, pre-established environment configuration identity and
+  retirement policy, not inventing database bindings for existing credentials.
+
+Readiness therefore reports `RequiresReauthentication=true` and
+`MaximumSessionGrace=0` for Local DEV and environment OIDC. A future confirmation
+UI must explain: **"Existing sign-ins and pending environment logins will not
+carry over. Sign in again using the new OIDC configuration."** The internal API
+requires explicit acknowledgment and a zero transition duration; activation history
+records equal activation/transition timestamps. No activation UI or public endpoint
+exists yet, so no claim is made that the present Admin Portal displays this notice.
+Subsequent database-to-database readiness reports a maximum of thirty minutes;
+the requested interval may be shorter and cannot extend original session/flow expiry.
+
+Request consistency still permits an already captured environment request to
+finish with its original snapshot. An environment callback already executing may
+produce a legacy cookie, but that cookie is rejected on every request captured
+after cutover. Callbacks first arriving after cutover fail closed. This is not a
+post-cutover session grace or permission to admit new Local DEV requests.
+
+Cookies remain opaque, hashed in PostgreSQL, HttpOnly, SameSite,
 and Secure except permitted local HTTP development. Logout is binding-restricted.
 
 Normal OIDC routes retain their methods. A reserved readiness callback can use
@@ -160,12 +197,66 @@ wiping. Captured application contexts or an internal caller retaining candidates
 keep references longer; callers must release them and must not spawn work from
 request contexts without an explicit bounded ownership design.
 
+## Read-only startup rehydration and lifecycle hardening
+
+`StartupRuntimeFromEnv` checks authoritative policy before constructing any
+`AUTH_PROVIDER` authenticator. An absent head on an unenrolled database or an
+explicit clean environment policy keeps existing behavior. Database policy loads
+only its active OIDC revision; missing keys, invalid configuration, database or
+provider failures stop startup. `AUTH_PROVIDER=google_iap` pins the infrastructure
+boundary and refuses a conflicting database OIDC policy.
+
+`StartupLoader` is a separate read-only capability, with no administrator context
+or `AdminTransaction`. A repeatable-read, read-only PostgreSQL transaction checks
+scope, head/history generation and timestamps, one active lifecycle, immutable
+revision metadata, and previous-generation lineage. Under migrations 000005–000006,
+active lifecycle generation is four and superseded generation is five; those are
+checked separately from the unbounded deployment activation generation. Startup
+neither emits audit events nor mutates settings, history, sessions or evidence.
+
+The loader decrypts the authenticated envelope using the selected historical key,
+then reuses activation's hardened discovery/JWKS preparation outside the read
+transaction. Both active and draining redirect URIs must exactly match trusted
+`APP_ORIGIN + /api/auth/callback`. Local HTTP still requires development allowance
+and a loopback listener. Existing `SESSION_*` timeout settings remain authoritative.
+The keyring supports single-key compatibility or the strict multi-key environment
+format in [the persistence guide](auth-activation-persistence.md#encryption-keyring).
+No keys are generated, rotated, logged or re-encrypted by startup.
+
+Only the immediately previous revision can drain, using the **recorded** transition
+deadline and original activation generation. Restart never grants another thirty
+minutes or rebinds old cookies/flows. Expired history is not prepared and needs no
+old key or reachable issuer. Missing keys for a still-permitted draining revision
+fail startup. If its deadline passes during preparation, it is discarded. The head
+and lifecycle are checked again after network preparation; a changed head fails
+startup, without retry or fallback. There remains a window after that final read:
+this does not synchronize an instance with later activations on another instance.
+Keep live activation disabled until multi-instance coordination is delivered.
+
+Preparation is bounded to twenty seconds per provider and fifty seconds for the
+whole startup load; SQL reads are bounded to five seconds. Callback exchange and
+signature verification have a shared twenty-second request context, ten-second
+HTTP timeouts and three-second session/flow queries. Candidates and unused readiness
+reservations expire after five minutes. Retired providers deny new credentials at
+the deadline; transport cleanup waits for retained in-flight requests. Shutdown
+releases pending readiness/candidate references and retains safe runtime status
+only. The HTTP server allows forty seconds for graceful shutdown (longer than the
+normal callback budget), then cancels remaining connections via standard server
+shutdown handling. No provider cleanup timer force-closes a legitimate request.
+
+An arbitrary trusted handler that ignores cancellation or retains a request context
+can still retain a snapshot and immutable secret strings. Go cannot safely kill
+such a goroutine or guarantee memory erasure. Module handlers must honor context
+cancellation and release database connections; bounded network/SQL operations do
+not impose a hard lifetime on arbitrary application code. Process termination is
+the final memory/resource boundary, not a new authentication fallback.
+
 ## Deployment blockers
 
 Do **not** wire these methods to the live deployment yet:
 
-- Startup database-runtime loading/reconciliation is not implemented. After an
-  internal activation, restarting the current server deliberately fails closed.
+- Startup now rehydrates a committed OIDC policy, but ongoing reconciliation and
+  operational desired/applied recovery are not implemented.
 - LISTEN/NOTIFY, listener reconnect reconciliation and other-instance fencing are
   not implemented. Use of this foundation is limited to isolated single-process
   tests until multi-instance policy is delivered.

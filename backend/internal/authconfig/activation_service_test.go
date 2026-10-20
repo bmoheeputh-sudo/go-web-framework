@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/auth"
+	"golang.org/x/oauth2"
 )
 
 func activationServiceFixture(t *testing.T) (*fixture, *ActivationService, *mockConnectionIssuer, Metadata) {
@@ -72,7 +73,7 @@ func activationReadiness(t *testing.T, f *fixture, m Metadata, existingUser stri
 			t.Fatal(err)
 		}
 	})
-	return ActivationRequest{IsolatedEvidenceID: isolated.ID, NormalEvidenceID: normal.ID, EnrolledUserID: userID, Reason: "synthetic approved activation"}, userID
+	return ActivationRequest{IsolatedEvidenceID: isolated.ID, NormalEvidenceID: normal.ID, EnrolledUserID: userID, Reason: "synthetic approved activation", AcknowledgeReauthentication: true}, userID
 }
 func prepareActivation(t *testing.T, f *fixture, s *ActivationService, m Metadata, expected int64) *PreparedActivation {
 	t.Helper()
@@ -581,5 +582,112 @@ func TestActivationCommitFailureIsNotReportedAsApplied(t *testing.T) {
 	_, desired, mismatch := s.runtime.ControlStatus()
 	if desired != 1 || !mismatch {
 		t.Fatal("uncertain commit allowed fallback")
+	}
+}
+
+func TestActivationReadinessFirstCutoverAndMaximumGrace(t *testing.T) {
+	f, s, _, m := activationServiceFixture(t)
+	request, userID := activationReadiness(t, f, m, "")
+	p := prepareActivation(t, f, s, m, 0)
+	info := p.Readiness()
+	if info.CurrentProvider != auth.LocalDev || info.CurrentSource != "environment" || info.TargetRevisionID != m.ID || info.ExpectedGeneration != 0 || !info.RequiresReauthentication || info.MaximumSessionGrace != 0 {
+		t.Fatal("first-cutover impact not reported", info)
+	}
+	info.RequiresReauthentication = false
+	if !p.Readiness().RequiresReauthentication {
+		t.Fatal("readiness was mutable")
+	}
+	before := activationState(t, f)
+	for _, bad := range []ActivationRequest{
+		{IsolatedEvidenceID: request.IsolatedEvidenceID, NormalEvidenceID: request.NormalEvidenceID, EnrolledUserID: userID, Reason: request.Reason},
+		{IsolatedEvidenceID: request.IsolatedEvidenceID, NormalEvidenceID: request.NormalEvidenceID, EnrolledUserID: userID, Reason: request.Reason, AcknowledgeReauthentication: true, Transition: 30 * time.Minute},
+	} {
+		f.run(t, func(ctx context.Context) {
+			if _, err := s.Activate(ctx, p, bad); !errors.Is(err, ErrInvalid) {
+				t.Fatal("missing confirmation or misleading grace accepted", err)
+			}
+		})
+		if activationState(t, f) != before {
+			t.Fatal("rejected confirmation modified activation state")
+		}
+	}
+	f.run(t, func(ctx context.Context) {
+		if _, err := s.Activate(ctx, p, request); err != nil {
+			t.Fatal(err)
+		}
+	})
+	var grace float64
+	if err := f.owner.QueryRow(context.Background(), `SELECT extract(epoch FROM transition_deadline-activated_at)::double precision FROM framework.auth_activation_history WHERE generation=1`).Scan(&grace); err != nil || grace != 0 {
+		t.Fatal("first activation history promises grace", grace, err)
+	}
+	var next Metadata
+	f.run(t, func(ctx context.Context) {
+		var err error
+		next, err = f.repo.CreateDraft(ctx, m.Version, m.Settings, NewSecret([]byte(apiSecret)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, state := range []Status{Validated, Approved} {
+			next, err = f.repo.Transition(ctx, next.ID, next.Generation, state)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	r2, _ := activationReadiness(t, f, next, userID)
+	p2 := prepareActivation(t, f, s, next, 1)
+	info = p2.Readiness()
+	if info.CurrentSource != "database" || info.CurrentProvider != auth.OIDC || info.RequiresReauthentication || info.MaximumSessionGrace != 30*time.Minute || info.ExpectedGeneration != 1 || info.TargetRevisionID != next.ID {
+		t.Fatal("subsequent grace incorrectly reported", info)
+	}
+	before = activationState(t, f)
+	for _, invalid := range []time.Duration{-time.Nanosecond, 30*time.Minute + time.Nanosecond} {
+		r2.Transition = invalid
+		f.run(t, func(ctx context.Context) {
+			if _, err := s.Activate(ctx, p2, r2); !errors.Is(err, ErrInvalid) {
+				t.Fatal("invalid transition accepted", err)
+			}
+		})
+		if activationState(t, f) != before {
+			t.Fatal("invalid grace changed state")
+		}
+	}
+	r2.Transition = 30 * time.Minute
+	r2.AcknowledgeReauthentication = false // Only the first cutover requires this acknowledgment.
+	f.run(t, func(ctx context.Context) {
+		if _, err := s.Activate(ctx, p2, r2); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if err := f.owner.QueryRow(context.Background(), `SELECT extract(epoch FROM transition_deadline-activated_at)::double precision FROM framework.auth_activation_history WHERE generation=2`).Scan(&grace); err != nil || grace != 1800 {
+		t.Fatal("maximum transition not persisted exactly", grace, err)
+	}
+	status, _, _ := s.runtime.ControlStatus()
+	if status.TransitionState != "draining" || status.PreviousRevisionID != m.ID || status.TransitionDeadline.After(time.Now().Add(30*time.Minute)) {
+		t.Fatal("runtime grace differs from policy", status)
+	}
+}
+
+func TestEnvironmentOIDCReadinessRequiresReauthentication(t *testing.T) {
+	f, s, provider, m := activationServiceFixture(t)
+	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, provider.client())
+	environment, err := auth.NewOIDC(ctx, auth.OIDCConfig{
+		AppEnv: m.Environment, Issuer: m.IssuerURL, ClientID: m.ClientID,
+		ClientSecret: apiSecret, RedirectURI: m.RedirectURI,
+		AllowHTTPDevelopment: m.AllowHTTPDevelopment, Sessions: s.sessions,
+	}, s.store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := auth.NewEnvironmentRuntime(environment, m.DeploymentID, m.Environment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	s.runtime = runtime
+	p := prepareActivation(t, f, s, m, 0)
+	info := p.Readiness()
+	if info.CurrentProvider != auth.OIDC || info.CurrentSource != "environment" || !info.RequiresReauthentication || info.MaximumSessionGrace != 0 {
+		t.Fatal("matching environment OIDC hides first-cutover reauthentication", info)
 	}
 }
