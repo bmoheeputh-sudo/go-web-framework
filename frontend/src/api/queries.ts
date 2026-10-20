@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, useSyncExternalStore } from 'react'
+import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { QueryCache } from './cache'
 import { errorKey } from './client'
 import { useNotifications } from '../notifications/notifications'
@@ -20,7 +20,10 @@ export function useMutation() {
   const notify = useNotifications()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const inFlight = useRef(false)
   async function mutate(path: string, method: string, body: unknown) {
+    if (inFlight.current) return false
+    inFlight.current = true
     setBusy(true); setError('')
     try {
       await cache.mutate(path, method, body)
@@ -32,7 +35,7 @@ export function useMutation() {
       notify({ severity: 'error', messageKey: `admin:${key}` })
       return false
     }
-    finally { setBusy(false) }
+    finally { inFlight.current = false; setBusy(false) }
   }
   return { mutate, busy, error, clearError: () => setError('') }
 }

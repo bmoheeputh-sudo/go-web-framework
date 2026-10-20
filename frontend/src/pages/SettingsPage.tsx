@@ -1,15 +1,23 @@
-import { lazy, Suspense, useState } from 'react'
+import { lazy, Suspense } from 'react'
 import { Box, Tabs, Tab, Typography } from '@mui/material'
 import { useTranslation } from 'react-i18next'
+import { useSearchParams } from 'react-router-dom'
 import RolePermissions from '../settings/RolePermissions'
 
 const AuthenticationSettings = lazy(() => import('../settings/AuthenticationSettings'))
 
 export default function SettingsPage() {
   const { t } = useTranslation(['admin', 'auth', 'common'])
-  const [tab, setTab] = useState(0)
+  const [params, setParams] = useSearchParams()
+  const tab = params.get('tab') === 'authentication' ? 1 : 0
+  function selectTab(value: number) {
+    const next = new URLSearchParams(params)
+    if (value === 1) next.set('tab', 'authentication')
+    else next.delete('tab')
+    setParams(next, { preventScrollReset: true })
+  }
   return <>
-    <Tabs value={tab} onChange={(_, value: number) => setTab(value)} variant="scrollable" scrollButtons="auto" aria-label={t('common:navSettings')} sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}>
+    <Tabs value={tab} onChange={(_, value: number) => selectTab(value)} variant="scrollable" scrollButtons="auto" aria-label={t('common:navSettings')} sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}>
       <Tab id="settings-roles-tab" aria-controls="settings-roles-panel" label={t('rolesPermissions')} />
       <Tab id="settings-auth-tab" aria-controls="settings-auth-panel" label={t('auth:title')} />
     </Tabs>

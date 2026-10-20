@@ -236,6 +236,31 @@ describe('responsive mini drawer', () => {
 })
 
 describe('administration operations', () => {
+  it('retains the shell, selected user, and scroll position during a delayed AJAX refresh', async () => {
+    const { fetcher } = mockAPI()
+    const original = fetcher.getMockImplementation()!
+    let resolveRefresh: (response: Response) => void = () => {}
+    let userReads = 0
+    fetcher.mockImplementation((path, init) => {
+      if (path === '/api/admin/users?offset=0' && (!init || init.method === 'GET')) {
+        userReads++
+        if (userReads === 2) return new Promise<Response>((resolve) => { resolveRefresh = resolve })
+      }
+      return original(path, init)
+    })
+    mount({ path: '/users' })
+    await select('User', 'Bob — bob@example.test')
+    const main = screen.getByRole('main')
+    main.scrollTop = 321
+    await userEvent.click(screen.getByRole('button', { name: 'Deactivate user' }))
+    await waitFor(() => expect(userReads).toBe(2))
+    expect(screen.getByRole('main')).toBe(main)
+    expect(main.scrollTop).toBe(321)
+    expect(screen.getByText('User ID: user-2')).toBeTruthy()
+    expect(screen.getByRole('table', { name: 'Users' })).toBeTruthy()
+    resolveRefresh(Response.json([admin, { ...bob, active: false }]))
+    await screen.findByRole('button', { name: 'Activate user' })
+  })
   it('preserves Admin confirmation, role payloads, activation, and prevents self-change', async () => {
     const { fetcher, users } = mockAPI()
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)

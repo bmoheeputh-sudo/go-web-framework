@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom'
 import { I18nextProvider } from 'react-i18next'
 import App from '../App'
 import LanguageProvider from '../LanguageProvider'
@@ -77,10 +77,16 @@ function authAPI(initial: AuthRevision[] = [], runtime: AuthProvider = 'local_de
   })
   return { ...fixture, records, failures }
 }
-function mount() {
+function mount(path = '/settings') {
   const instance = createI18n('en')
-  render(<I18nextProvider i18n={instance}><LanguageProvider><MemoryRouter initialEntries={['/settings']}><App /></MemoryRouter></LanguageProvider></I18nextProvider>)
+  render(<I18nextProvider i18n={instance}><LanguageProvider><MemoryRouter initialEntries={[path]}><App /><HistoryProbe /></MemoryRouter></LanguageProvider></I18nextProvider>)
   return instance
+}
+function HistoryProbe() {
+  const location = useLocation(), navigate = useNavigate()
+  return <><span data-testid="settings-location">{location.pathname + location.search}</span>
+    <button onClick={() => navigate(-1)}>Settings back</button>
+    <button onClick={() => navigate(1)}>Settings forward</button></>
 }
 async function openAuth() {
   await userEvent.click(await screen.findByRole('tab', { name: en.title }))
@@ -329,6 +335,26 @@ it('preserves form edits across Arabic/mobile/theme rendering without refetching
   await userEvent.click(screen.getByRole('tab', { name: resources.ar.admin.rolesPermissions }))
   await userEvent.click(screen.getByRole('tab', { name: resources.ar.auth.title }))
   expect((screen.getByLabelText(resources.ar.auth.clientSecret + ' *') as HTMLInputElement).value).toBe('')
+})
+
+it('keeps Settings tab selection in history without reloading authentication or remounting the shell', async () => {
+  const { fetcher } = authAPI(); mount()
+  await openAuth()
+  expect(screen.getByTestId('settings-location').textContent).toBe('/settings?tab=authentication')
+  const authRequests = fetcher.mock.calls.filter(([path]) => path === '/api/auth/me').length
+  await userEvent.click(screen.getByRole('button', { name: 'Settings back' }))
+  await waitFor(() => expect(screen.getByRole('tab', { name: resources.en.admin.rolesPermissions }).getAttribute('aria-selected')).toBe('true'))
+  expect(screen.getByTestId('settings-location').textContent).toBe('/settings')
+  await userEvent.click(screen.getByRole('button', { name: 'Settings forward' }))
+  await waitFor(() => expect(screen.getByRole('tab', { name: en.title }).getAttribute('aria-selected')).toBe('true'))
+  expect(screen.getByTestId('settings-location').textContent).toBe('/settings?tab=authentication')
+  expect(fetcher.mock.calls.filter(([path]) => path === '/api/auth/me')).toHaveLength(authRequests)
+})
+
+it('selects the Authentication tab from a direct Settings deep link', async () => {
+  authAPI(); mount('/settings?tab=authentication')
+  await screen.findByRole('heading', { name: en.runtimeTitle })
+  expect(screen.getByRole('tab', { name: en.title }).getAttribute('aria-selected')).toBe('true')
 })
 
 it.each(['User', 'Viewer', 'unauthenticated'])('blocks %s without requesting authentication management APIs', async (role) => {

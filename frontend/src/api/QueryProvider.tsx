@@ -7,6 +7,6 @@ import { useSession } from '../auth/session'
 export default function QueryProvider({ children }: { children: ReactNode }) {
   const { expire } = useSession()
   const [cache] = useState(() => new QueryCache(expire))
-  useEffect(() => () => cache.invalidate(), [cache])
+  useEffect(() => () => cache.dispose(), [cache])
   return <QueryContext.Provider value={cache}>{children}</QueryContext.Provider>
 }
