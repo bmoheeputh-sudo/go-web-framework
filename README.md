@@ -2120,9 +2120,11 @@ by replaying an older commit.
 API requests have a 120-second HTTP timeout and up to five attempts with exponential
 backoff (1, 2, 4, and 8 seconds) for transient network errors and HTTP 429/5xx.
 Timed-out mutations are reconciled with authoritative ID lookups, operation markers
-and content checks before retrying. Updates and Trash requests use an HTTP ETag
-precondition; a missing ETag or a concurrent change causes a conflict instead of
-an unguarded write. Already-trashed files are accepted only after the same identity,
+and content checks before retrying. Drive v3 does not return file ETags, so existing
+file updates and Trash moves use a Drive v2 ETag read and conditional v2 update on
+the same per-worker transport. A missing ETag, mismatched v2/v3 metadata or an HTTP
+412 causes a conflict instead of an unguarded write. Already-trashed files are
+accepted only after the same identity,
 hierarchy, type and content checks; inherited Trash from a parent is a conflict.
 Ambiguous names, incompatible Drive file types, and unexpected ID conflicts fail
 without advancing the checkpoint. Resolve duplicate names in Drive before retrying.

@@ -233,7 +233,11 @@ def build_drive():
     credentials = service_account.Credentials.from_service_account_file(
         str(KEY), scopes=[SCOPE], subject=USER)
     http = AuthorizedHttp(credentials, http=httplib2.Http(timeout=HTTP_TIMEOUT))
-    return build("drive", "v3", http=http, cache_discovery=False)
+    drive = build("drive", "v3", http=http, cache_discovery=False)
+    # Drive v3 omits file ETags. Keep both API versions on this worker's own
+    # transport so existing-file writes can use v2's conditional update.
+    drive._conditional = build("drive", "v2", http=http, cache_discovery=False)
+    return drive
 
 
 def media(data, name):
@@ -382,21 +386,57 @@ class DriveClient:
         return matches[0] if matches else None
 
     def get(self, file_id):
-        headers = {}
-
-        def request():
-            headers.clear()
-            req = self.drive.files().get(fileId=file_id, fields=FIELDS, supportsAllDrives=True)
-            req.add_response_callback(lambda response: headers.update(response))
-            return req
         try:
-            item = self.call(request)
-            item["_etag"] = headers.get("etag")
-            return item
+            return self.call(lambda: self.drive.files().get(
+                fileId=file_id, fields=FIELDS, supportsAllDrives=True))
         except Exception as error:
             if status_code(error) == 404:
                 return None
             raise
+
+    def conditional_update(self, item, record, intent, data):
+        """Use Drive v2's file ETag for a version-checked existing-file write."""
+        conditional = getattr(self.drive, "_conditional", None)
+        if conditional is None:
+            raise Conflict("Conditional Drive client is unavailable; refusing an unguarded update.")
+        metadata = self.call(lambda: conditional.files().get(
+            fileId=record["id"],
+            fields="id,etag,version,title,mimeType,parents,properties",
+            supportsAllDrives=True))
+        if (metadata.get("id") != item["id"]
+                or str(metadata.get("version")) != str(item.get("version"))
+                or metadata.get("title") != item.get("name")
+                or [parent.get("id") for parent in metadata.get("parents", [])] != item.get("parents")
+                or metadata.get("mimeType") != item.get("mimeType")):
+            raise Conflict("Drive resource changed while preparing a conditional update.")
+        etag = metadata.get("etag")
+        if not isinstance(etag, str) or not etag or etag == "*":
+            raise Conflict("Drive did not provide a usable conditional ETag.")
+        properties = [{"key": prop["key"], "value": prop["value"],
+                       "visibility": prop.get("visibility", "PRIVATE")}
+                      for prop in metadata.get("properties", [])]
+        properties = [prop for prop in properties
+                      if not (prop["key"] in {"gwf_write", "gwf_blob"}
+                              and prop["visibility"] == "PRIVATE")]
+        properties.append({"key": "gwf_write", "value": intent["token"],
+                           "visibility": "PRIVATE"})
+        if data is not None:
+            properties.append({"key": "gwf_blob", "value": intent["blob"],
+                               "visibility": "PRIVATE"})
+        body = {"properties": properties}
+        if intent["kind"] == "trash":
+            body["labels"] = {"trashed": True}
+        else:
+            body["title"] = intent["name"]
+        args = dict(fileId=record["id"], body=body, supportsAllDrives=True,
+                    fields="id,etag,version")
+        if data is not None:
+            args["media_body"] = media(data, intent["name"])
+        if intent["parent"] != record["parent"]:
+            args.update(addParents=intent["parent"], removeParents=record["parent"])
+        req = conditional.files().update(**args)
+        req.headers["If-Match"] = etag
+        return req.execute(num_retries=0)
 
     def matches(self, item, record, name=None, parent=None, allow_trash=False):
         if not item or item.get("id") != record["id"]:
@@ -443,8 +483,6 @@ class DriveClient:
                         if item.get("explicitlyTrashed") is not True:
                             raise Conflict("Drive file is in Trash through its parent; manual review required.")
                         return item
-                if not item.get("_etag"):
-                    raise Conflict("Drive did not provide an ETag; refusing an unguarded update.")
             elif not create:
                 raise Conflict("Recorded Drive resource is missing; no replacement will be adopted.")
             body = {"name": intent["name"], "mimeType": record["mimeType"],
@@ -463,13 +501,9 @@ class DriveClient:
             try:
                 if create:
                     req = self.drive.files().create(**args)
+                    req.execute(num_retries=0)
                 else:
-                    move = {}
-                    if intent["parent"] != record["parent"]:
-                        move = dict(addParents=intent["parent"], removeParents=record["parent"])
-                    req = self.drive.files().update(fileId=record["id"], **args, **move)
-                    req.headers["If-Match"] = item["_etag"]
-                req.execute(num_retries=0)
+                    self.conditional_update(item, record, intent, data)
             except Exception as error:
                 # Even the final timed-out operation may have succeeded.
                 if not transient(error) and status_code(error) != 409:
@@ -560,6 +594,11 @@ class DriveClient:
                     record.update(version=str(item.get("version", "")), commit=target)
                     self.sync.journal(key, record, old)
                     return record["id"], "skipped"
+                if not folder and record.get("blob"):
+                    previous = record.get("md5") or hashlib.md5(
+                        git(self.sync.root, "cat-file", "blob", record["blob"])).hexdigest()
+                    if item.get("md5Checksum") != previous:
+                        raise Conflict("Drive content changed since the last completed backup.")
                 record["version"] = str(item.get("version", ""))
             intent = {"kind": "create" if create else "update", "commit": target,
                       "token": uuid.uuid4().hex, "name": name, "parent": parent, "blob": blob}

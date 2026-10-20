@@ -57,8 +57,9 @@ class FakeRequest:
                 fault(self)
             with server.lock:
                 result = server.respond(self.method, self.args, self.headers)
+            # Drive v3 does not return a file ETag; v2 exposes one in metadata.
             for callback in self.callbacks:
-                callback({"etag": '"' + str(result.get("version", "1")) + '"'})
+                callback({})
             if fault == "timeout_after":
                 raise TimeoutError("response lost after remote operation")
             return result
@@ -79,6 +80,7 @@ class FakeDrive:
         self.active = self.max_active = 0
         self.barrier = None
         self.clients = []
+        self.emit_etag = True
         self.events = []
         self.api = MagicMock()  # Aggregate calls only; never passed as a client.
         self.files = self.api.files.return_value
@@ -87,6 +89,7 @@ class FakeDrive:
 
     def client(self):
         api = MagicMock()
+        conditional = MagicMock()
         owner = threading.get_ident()
         for method in ("list", "get", "generateIds", "create", "update"):
             def dispatch(_method=method, **kwargs):
@@ -95,6 +98,14 @@ class FakeDrive:
                 self.api.files()
                 return getattr(self.files, _method)(**kwargs)
             getattr(api.files.return_value, method).side_effect = dispatch
+        for method in ("get", "update"):
+            def dispatch_v2(_method=method, **kwargs):
+                if threading.get_ident() != owner:
+                    raise AssertionError("Conditional Drive client used on another thread")
+                self.api.files()
+                return getattr(self.files, _method)(api_version=2, **kwargs)
+            getattr(conditional.files.return_value, method).side_effect = dispatch_v2
+        api._conditional = conditional
         with self.lock:
             self.clients.append(api)
         return api
@@ -118,7 +129,17 @@ class FakeDrive:
                             trashed=False, explicitlyTrashed=False, version="1")
             if args["fileId"] not in self.items:
                 raise http_error(404)
-            return copy.deepcopy(self.items[args["fileId"]])
+            item = copy.deepcopy(self.items[args["fileId"]])
+            if args.get("api_version") == 2:
+                result = dict(id=item["id"], version=item["version"], title=item["name"],
+                              mimeType=item["mimeType"],
+                              parents=[{"id": parent} for parent in item["parents"]],
+                              properties=[{"key": key, "value": value, "visibility": "PRIVATE"}
+                                          for key, value in item.get("appProperties", {}).items()])
+                if self.emit_etag:
+                    result["etag"] = '"' + str(item["version"]) + '"'
+                return result
+            return item
         if method == "create":
             body = args["body"]
             if body["id"] in self.items:
@@ -131,7 +152,17 @@ class FakeDrive:
             if headers.get("If-Match") != '"' + str(item["version"]) + '"':
                 raise http_error(412)
             body = copy.deepcopy(args.get("body", {}))
-            item.setdefault("appProperties", {}).update(body.pop("appProperties", {}))
+            if args.get("api_version") == 2:
+                item["appProperties"] = {
+                    prop["key"]: prop["value"] for prop in body.pop("properties", [])
+                    if prop.get("visibility") == "PRIVATE"}
+                if "title" in body:
+                    item["name"] = body.pop("title")
+                if "labels" in body:
+                    labels = body.pop("labels")
+                    item["trashed"] = item["explicitlyTrashed"] = labels["trashed"]
+            else:
+                item.setdefault("appProperties", {}).update(body.pop("appProperties", {}))
             item.update(body)
             if "trashed" in body:
                 item["explicitlyTrashed"] = body["trashed"]
@@ -484,7 +515,9 @@ class SyncTests(unittest.TestCase):
         credentials.assert_called_once_with(str(ds.KEY), scopes=[ds.SCOPE], subject=ds.USER)
         http.assert_called_once_with(timeout=120)
         authorized.assert_called_once_with(credentials.return_value, http=http.return_value)
-        build.assert_called_once_with("drive", "v3", http=authorized.return_value, cache_discovery=False)
+        self.assertEqual(build.call_args_list, [
+            unittest.mock.call("drive", "v3", http=authorized.return_value, cache_discovery=False),
+            unittest.mock.call("drive", "v2", http=authorized.return_value, cache_discovery=False)])
 
     def test_five_concurrent_uploads_and_isolated_clients(self):
         for index in range(5):
@@ -637,8 +670,8 @@ class SyncTests(unittest.TestCase):
     def test_ambiguous_trash_recovers_across_executions_without_retrash(self):
         record, target = self.deleted_file()
         self.remote.faults["update"].append("timeout_after")
-        # Initial validation + pre-write GET succeed, reconciliation cannot read.
-        self.remote.faults[("get", record["id"])].extend([None, None] + [TimeoutError()] * ds.ATTEMPTS)
+        # Validation, pre-write v3 GET and conditional v2 GET succeed.
+        self.remote.faults[("get", record["id"])].extend([None] * 3 + [TimeoutError()] * ds.ATTEMPTS)
         with self.assertRaises(ds.SyncError):
             self.sync(target)
         self.assertEqual(self.read_state()["pending_commit"], target)
@@ -660,17 +693,56 @@ class SyncTests(unittest.TestCase):
 
     def test_no_etag_means_no_unguarded_trash(self):
         record, target = self.deleted_file()
-        original = ds.DriveClient.get
-        def without_etag(client, file_id):
-            item = original(client, file_id)
-            if item:
-                item.pop("_etag", None)
-            return item
+        self.remote.emit_etag = False
         self.remote.api.reset_mock()
-        with patch.object(ds.DriveClient, "get", without_etag), self.assertRaises(ds.SyncError):
+        with self.assertRaises(ds.SyncError):
             self.sync(target)
         self.remote.files.update.assert_not_called()
         self.assertFalse(self.remote.items[record["id"]]["trashed"])
+
+    def test_v3_without_etag_updates_using_conditional_v2(self):
+        self.write("a.py")
+        self.sync(self.commit())
+        self.write("a.py", "changed\n")
+        target = self.commit()
+        self.remote.api.reset_mock()
+        self.assertEqual(self.sync(target)["updated"], 1)
+        request = self.remote.files.update.call_args
+        self.assertEqual(request.kwargs["api_version"], 2)
+        self.assertEqual(self.remote.items[request.kwargs["fileId"]]["content"], b"changed\n")
+
+    def test_v2_missing_etag_blocks_update_and_preserves_pending_checkpoint(self):
+        self.write("a.py")
+        previous = self.commit()
+        self.sync(previous)
+        self.write("a.py", "changed\n")
+        target = self.commit()
+        self.remote.emit_etag = False
+        self.remote.api.reset_mock()
+        with self.assertRaises(ds.SyncError):
+            self.sync(target)
+        self.remote.files.update.assert_not_called()
+        state = self.read_state()
+        self.assertEqual(state["last_commit"], previous)
+        self.assertEqual(state["pending_commit"], target)
+        self.remote.emit_etag = True
+        self.assertEqual(self.sync(target)["updated"], 1)
+
+    def test_remote_edit_since_last_backup_blocks_update(self):
+        self.write("a.py")
+        previous = self.commit()
+        self.sync(previous)
+        record = self.read_state()["resources"]["a.py"]
+        self.remote.items[record["id"]]["content"] = b"external change\n"
+        self.remote.items[record["id"]]["md5Checksum"] = hashlib.md5(b"external change\n").hexdigest()
+        self.remote.items[record["id"]]["version"] = "2"
+        self.write("a.py", "changed\n")
+        target = self.commit()
+        self.remote.api.reset_mock()
+        with self.assertRaises(ds.SyncError):
+            self.sync(target)
+        self.remote.files.update.assert_not_called()
+        self.assertEqual(self.read_state()["last_commit"], previous)
 
     def test_completed_deletion_does_not_trash_recreated_file(self):
         record, deletion = self.deleted_file()
@@ -807,8 +879,8 @@ except SyncError:
         self.git("mv", "old.py", "new.py")
         target = self.commit()
         self.remote.faults["update"].append("timeout_after")
-        # Before intent + pre-write reads; then lose reconciliation responses.
-        self.remote.faults[("get", record["id"])].extend([None, None] + [TimeoutError()] * ds.ATTEMPTS)
+        # Before intent, pre-write and conditional reads; then lose reconciliation.
+        self.remote.faults[("get", record["id"])].extend([None] * 3 + [TimeoutError()] * ds.ATTEMPTS)
         with self.assertRaises(ds.SyncError):
             self.sync(target)
         self.remote.api.reset_mock()
