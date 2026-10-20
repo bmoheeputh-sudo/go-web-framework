@@ -1,6 +1,10 @@
 package auth
 
-import "time"
+import (
+	"time"
+
+	"golang.org/x/oauth2"
+)
 
 // NewDatabaseRuntime rehydrates an already committed policy. It cannot replace
 // a running runtime and performs no writes. The caller must verify DB authority,
@@ -40,7 +44,7 @@ func NewDatabaseRuntime(active, draining *PreparedOIDC, activatedAt, deadline ti
 		return nil, ErrRuntimeConflict
 	}
 	s := &runtimeSnapshot{status: RuntimeStatus{DeploymentID: active.binding.DeploymentID, Environment: active.binding.Environment, Source: "database", Provider: OIDC, AppliedGeneration: active.binding.ActivationGeneration, ActiveRevisionID: active.binding.RevisionID, TransitionState: "none"}, auth: active.provider, oidc: active.provider, prepared: active}
-	m := &Runtime{desiredGeneration: active.binding.ActivationGeneration}
+	m := &Runtime{desiredGeneration: active.binding.ActivationGeneration, readinessInstance: oauth2.GenerateVerifier()}
 	if draining != nil {
 		draining.lease.retire(deadline)
 		s.draining = draining

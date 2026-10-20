@@ -12,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/access"
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/auth"
+	"github.com/jackc/pgx/v5"
 	"golang.org/x/oauth2"
 )
 
@@ -73,7 +75,7 @@ func activationReadiness(t *testing.T, f *fixture, m Metadata, existingUser stri
 			t.Fatal(err)
 		}
 	})
-	return ActivationRequest{IsolatedEvidenceID: isolated.ID, NormalEvidenceID: normal.ID, EnrolledUserID: userID, Reason: "synthetic approved activation", AcknowledgeReauthentication: true}, userID
+	return ActivationRequest{IsolatedEvidenceID: isolated.ID, NormalEvidenceID: normal.ID, EnrolledUserID: userID, Reason: "synthetic approved activation", AcknowledgeReauthentication: true, AcknowledgeEmergencyRecovery: true}, userID
 }
 func prepareActivation(t *testing.T, f *fixture, s *ActivationService, m Metadata, expected int64) *PreparedActivation {
 	t.Helper()
@@ -574,7 +576,7 @@ func TestActivationCommitFailureIsNotReportedAsApplied(t *testing.T) {
 	}
 	f.run(t, func(ctx context.Context) {
 		result, err := s.Activate(ctx, p, request)
-		if !errors.Is(err, auth.ErrRuntimeMismatch) || result.Applied || result.Committed || !result.CommitUncertain {
+		if !errors.Is(err, ErrUnavailable) || result.Applied || result.CommitPersisted == nil || *result.CommitPersisted || result.CommitUncertain || result.Outcome != ActivationNotCommitted {
 			t.Fatal("commit failure misreported", err, result)
 		}
 	})
@@ -583,8 +585,37 @@ func TestActivationCommitFailureIsNotReportedAsApplied(t *testing.T) {
 		t.Fatal("failed commit partially persisted", err)
 	}
 	_, desired, mismatch := s.runtime.ControlStatus()
+	if desired != 0 || mismatch {
+		t.Fatal("definite commit rejection fenced the prior runtime")
+	}
+}
+
+func TestActivationUnknownCommitOutcomeIsFencedAndNotRetryable(t *testing.T) {
+	f, s, _, m := activationServiceFixture(t)
+	request, _ := activationReadiness(t, f, m, "")
+	p := prepareActivation(t, f, s, m, 0)
+	original := s.transaction
+	s.transaction = func(ctx context.Context, fn func(context.Context, pgx.Tx, access.User) error) error {
+		if err := original(ctx, fn); err != nil {
+			return err
+		}
+		// Simulate a connection loss after PostgreSQL accepted COMMIT.
+		return ErrCommitUncertain
+	}
+	f.run(t, func(ctx context.Context) {
+		result, err := s.Activate(ctx, p, request)
+		if !errors.Is(err, auth.ErrRuntimeMismatch) || result.Outcome != ActivationCommitUncertain || result.CommitPersisted != nil || !result.CommitUncertain || !result.ReconciliationRequired || result.AutomaticRetryAllowed {
+			t.Fatal("unknown commit outcome was not represented safely", err, result)
+		}
+	})
+	reader, _ := NewActivationReader(f.pool, f.repo.scope)
+	head, err := reader.DatabaseHead(context.Background())
+	if err != nil || head.Generation != 1 || head.ActiveRevisionID != m.ID {
+		t.Fatal("authoritative state could not resolve ambiguous response", head, err)
+	}
+	_, desired, mismatch := s.runtime.ControlStatus()
 	if desired != 1 || !mismatch {
-		t.Fatal("uncertain commit allowed fallback")
+		t.Fatal("ambiguous outcome did not fence local authentication")
 	}
 }
 
@@ -603,7 +634,8 @@ func TestActivationReadinessFirstCutoverAndMaximumGrace(t *testing.T) {
 	before := activationState(t, f)
 	for _, bad := range []ActivationRequest{
 		{IsolatedEvidenceID: request.IsolatedEvidenceID, NormalEvidenceID: request.NormalEvidenceID, EnrolledUserID: userID, Reason: request.Reason},
-		{IsolatedEvidenceID: request.IsolatedEvidenceID, NormalEvidenceID: request.NormalEvidenceID, EnrolledUserID: userID, Reason: request.Reason, AcknowledgeReauthentication: true, Transition: 30 * time.Minute},
+		{IsolatedEvidenceID: request.IsolatedEvidenceID, NormalEvidenceID: request.NormalEvidenceID, EnrolledUserID: userID, Reason: request.Reason, AcknowledgeReauthentication: true, AcknowledgeEmergencyRecovery: true, Transition: 30 * time.Minute},
+		{IsolatedEvidenceID: request.IsolatedEvidenceID, NormalEvidenceID: request.NormalEvidenceID, EnrolledUserID: userID, Reason: request.Reason, AcknowledgeReauthentication: true},
 	} {
 		f.run(t, func(ctx context.Context) {
 			if _, err := s.Activate(ctx, p, bad); !errors.Is(err, ErrInvalid) {

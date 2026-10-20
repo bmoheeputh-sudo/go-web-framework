@@ -28,8 +28,8 @@ var (
 	ErrInvalid     = errors.New("invalid request")
 	ErrConflict    = errors.New("change conflicts with current state")
 	ErrUnavailable = errors.New("authorization temporarily unavailable")
-	// ErrCommitUncertain is reserved for the offline recovery control plane.
-	// Callers must inspect authoritative state and must not retry blindly.
+	// ErrCommitUncertain means the server lost a definitive PostgreSQL commit
+	// result. Callers must inspect authoritative state and must not retry blindly.
 	ErrCommitUncertain = errors.New("transaction commit outcome is uncertain")
 )
 
@@ -212,7 +212,17 @@ func (s *Store) withMutation(ctx context.Context, authorize func(pgx.Tx) error, 
 	if err = fn(tx); err != nil {
 		return err
 	}
-	return dbError(tx.Commit(ctx))
+	err = tx.Commit(ctx)
+	if err == nil {
+		return nil
+	}
+	// PostgreSQL returned a definite rejection/rollback. Transport/protocol
+	// failures after COMMIT was sent are ambiguous and must retain that state.
+	var pg *pgconn.PgError
+	if errors.Is(err, pgx.ErrTxCommitRollback) || errors.As(err, &pg) {
+		return dbError(err)
+	}
+	return ErrCommitUncertain
 }
 
 // AuthRecoveryRead is a narrowly named trusted control-plane primitive. It does

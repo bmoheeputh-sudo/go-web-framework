@@ -266,7 +266,16 @@ func newServerWithPolicy(getenv func(string) string, policy func(func(string) st
 			}
 		}
 	}
-	closeAuthManagement := authconfig.Register(handler.ServeMux, runtime, authorization, origin, configRepository, activationService, runtime.Status)
+	affinity, err := authconfig.ActivationAffinityFromEnv(getenv)
+	if err != nil {
+		return nil, errors.New("AUTH_ACTIVATION_AFFINITY_MODE must be single_instance or session_affinity")
+	}
+	operations := authconfig.ActivationOperations{Affinity: affinity}
+	if synchronization != nil {
+		operations.SynchronizationStatus = synchronization.Status
+		operations.Reconcile = synchronization.Reconcile
+	}
+	closeAuthManagement := authconfig.Register(handler.ServeMux, runtime, authorization, origin, configRepository, activationService, operations, runtime.Status)
 	var syncStatus func() authconfig.SynchronizationStatus
 	if synchronization != nil {
 		syncStatus = synchronization.Status

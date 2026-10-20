@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/oauth2"
 )
 
 // RuntimeStatus contains no credentials. It is returned by value, never as a
@@ -45,6 +47,7 @@ type Runtime struct {
 	drainTimer        *time.Timer
 	pending           *Publication
 	guard             AdmissionGuard
+	readinessInstance string
 }
 
 type runtimeRequestKey struct{}
@@ -70,7 +73,7 @@ func NewEnvironmentRuntime(provider Authenticator, deployment, environment strin
 	if err != nil {
 		return nil, err
 	}
-	runtime := &Runtime{}
+	runtime := &Runtime{readinessInstance: oauth2.GenerateVerifier()}
 	if !runtime.publish(nil, s) {
 		return nil, errors.New("authentication runtime initialization failed")
 	}

@@ -38,7 +38,7 @@ func configHandler(f *fixture, repo *Repository, provider auth.Authenticator) ht
 	if err != nil {
 		panic(err)
 	}
-	Register(mux, provider, f.store, apiOrigin, repo, nil, runtime.Status)
+	Register(mux, provider, f.store, apiOrigin, repo, nil, ActivationOperations{}, runtime.Status)
 	return runtime.Capture(mux)
 }
 func apiRequest(t *testing.T, handler http.Handler, method, path string, body any, want int) *httptest.ResponseRecorder {
@@ -82,12 +82,16 @@ func checkAPIResponse(t *testing.T, response *httptest.ResponseRecorder, want in
 		t.Fatal("invalid response JSON")
 	}
 	if want >= 400 {
-		var failure map[string]string
-		if json.Unmarshal(response.Body.Bytes(), &failure) != nil || len(failure) != 1 || failure["error"] == "" {
+		var failure map[string]any
+		if json.Unmarshal(response.Body.Bytes(), &failure) != nil {
+			t.Fatal("invalid error envelope")
+		}
+		errorCode, _ := failure["error"].(string)
+		if errorCode == "" {
 			t.Fatal("invalid error envelope")
 		}
 		for _, internal := range []string{"postgres", "SQL", "cipher", "password", "connection", "23505"} {
-			if strings.Contains(failure["error"], internal) {
+			if strings.Contains(response.Body.String(), internal) {
 				t.Fatal("internal error leaked")
 			}
 		}
@@ -216,7 +220,7 @@ func TestAuthConfigurationHTTPWorkflow(t *testing.T) {
 func TestAuthConfigurationHTTPAuthorizationAndIsolation(t *testing.T) {
 	f := newFixture(t)
 	m := f.draft(t, 0)
-	paths := []struct{ method, path string }{{"GET", settingsPath}, {"GET", settingsPath + "/" + m.ID}, {"POST", settingsPath}, {"POST", settingsPath + "/" + m.ID + "/validate"}, {"POST", settingsPath + "/" + m.ID + "/approve"}, {"POST", settingsPath + "/" + m.ID + "/activation/prepare"}, {"GET", "/api/admin/auth/activation-preparations/unknown"}, {"POST", "/api/admin/auth/activation-preparations/unknown/readiness"}, {"POST", "/api/admin/auth/activation-preparations/unknown/activate"}, {"POST", settingsPath + "/" + m.ID + "/rollback"}, {"GET", statusPath}, {"GET", providerSetupPath}}
+	paths := []struct{ method, path string }{{"GET", settingsPath}, {"GET", settingsPath + "/" + m.ID}, {"POST", settingsPath}, {"POST", settingsPath + "/" + m.ID + "/validate"}, {"POST", settingsPath + "/" + m.ID + "/approve"}, {"POST", settingsPath + "/" + m.ID + "/activation/prepare"}, {"GET", "/api/admin/auth/activation-preparations/unknown"}, {"POST", "/api/admin/auth/activation-preparations/unknown/readiness"}, {"POST", "/api/admin/auth/activation-preparations/unknown/activate"}, {"POST", settingsPath + "/" + m.ID + "/rollback"}, {"GET", settingsPath + "/" + m.ID + "/recovery-readiness"}, {"GET", "/api/admin/auth/activation/status"}, {"POST", "/api/admin/auth/activation/reconcile"}, {"GET", statusPath}, {"GET", providerSetupPath}}
 	for _, role := range []string{"User", "Viewer", "None", "Unauthenticated"} {
 		t.Run(role, func(t *testing.T) {
 			var provider auth.Authenticator

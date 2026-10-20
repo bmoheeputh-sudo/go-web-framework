@@ -44,6 +44,12 @@ func httpError(w http.ResponseWriter, err error) {
 		status, code = http.StatusNotFound, "auth_config_not_found"
 	case errors.Is(err, ErrConflict):
 		status, code = http.StatusConflict, "auth_config_conflict"
+	case errors.Is(err, ErrPreparationWrongInstance):
+		status, code = http.StatusServiceUnavailable, "activation_preparation_wrong_instance"
+	case errors.Is(err, ErrActivationAffinityRequired):
+		status, code = http.StatusServiceUnavailable, "activation_affinity_required"
+	case errors.Is(err, ErrRecoveryProviderUnavailable):
+		status, code = http.StatusServiceUnavailable, "recovery_provider_unavailable"
 	}
 	reply(w, status, map[string]string{"error": code})
 }
@@ -52,7 +58,7 @@ func httpError(w http.ResponseWriter, err error) {
 // Every repository call rechecks administrator authorization inside AdminTransaction.
 // There is deliberately no HTTP path to ReadSecretPrivileged. Activation is
 // exposed only through the server-owned service and bounded preparation handles.
-func Register(mux *http.ServeMux, provider auth.Authenticator, store *access.Store, origin string, repo *Repository, activation *ActivationService, runtimeStatus func(context.Context) (auth.RuntimeStatus, bool)) func() {
+func Register(mux *http.ServeMux, provider auth.Authenticator, store *access.Store, origin string, repo *Repository, activation *ActivationService, operations ActivationOperations, runtimeStatus func(context.Context) (auth.RuntimeStatus, bool)) func() {
 	route := func(pattern string, h http.HandlerFunc) {
 		available := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if repo == nil {
@@ -68,7 +74,7 @@ func Register(mux *http.ServeMux, provider auth.Authenticator, store *access.Sto
 		mux.Handle(pattern, auth.Require(provider, access.ProtectWrites(origin, store.Require(access.AdminManage, "", available))))
 	}
 	newConnectionTests(repo, origin).register(mux, route)
-	activationAPI := newActivationHTTP(activation)
+	activationAPI := newActivationHTTP(activation, operations)
 	activationAPI.register(route)
 	route("GET "+providerSetupPath, func(w http.ResponseWriter, r *http.Request) {
 		metadata, err := newProviderSetup(origin, repo.scope.Environment)
@@ -205,7 +211,7 @@ func Register(mux *http.ServeMux, provider auth.Authenticator, store *access.Sto
 			ValidationMode      string        `json:"validation_mode"`
 			LatestRevision      *Metadata     `json:"latest_revision"`
 			ActiveRevision      *Metadata     `json:"database_active_revision"`
-		}{status.Provider, status.Source, activation == nil, activation != nil, "offline_static", latestRevision, activeRevision})
+		}{status.Provider, status.Source, activation == nil, activation != nil && operations.Affinity.configured(), "offline_static", latestRevision, activeRevision})
 	})
 	return activationAPI.close
 }

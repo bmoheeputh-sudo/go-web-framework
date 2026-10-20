@@ -22,14 +22,15 @@ import (
 )
 
 var (
-	ErrInvalid     = errors.New("auth_config_invalid")
-	ErrDenied      = errors.New("auth_config_denied")
-	ErrConflict    = errors.New("auth_config_conflict")
-	ErrNotFound    = errors.New("auth_config_not_found")
-	ErrUnavailable = errors.New("auth_config_unavailable")
-	ErrTimeout     = errors.New("auth_config_timeout")
-	ErrCanceled    = errors.New("auth_config_canceled")
-	ErrAudit       = errors.New("auth_config_audit_failed")
+	ErrInvalid                     = errors.New("auth_config_invalid")
+	ErrDenied                      = errors.New("auth_config_denied")
+	ErrConflict                    = errors.New("auth_config_conflict")
+	ErrNotFound                    = errors.New("auth_config_not_found")
+	ErrUnavailable                 = errors.New("auth_config_unavailable")
+	ErrTimeout                     = errors.New("auth_config_timeout")
+	ErrCanceled                    = errors.New("auth_config_canceled")
+	ErrAudit                       = errors.New("auth_config_audit_failed")
+	ErrRecoveryProviderUnavailable = errors.New("auth_config_recovery_provider_unavailable")
 )
 
 type Scope struct {
@@ -175,6 +176,8 @@ func (r *Repository) transaction(ctx context.Context, fn func(context.Context, p
 	switch {
 	case errors.Is(err, access.ErrDenied):
 		return ErrDenied
+	case errors.Is(err, access.ErrCommitUncertain):
+		return ErrCommitUncertain
 	case errors.Is(err, pgx.ErrNoRows):
 		return ErrNotFound
 	}

@@ -24,14 +24,16 @@ type activationPreparation struct {
 }
 
 type activationHTTP struct {
-	mu      sync.Mutex
-	service *ActivationService
-	items   map[string]*activationPreparation
-	closed  bool
+	mu         sync.Mutex
+	service    *ActivationService
+	operations ActivationOperations
+	instance   string
+	items      map[string]*activationPreparation
+	closed     bool
 }
 
-func newActivationHTTP(service *ActivationService) *activationHTTP {
-	return &activationHTTP{service: service, items: make(map[string]*activationPreparation)}
+func newActivationHTTP(service *ActivationService, operations ActivationOperations) *activationHTTP {
+	return &activationHTTP{service: service, operations: operations, instance: oauth2.GenerateVerifier(), items: make(map[string]*activationPreparation)}
 }
 
 func (h *activationHTTP) close() {
@@ -77,6 +79,9 @@ func (h *activationHTTP) get(ctx context.Context, id string) (*activationPrepara
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.pruneLocked(time.Now())
+	if prefix, _, found := strings.Cut(id, "."); found && prefix != h.instance {
+		return nil, ErrPreparationWrongInstance
+	}
 	item := h.items[id]
 	if item == nil || item.actor != actor.ID || item.claimed {
 		return nil, ErrNotFound
@@ -92,6 +97,9 @@ func (h *activationHTTP) claim(ctx context.Context, id string) (*activationPrepa
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.pruneLocked(time.Now())
+	if prefix, _, found := strings.Cut(id, "."); found && prefix != h.instance {
+		return nil, ErrPreparationWrongInstance
+	}
 	item := h.items[id]
 	if item == nil || item.actor != actor.ID || item.claimed {
 		return nil, ErrNotFound
@@ -102,20 +110,22 @@ func (h *activationHTTP) claim(ctx context.Context, id string) (*activationPrepa
 }
 
 type preparationResponse struct {
-	ID                       string        `json:"preparation_id"`
-	RevisionID               string        `json:"revision_id"`
-	RevisionGeneration       int64         `json:"revision_generation"`
-	ExpectedGeneration       int64         `json:"expected_activation_generation"`
-	TargetGeneration         int64         `json:"target_activation_generation"`
-	ExpiresAt                time.Time     `json:"expires_at"`
-	CurrentProvider          auth.Provider `json:"current_provider"`
-	CurrentSource            string        `json:"current_source"`
-	RequiresReauthentication bool          `json:"requires_reauthentication"`
-	MaximumTransitionSeconds int64         `json:"maximum_transition_seconds"`
-	Warning                  string        `json:"warning,omitempty"`
-	NormalCallbackStatus     string        `json:"normal_callback_status"`
-	NormalEvidenceID         string        `json:"normal_evidence_id,omitempty"`
-	NormalEvidenceExpiresAt  *time.Time    `json:"normal_evidence_expires_at,omitempty"`
+	ID                        string        `json:"preparation_id"`
+	RevisionID                string        `json:"revision_id"`
+	RevisionGeneration        int64         `json:"revision_generation"`
+	ExpectedGeneration        int64         `json:"expected_activation_generation"`
+	TargetGeneration          int64         `json:"target_activation_generation"`
+	ExpiresAt                 time.Time     `json:"expires_at"`
+	CurrentProvider           auth.Provider `json:"current_provider"`
+	CurrentSource             string        `json:"current_source"`
+	RequiresReauthentication  bool          `json:"requires_reauthentication"`
+	MaximumTransitionSeconds  int64         `json:"maximum_transition_seconds"`
+	Warning                   string        `json:"warning,omitempty"`
+	EmergencyRecoveryRequired bool          `json:"emergency_recovery_required"`
+	OfflineRecoveryProcedure  string        `json:"offline_recovery_procedure,omitempty"`
+	NormalCallbackStatus      string        `json:"normal_callback_status"`
+	NormalEvidenceID          string        `json:"normal_evidence_id,omitempty"`
+	NormalEvidenceExpiresAt   *time.Time    `json:"normal_evidence_expires_at,omitempty"`
 }
 
 func responseForPreparation(item *activationPreparation) preparationResponse {
@@ -129,6 +139,8 @@ func responseForPreparation(item *activationPreparation) preparationResponse {
 		NormalCallbackStatus:     "not_started"}
 	if readiness.RequiresReauthentication {
 		result.Warning = "immediate_reauthentication_required"
+		result.EmergencyRecoveryRequired = true
+		result.OfflineRecoveryProcedure = "auth-recovery-cli"
 	}
 	if item.normal != nil {
 		status, evidence, expires := item.normal.Status()
@@ -162,17 +174,79 @@ func safeReason(reason string) (string, bool) {
 	return reason, len(reason) >= 8 && len(reason) <= 512 && !strings.ContainsAny(reason, "\r\n\x00")
 }
 
+func (h *activationHTTP) requirePreparation(w http.ResponseWriter) bool {
+	if h.service == nil {
+		httpError(w, ErrUnavailable)
+		return false
+	}
+	if !h.operations.Affinity.configured() {
+		reply(w, http.StatusServiceUnavailable, map[string]any{
+			"error": "activation_affinity_required", "required_configuration": "AUTH_ACTIVATION_AFFINITY_MODE",
+			"automatic_retry_allowed": false,
+		})
+		return false
+	}
+	return true
+}
+
+func activationErrorCode(err error) (int, string) {
+	switch {
+	case errors.Is(err, ErrInvalid):
+		return http.StatusBadRequest, "auth_config_invalid"
+	case errors.Is(err, ErrDenied):
+		return http.StatusForbidden, "access_denied"
+	case errors.Is(err, ErrNotFound):
+		return http.StatusNotFound, "auth_config_not_found"
+	case errors.Is(err, ErrConflict):
+		return http.StatusConflict, "auth_config_conflict"
+	case errors.Is(err, ErrPreparationWrongInstance):
+		return http.StatusServiceUnavailable, "activation_preparation_wrong_instance"
+	default:
+		return http.StatusServiceUnavailable, "auth_config_unavailable"
+	}
+}
+
+func activationFailure(w http.ResponseWriter, err error, result ActivationResult) {
+	status, code := activationErrorCode(err)
+	if errors.Is(err, auth.ErrRuntimeMismatch) {
+		status = http.StatusServiceUnavailable
+		if result.Outcome == ActivationCommitUncertain {
+			code = "activation_commit_uncertain"
+		} else {
+			code = "activation_committed_not_applied"
+		}
+	}
+	reply(w, status, struct {
+		Error string `json:"error"`
+		ActivationResult
+	}{code, result})
+}
+
+func (h *activationHTTP) withAuthoritativeState(ctx context.Context, result ActivationResult) ActivationResult {
+	if h.service == nil {
+		return result
+	}
+	if head, err := h.service.repo.activationHeadAuthorized(ctx); err == nil {
+		result.AuthoritativeStateKnown = true
+		result.AuthoritativeGeneration = head.Generation
+		result.AuthoritativeRevisionID = head.ActiveRevisionID
+	}
+	return result
+}
+
 func (h *activationHTTP) register(route func(string, http.HandlerFunc)) {
 	route("POST /api/admin/auth/settings/{id}/activation/prepare", h.prepare)
 	route("GET /api/admin/auth/activation-preparations/{preparation}", h.status)
 	route("POST /api/admin/auth/activation-preparations/{preparation}/readiness", h.readiness)
 	route("POST /api/admin/auth/activation-preparations/{preparation}/activate", h.activate)
 	route("POST /api/admin/auth/settings/{id}/rollback", h.rollback)
+	route("GET /api/admin/auth/settings/{id}/recovery-readiness", h.recoveryReadiness)
+	route("GET /api/admin/auth/activation/status", h.activationStatus)
+	route("POST /api/admin/auth/activation/reconcile", h.reconcile)
 }
 
 func (h *activationHTTP) prepare(w http.ResponseWriter, r *http.Request) {
-	if h.service == nil {
-		httpError(w, ErrUnavailable)
+	if !h.requirePreparation(w) {
 		return
 	}
 	var body struct {
@@ -188,11 +262,18 @@ func (h *activationHTTP) prepare(w http.ResponseWriter, r *http.Request) {
 	}
 	p, err := h.service.Prepare(r.Context(), r.PathValue("id"), *body.RevisionGeneration, *body.ActivationGeneration)
 	if err != nil {
+		if errors.Is(err, ErrRecoveryProviderUnavailable) {
+			reply(w, http.StatusServiceUnavailable, map[string]any{
+				"error": "recovery_provider_unavailable", "offline_recovery_procedure": "auth-recovery-cli",
+				"recovery_provider_must_be_available": true, "automatic_retry_allowed": false,
+			})
+			return
+		}
 		httpError(w, err)
 		return
 	}
 	actor, _ := access.Principal(r.Context())
-	item := &activationPreparation{id: oauth2.GenerateVerifier(), actor: actor.ID, prepared: p}
+	item := &activationPreparation{id: h.instance + "." + oauth2.GenerateVerifier(), actor: actor.ID, prepared: p}
 	if err := h.add(item); err != nil {
 		p.Close()
 		httpError(w, err)
@@ -202,8 +283,7 @@ func (h *activationHTTP) prepare(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *activationHTTP) status(w http.ResponseWriter, r *http.Request) {
-	if h.service == nil {
-		httpError(w, ErrUnavailable)
+	if !h.requirePreparation(w) {
 		return
 	}
 	item, err := h.get(r.Context(), r.PathValue("preparation"))
@@ -229,8 +309,7 @@ func (h *activationHTTP) status(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *activationHTTP) readiness(w http.ResponseWriter, r *http.Request) {
-	if h.service == nil {
-		httpError(w, ErrUnavailable)
+	if !h.requirePreparation(w) {
 		return
 	}
 	var body struct{}
@@ -281,67 +360,129 @@ func (h *activationHTTP) readiness(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *activationHTTP) activate(w http.ResponseWriter, r *http.Request) {
-	if h.service == nil {
-		httpError(w, ErrUnavailable)
+	if !h.requirePreparation(w) {
 		return
 	}
 	var body struct {
-		RevisionID                  string `json:"revision_id"`
-		RevisionGeneration          *int64 `json:"expected_revision_generation"`
-		ActivationGeneration        *int64 `json:"expected_activation_generation"`
-		IsolatedEvidenceID          string `json:"isolated_evidence_id"`
-		NormalEvidenceID            string `json:"normal_evidence_id"`
-		EnrolledUserID              string `json:"enrolled_user_id"`
-		TransitionSeconds           *int64 `json:"transition_seconds"`
-		AcknowledgeReauthentication bool   `json:"acknowledge_reauthentication"`
-		Confirm                     bool   `json:"confirm"`
-		Reason                      string `json:"reason"`
+		RevisionID                   string `json:"revision_id"`
+		RevisionGeneration           *int64 `json:"expected_revision_generation"`
+		ActivationGeneration         *int64 `json:"expected_activation_generation"`
+		IsolatedEvidenceID           string `json:"isolated_evidence_id"`
+		NormalEvidenceID             string `json:"normal_evidence_id"`
+		EnrolledUserID               string `json:"enrolled_user_id"`
+		TransitionSeconds            *int64 `json:"transition_seconds"`
+		AcknowledgeReauthentication  bool   `json:"acknowledge_reauthentication"`
+		AcknowledgeEmergencyRecovery bool   `json:"acknowledge_emergency_recovery"`
+		Confirm                      bool   `json:"confirm"`
+		Reason                       string `json:"reason"`
 	}
 	if !access.DecodeJSON(w, r, &body) {
 		return
 	}
 	reason, validReason := safeReason(body.Reason)
 	if !body.Confirm || !validReason || body.RevisionGeneration == nil || body.ActivationGeneration == nil || body.TransitionSeconds == nil || *body.TransitionSeconds < 0 || *body.TransitionSeconds > 1800 {
-		httpError(w, ErrInvalid)
+		activationFailure(w, ErrInvalid, activationNotCommitted(nil))
 		return
 	}
 	item, err := h.get(r.Context(), r.PathValue("preparation"))
 	if err != nil {
-		httpError(w, err)
+		activationFailure(w, err, activationNotCommitted(nil))
 		return
 	}
 	if body.RevisionID != item.prepared.metadata.ID || *body.RevisionGeneration != item.prepared.metadata.Generation || *body.ActivationGeneration != item.prepared.expected {
-		httpError(w, ErrConflict)
+		activationFailure(w, ErrConflict, h.withAuthoritativeState(r.Context(), activationNotCommitted(item.prepared)))
 		return
 	}
 	if item.prepared.readiness.RequiresReauthentication && (!body.AcknowledgeReauthentication || *body.TransitionSeconds != 0) {
-		httpError(w, ErrInvalid)
+		activationFailure(w, ErrInvalid, h.withAuthoritativeState(r.Context(), activationNotCommitted(item.prepared)))
+		return
+	}
+	if item.prepared.readiness.RequiresReauthentication && !body.AcknowledgeEmergencyRecovery {
+		activationFailure(w, ErrInvalid, h.withAuthoritativeState(r.Context(), activationNotCommitted(item.prepared)))
 		return
 	}
 	item, err = h.claim(r.Context(), item.id)
 	if err != nil {
-		httpError(w, err)
+		activationFailure(w, err, activationNotCommitted(nil))
 		return
 	}
 	defer item.prepared.Close()
 	result, err := h.service.Activate(r.Context(), item.prepared, ActivationRequest{
-		AcknowledgeReauthentication: body.AcknowledgeReauthentication,
-		IsolatedEvidenceID:          body.IsolatedEvidenceID, NormalEvidenceID: body.NormalEvidenceID,
+		AcknowledgeReauthentication:  body.AcknowledgeReauthentication,
+		AcknowledgeEmergencyRecovery: body.AcknowledgeEmergencyRecovery,
+		IsolatedEvidenceID:           body.IsolatedEvidenceID, NormalEvidenceID: body.NormalEvidenceID,
 		EnrolledUserID: body.EnrolledUserID, Transition: time.Duration(*body.TransitionSeconds) * time.Second,
 		Reason: reason,
 	})
+	result = h.withAuthoritativeState(r.Context(), result)
 	if err != nil {
 		if errors.Is(err, auth.ErrRuntimeMismatch) {
-			reply(w, http.StatusServiceUnavailable, struct {
-				Error string `json:"error"`
-				ActivationResult
-			}{"auth_runtime_mismatch", result})
+			activationFailure(w, err, result)
 			return
 		}
+		activationFailure(w, err, result)
+		return
+	}
+	reply(w, http.StatusOK, result)
+}
+
+func (h *activationHTTP) recoveryReadiness(w http.ResponseWriter, r *http.Request) {
+	if h.service == nil {
+		httpError(w, ErrUnavailable)
+		return
+	}
+	result, err := h.service.repo.RecoveryReadiness(r.Context(), r.PathValue("id"), h.service.callback)
+	if err != nil {
 		httpError(w, err)
 		return
 	}
 	reply(w, http.StatusOK, result)
+}
+
+func (h *activationHTTP) activationStatus(w http.ResponseWriter, r *http.Request) {
+	status, err := h.operationalStatus(r.Context())
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	reply(w, http.StatusOK, status)
+}
+
+func (h *activationHTTP) reconcile(w http.ResponseWriter, r *http.Request) {
+	if h.service == nil || h.operations.Reconcile == nil {
+		httpError(w, ErrUnavailable)
+		return
+	}
+	var body struct {
+		ExpectedDesiredGeneration *int64 `json:"expected_desired_generation"`
+		Confirm                   bool   `json:"confirm"`
+	}
+	if !access.DecodeJSON(w, r, &body) {
+		return
+	}
+	if body.ExpectedDesiredGeneration == nil || *body.ExpectedDesiredGeneration < 0 || !body.Confirm {
+		httpError(w, ErrInvalid)
+		return
+	}
+	before, err := h.operationalStatus(r.Context())
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	if before.AuthoritativeGeneration != *body.ExpectedDesiredGeneration {
+		httpError(w, ErrConflict)
+		return
+	}
+	if err = h.operations.Reconcile(r.Context()); err != nil {
+		httpError(w, err)
+		return
+	}
+	after, err := h.operationalStatus(r.Context())
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	reply(w, http.StatusOK, after)
 }
 
 func (h *activationHTTP) rollback(w http.ResponseWriter, r *http.Request) {

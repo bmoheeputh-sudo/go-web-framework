@@ -29,7 +29,8 @@ or identity/administrator claims supplied by the browser.
    request repeats revision/generations, references both fresh evidence records and
    the explicitly enrolled administrator, confirms the operation, supplies a
    reason, and requests zero to 1,800 transition seconds. First cutover also
-   requires `acknowledge_reauthentication=true` and zero transition seconds.
+   requires `acknowledge_reauthentication=true`,
+   `acknowledge_emergency_recovery=true`, and zero transition seconds.
 4. `POST /api/admin/auth/settings/{superseded-id}/rollback` creates a new immutable
    recovery draft with fresh authenticated encryption and atomic reason/provenance
    audit. It never reactivates history. The draft must independently pass
@@ -39,8 +40,17 @@ Preparation handles are bounded to sixteen and one per initiating administrator.
 They expire after five minutes and are process-local because they own prepared
 cryptographic/network resources. A load-balanced administrator flow requires
 instance affinity until activation completes; losing that instance requires fresh
-preparation and readiness. Durable evidence and the final activation transaction
-remain PostgreSQL-authoritative.
+preparation and readiness. Set `AUTH_ACTIVATION_AFFINITY_MODE=single_instance`
+only for a true single-replica deployment. In a multi-replica deployment, configure
+ingress affinity for the entire preparation, readiness callback, status and
+activation sequence, then set `AUTH_ACTIVATION_AFFINITY_MODE=session_affinity`.
+Blank configuration blocks preparation with `activation_affinity_required`.
+Preparation IDs and readiness cookies carry cryptographically random process
+markers; a request reaching another process fails with
+`activation_preparation_wrong_instance` or an originating-instance callback error.
+Neither error weakens state, PKCE, cookie, evidence or administrator correlation.
+Durable evidence and the final activation transaction remain
+PostgreSQL-authoritative.
 
 ## Trusted internal API
 
@@ -65,7 +75,8 @@ remain PostgreSQL-authoritative.
   intended enrolled user ID, an explicit reason and a transition duration from
   zero to thirty minutes for database-to-database transitions. The initial
   environment-to-database cutover requires `Transition=0` and explicit
-  `AcknowledgeReauthentication=true`; otherwise it is rejected before mutation.
+  `AcknowledgeReauthentication=true` and
+  `AcknowledgeEmergencyRecovery=true`; otherwise it is rejected before mutation.
   IDs are references to server-verified evidence, not
   identity claims. It returns desired/applied generations, `Applied`, `Committed` and
   `CommitUncertain` separately.
@@ -142,8 +153,40 @@ A stale runtime, concurrent shutdown, closed candidate or failed CAS returns
 `ErrRuntimeMismatch` and reports the desired versus applied generations. New HTTP
 requests then receive 503; the old Local DEV/environment provider is not used as
 recovery. An uncertain transaction commit outcome is also fenced and requires
-reconciliation; it is not reported as success. Database and in-process publication
-are not one atomic operation, nor does this provide atomic multi-instance activation.
+reconciliation; it is not reported as success. A PostgreSQL error or explicit
+transaction rollback is classified as definitely not committed. Loss of the
+connection or protocol result after COMMIT was sent is classified as uncertain;
+clients must never retry the activation automatically. Database and in-process
+publication are not one atomic operation, nor does this provide atomic
+multi-instance activation.
+
+### Activation response contract
+
+Activation responses use stable snake-case fields. `outcome` and
+`commit_persisted` are authoritative about what the responding process knows:
+
+| `outcome` | `commit_persisted` | Meaning | Client action |
+|---|---:|---|---|
+| `committed_applied` | `true` | PostgreSQL committed and this instance published the exact generation. | Do not retry. |
+| `committed_not_applied` | `true` | PostgreSQL committed, but this instance did not publish it. | Reconcile or restart; do not activate again. |
+| `commit_uncertain` | `null` | The server cannot prove whether COMMIT persisted. | Read authoritative status; never retry automatically. |
+| `not_committed` | `false` | The server knows the activation did not commit. | Correct the cause and create a fresh preparation where required. |
+
+The envelope also supplies `desired_generation`, `applied_generation`,
+`revision_id`, `authoritative_state_known`, `authoritative_generation`, `authoritative_revision_id`,
+`reconciliation_required`, `commit_uncertain`, and
+`automatic_retry_allowed` (always `false`). A 503 does not itself determine the
+commit outcome. `commit_persisted` is never `true` for an uncertain commit.
+
+`GET /api/admin/auth/activation/status` compares the scoped PostgreSQL head with
+the local runtime and listener status. `POST /api/admin/auth/activation/reconcile`
+requires the expected authoritative generation and explicit confirmation; it only
+loads and publishes the already committed head and never repeats activation.
+Both endpoints require the ordinary authenticated, active `admin.manage` checks;
+the write also receives origin/JSON protection. If the only instance is fenced
+after an ambiguous commit, its authentication boundary intentionally also blocks
+these endpoints. Inspect PostgreSQL and restart for startup rehydration, or use a
+healthy authenticated peer. There is no Local DEV fallback.
 
 ## Sessions, callbacks and request consistency
 
@@ -184,7 +227,8 @@ Readiness therefore reports `RequiresReauthentication=true` and
 `MaximumSessionGrace=0` for Local DEV and environment OIDC. A future confirmation
 UI must explain: **"Existing sign-ins and pending environment logins will not
 carry over. Sign in again using the new OIDC configuration."** The activation API
-requires explicit acknowledgment and a zero transition duration; activation history
+requires explicit reauthentication and emergency-recovery acknowledgments and a
+zero transition duration; activation history
 records equal activation/transition timestamps. No activation UI exists yet, so no
 claim is made that the present Admin Portal displays this notice.
 Subsequent database-to-database readiness reports a maximum of thirty minutes;
@@ -215,6 +259,25 @@ with the draft. Historical settings and ciphertext are never overwritten. The ne
 draft must pass validation, explicit approval, both readiness tests and the same
 activation operation. A superseded revision itself is never reactivated; old
 sessions cannot regain trust simply because an issuer/client is reused.
+
+Recovery can be pre-staged while providers are healthy. Create the immutable
+recovery draft, validate and approve it, verify the exact normal callback URI,
+explicitly enroll an active target OIDC identity with effective `admin.manage`,
+and complete fresh isolated and normal-callback tests immediately before
+activation. `GET /api/admin/auth/settings/{id}/recovery-readiness` reports durable
+configuration/enrollment readiness separately from the two short-lived evidence
+records. Evidence remains limited to five minutes and is never promoted into
+historical recovery authority.
+
+Portal recovery therefore cannot complete while the selected recovery provider is
+unavailable: it must perform fresh discovery, JWKS and both verified login tests.
+Preparation returns `recovery_provider_unavailable`, identifies
+`auth-recovery-cli`, and forbids automatic retry. The offline procedure removes
+dependence on the broken portal login but does **not** bypass OIDC verification;
+the recovery provider itself, its discovery/JWKS endpoints, PostgreSQL, audit
+infrastructure and required encryption keys must remain available. Operators
+should pre-stage a separately operated recovery OIDC provider and regularly verify
+the protected offline capability. No unauthenticated HTTP recovery path exists.
 
 Snapshots are immutable. Active and draining authenticators have reference leases
 held across complete requests and explicit readiness operations. Retirement stops

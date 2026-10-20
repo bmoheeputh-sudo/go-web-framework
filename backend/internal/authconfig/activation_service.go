@@ -17,12 +17,13 @@ import (
 // adapter can invoke it, but cannot replace its transactional authorization,
 // evidence, generation, audit, notification, or publication checks.
 type ActivationService struct {
-	repo     *Repository
-	runtime  *auth.Runtime
-	store    *auth.PostgresStore
-	sessions auth.SessionConfig
-	callback string
-	client   func(context.Context, string) (*http.Client, error)
+	repo        *Repository
+	runtime     *auth.Runtime
+	store       *auth.PostgresStore
+	sessions    auth.SessionConfig
+	callback    string
+	client      func(context.Context, string) (*http.Client, error)
+	transaction func(context.Context, func(context.Context, pgx.Tx, access.User) error) error
 }
 type PreparedActivation struct {
 	service     *ActivationService
@@ -63,7 +64,8 @@ func NewActivationService(repo *Repository, runtime *auth.Runtime, store *auth.P
 	if mismatch || status.Provider == auth.GoogleIAP || status.DeploymentID != repo.scope.DeploymentID || status.Environment != repo.scope.Environment {
 		return nil, ErrDenied
 	}
-	return &ActivationService{repo, runtime, store, sessions, callback, newTestClient}, nil
+	return &ActivationService{repo: repo, runtime: runtime, store: store, sessions: sessions, callback: callback,
+		client: newTestClient, transaction: repo.transaction}, nil
 }
 
 // synchronousProbeKeys avoids go-oidc RemoteKeySet's detached background fetches.
@@ -97,6 +99,11 @@ func (s *ActivationService) Prepare(ctx context.Context, id string, generation, 
 	}
 	provider, err := prepareRuntimeOIDC(ctx, m, secret, expectedActivation+1, s.sessions, s.store, s.client)
 	if err != nil {
+		if errors.Is(err, ErrUnavailable) {
+			if recovery, recoveryErr := s.repo.recoverySource(ctx, m.ID); recoveryErr == nil && recovery != "" {
+				return nil, ErrRecoveryProviderUnavailable
+			}
+		}
 		return nil, err
 	}
 	publication, err := s.runtime.Stage(provider, expectedActivation)
@@ -145,40 +152,69 @@ func prepareRuntimeOIDC(ctx context.Context, m Metadata, secret Secret, generati
 }
 
 type ActivationRequest struct {
-	AcknowledgeReauthentication                          bool
-	IsolatedEvidenceID, NormalEvidenceID, EnrolledUserID string
-	Transition                                           time.Duration
-	Reason                                               string
+	AcknowledgeReauthentication, AcknowledgeEmergencyRecovery bool
+	IsolatedEvidenceID, NormalEvidenceID, EnrolledUserID      string
+	Transition                                                time.Duration
+	Reason                                                    string
 }
+type ActivationOutcome string
+
+const (
+	ActivationCommittedApplied    ActivationOutcome = "committed_applied"
+	ActivationCommittedNotApplied ActivationOutcome = "committed_not_applied"
+	ActivationCommitUncertain     ActivationOutcome = "commit_uncertain"
+	ActivationNotCommitted        ActivationOutcome = "not_committed"
+)
+
 type ActivationResult struct {
-	DesiredGeneration int64  `json:"desired_generation"`
-	AppliedGeneration int64  `json:"applied_generation"`
-	RevisionID        string `json:"revision_id"`
-	Applied           bool   `json:"applied"`
-	Committed         bool   `json:"committed"`
-	CommitUncertain   bool   `json:"commit_uncertain"`
+	Outcome                 ActivationOutcome `json:"outcome"`
+	CommitPersisted         *bool             `json:"commit_persisted"`
+	DesiredGeneration       int64             `json:"desired_generation"`
+	AppliedGeneration       int64             `json:"applied_generation"`
+	RevisionID              string            `json:"revision_id"`
+	AuthoritativeStateKnown bool              `json:"authoritative_state_known"`
+	AuthoritativeGeneration int64             `json:"authoritative_generation"`
+	AuthoritativeRevisionID string            `json:"authoritative_revision_id,omitempty"`
+	Applied                 bool              `json:"applied"`
+	CommitUncertain         bool              `json:"commit_uncertain"`
+	ReconciliationRequired  bool              `json:"reconciliation_required"`
+	AutomaticRetryAllowed   bool              `json:"automatic_retry_allowed"`
+}
+
+func commitKnown(value bool) *bool { return &value }
+
+func activationNotCommitted(p *PreparedActivation) ActivationResult {
+	result := ActivationResult{Outcome: ActivationNotCommitted, CommitPersisted: commitKnown(false)}
+	if p != nil {
+		result.DesiredGeneration = p.expected + 1
+		result.RevisionID = p.metadata.ID
+		if status, _, _ := p.service.runtime.ControlStatus(); status.AppliedGeneration >= 0 {
+			result.AppliedGeneration = status.AppliedGeneration
+		}
+	}
+	return result
 }
 
 // Activate runs only after external preparation. All administrator, evidence,
 // head, lifecycle, audit and notification checks/writes share one lock/tx.
 func (s *ActivationService) Activate(ctx context.Context, p *PreparedActivation, request ActivationRequest) (ActivationResult, error) {
 	if p == nil || p.service != s || request.Transition < 0 || request.Transition > 30*time.Minute || !validID(request.IsolatedEvidenceID) || !validID(request.NormalEvidenceID) || !validID(request.EnrolledUserID) || strings.TrimSpace(request.Reason) == "" || len(request.Reason) > 512 {
-		return ActivationResult{}, ErrInvalid
+		return activationNotCommitted(p), ErrInvalid
 	}
 	// First cutover has no safely revision-bound credentials to drain. Do not
 	// silently accept a grace request or record a misleading history deadline.
-	if p.readiness.RequiresReauthentication && (!request.AcknowledgeReauthentication || request.Transition != 0) {
-		return ActivationResult{}, ErrInvalid
+	if p.readiness.RequiresReauthentication && (!request.AcknowledgeReauthentication || !request.AcknowledgeEmergencyRecovery || request.Transition != 0) {
+		return activationNotCommitted(p), ErrInvalid
 	}
 	// Preflight refuses a second transition while one drains, and detects stale
 	// runtime state without any database changes. Commit still performs its CAS.
 	if err := p.publication.Reserve(); err != nil {
-		return ActivationResult{}, ErrConflict
+		return activationNotCommitted(p), ErrConflict
 	}
 	defer p.publication.Abort() // Mismatch/uncertain outcomes remain fenced separately.
 	var deadline time.Time
 	readyToCommit := false
-	err := s.repo.transaction(ctx, func(ctx context.Context, tx pgx.Tx, actor access.User) error {
+	err := s.transaction(ctx, func(ctx context.Context, tx pgx.Tx, actor access.User) error {
 		if !time.Now().Before(p.expires) {
 			return ErrConflict
 		}
@@ -276,12 +312,13 @@ func (s *ActivationService) Activate(ctx context.Context, p *PreparedActivation,
 			return err
 		}
 		details := struct {
-			Generation int64  `json:"generation"`
-			Previous   string `json:"previous_revision_id"`
-			Isolated   string `json:"isolated_evidence_id"`
-			Normal     string `json:"normal_evidence_id"`
-			User       string `json:"enrolled_user_id"`
-		}{generation + 1, previous, request.IsolatedEvidenceID, request.NormalEvidenceID, request.EnrolledUserID}
+			Generation                    int64  `json:"generation"`
+			Previous                      string `json:"previous_revision_id"`
+			Isolated                      string `json:"isolated_evidence_id"`
+			Normal                        string `json:"normal_evidence_id"`
+			User                          string `json:"enrolled_user_id"`
+			EmergencyRecoveryAcknowledged bool   `json:"emergency_recovery_acknowledged"`
+		}{generation + 1, previous, request.IsolatedEvidenceID, request.NormalEvidenceID, request.EnrolledUserID, request.AcknowledgeEmergencyRecovery}
 		if access.RecordAudit(ctx, tx, actor.ID, "auth_config.activated", m.ID, details) != nil {
 			return ErrAudit
 		}
@@ -300,19 +337,24 @@ func (s *ActivationService) Activate(ctx context.Context, p *PreparedActivation,
 		return nil
 	})
 	if err != nil {
-		if readyToCommit {
+		if readyToCommit && errors.Is(err, ErrCommitUncertain) {
 			s.runtime.Fence(p.expected + 1)
 			status, _, _ := s.runtime.ControlStatus()
-			return ActivationResult{DesiredGeneration: p.expected + 1, AppliedGeneration: status.AppliedGeneration, RevisionID: p.metadata.ID, CommitUncertain: true}, auth.ErrRuntimeMismatch
+			return ActivationResult{Outcome: ActivationCommitUncertain, DesiredGeneration: p.expected + 1,
+				AppliedGeneration: status.AppliedGeneration, RevisionID: p.metadata.ID, CommitUncertain: true,
+				ReconciliationRequired: true}, auth.ErrRuntimeMismatch
 		}
-		return ActivationResult{}, err
+		return activationNotCommitted(p), err
 	}
-	result := ActivationResult{DesiredGeneration: p.expected + 1, RevisionID: p.metadata.ID, Committed: true}
+	result := ActivationResult{Outcome: ActivationCommittedApplied, CommitPersisted: commitKnown(true), DesiredGeneration: p.expected + 1,
+		RevisionID: p.metadata.ID, AuthoritativeStateKnown: true, AuthoritativeGeneration: p.expected + 1, AuthoritativeRevisionID: p.metadata.ID}
 	err = p.publication.Commit(deadline)
 	status, _, _ := s.runtime.ControlStatus()
 	result.AppliedGeneration = status.AppliedGeneration
 	result.Applied = err == nil
 	if err != nil {
+		result.Outcome = ActivationCommittedNotApplied
+		result.ReconciliationRequired = true
 		p.Close()
 		return result, auth.ErrRuntimeMismatch
 	}

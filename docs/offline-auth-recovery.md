@@ -45,6 +45,14 @@ keyring and performs the same hardened discovery, endpoint, algorithm and JWKS
 preparation used by controlled activation. Missing keys, invalid metadata, unsafe
 network destinations, provider failure or callback mismatch refuses recovery.
 
+The offline command is the approved procedure when portal authentication is
+unavailable. It does not make an unavailable identity provider usable: the chosen
+pre-staged recovery provider and its discovery/JWKS endpoints must be reachable.
+While providers are healthy, create, validate and approve a recovery revision,
+verify its exact callback, enroll its intended administrator explicitly, and test
+the protected operator capability. Portal evidence remains deliberately short
+lived and cannot be reused as historical proof during an outage.
+
 Recovery always records a zero-length transition deadline. Existing sessions and
 callbacks from the failed provider receive no new grace period; expired/deleted
 sessions are never restored. Connected instances receive the transaction-scoped

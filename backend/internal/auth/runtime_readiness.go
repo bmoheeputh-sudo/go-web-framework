@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,7 +52,7 @@ func (m *Runtime) BeginReadiness(p *PreparedOIDC, w http.ResponseWriter, r *http
 	}
 	copy := *p.provider
 	e := &readinessEntry{prepared: p, expires: time.Now().Add(5 * time.Minute)}
-	store := &readinessStore{base: p.store, binding: p.binding, expires: e.expires}
+	store := &readinessStore{base: p.store, binding: p.binding, expires: e.expires, instance: m.readinessInstance}
 	copy.store = store
 	copy.flowCookie = readinessCookie(copy.secureCookies)
 	copy.onVerified = verified
@@ -95,6 +96,12 @@ func (m *Runtime) readinessCallback(w http.ResponseWriter, r *http.Request) bool
 		writeError(w, 401, "invalid test callback")
 		return true
 	}
+	prefix, _, marked := strings.Cut(cookies[0].Value, ".")
+	if !marked || prefix != m.readinessInstance {
+		clearReadiness()
+		writeError(w, http.StatusServiceUnavailable, "activation readiness requires the originating instance")
+		return true
+	}
 	m.mu.Lock()
 	e := m.readiness[cookies[0].Value]
 	if e != nil {
@@ -123,11 +130,12 @@ func (m *Runtime) readinessCallback(w http.ResponseWriter, r *http.Request) bool
 }
 
 type readinessStore struct {
-	base    *PostgresStore
-	binding Binding
-	expires time.Time
-	mu      sync.Mutex
-	token   string
+	base     *PostgresStore
+	binding  Binding
+	expires  time.Time
+	mu       sync.Mutex
+	token    string
+	instance string
 }
 
 func (s *readinessStore) addSession(context.Context, Identity, time.Time, string) (string, error) {
@@ -142,6 +150,7 @@ func (s *readinessStore) addFlow(ctx context.Context, f loginFlow) (string, erro
 	defer cancel()
 	// Generate an opaque token with the same CSPRNG as ordinary flows.
 	token := oauth2.GenerateVerifier()
+	cookieToken := s.instance + "." + token
 	b := s.binding
 	_, err := s.base.db.Exec(ctx, `INSERT INTO framework.oidc_login_flows(token_hash,state_hash,nonce,pkce_verifier,expires_at,binding_source,deployment_id,environment,revision_id,issuer,client_id,flow_purpose)
  VALUES($1,$2,$3,$4,$5,'database',$6,$7,$8,$9,$10,'normal_callback')`, tokenHash(token), tokenHash(f.State), f.Nonce, f.Verifier, s.expires, b.DeploymentID, b.Environment, b.RevisionID, b.Issuer, b.ClientID)
@@ -149,12 +158,13 @@ func (s *readinessStore) addFlow(ctx context.Context, f loginFlow) (string, erro
 		return "", ErrStoreUnavailable
 	}
 	s.mu.Lock()
-	s.token = token
+	s.token = cookieToken
 	s.mu.Unlock()
-	return token, nil
+	return cookieToken, nil
 }
 func (s *readinessStore) takeFlow(ctx context.Context, token, state string) (loginFlow, error) {
-	if !validToken(token) {
+	instance, raw, marked := strings.Cut(token, ".")
+	if !marked || instance != s.instance || !validToken(raw) {
 		return loginFlow{}, ErrUnauthenticated
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -164,7 +174,7 @@ func (s *readinessStore) takeFlow(ctx context.Context, token, state string) (log
 	var hash []byte
 	var fresh bool
 	err := s.base.db.QueryRow(ctx, `DELETE FROM framework.oidc_login_flows WHERE token_hash=$1 AND binding_source='database' AND deployment_id=$2 AND environment=$3 AND revision_id=$4 AND issuer=$5 AND client_id=$6 AND flow_purpose='normal_callback' AND activation_generation IS NULL
- RETURNING state_hash,nonce,pkce_verifier,expires_at,expires_at>clock_timestamp()`, tokenHash(token), b.DeploymentID, b.Environment, b.RevisionID, b.Issuer, b.ClientID).Scan(&hash, &f.Nonce, &f.Verifier, &f.Expires, &fresh)
+	 RETURNING state_hash,nonce,pkce_verifier,expires_at,expires_at>clock_timestamp()`, tokenHash(raw), b.DeploymentID, b.Environment, b.RevisionID, b.Issuer, b.ClientID).Scan(&hash, &f.Nonce, &f.Verifier, &f.Expires, &fresh)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return loginFlow{}, ErrUnauthenticated
 	}
