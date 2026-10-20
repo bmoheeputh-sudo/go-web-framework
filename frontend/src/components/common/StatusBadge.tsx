@@ -8,5 +8,6 @@ export default function StatusBadge({ label, tone = 'neutral', variant = 'outlin
   tone?: StatusTone
   variant?: ChipProps['variant']
 }) {
-  return <Chip size="small" label={label} color={tone === 'neutral' ? 'default' : tone} variant={variant} />
+  return <Chip size="small" label={label} color={tone === 'neutral' ? 'default' : tone} variant={variant}
+    sx={{ maxWidth: '100%', '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' } }} />
 }

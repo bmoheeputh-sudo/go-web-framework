@@ -1,10 +1,11 @@
-import { Alert, Button, Chip, LinearProgress, Paper, Stack, Typography } from '@mui/material'
+import { Alert, Button, Chip, LinearProgress, Stack, Typography } from '@mui/material'
 import RefreshRounded from '@mui/icons-material/RefreshRounded'
 import { useTranslation } from 'react-i18next'
 import { useSession } from './auth/session'
 import { useQuery, useQueryCache } from './api/queries'
 import type { Account } from './api/client'
 import { roleKeys } from './i18n'
+import SectionCard from './components/common/SectionCard'
 
 export default function AccessPortal() {
   const { t } = useTranslation(['admin', 'common'])
@@ -14,11 +15,7 @@ export default function AccessPortal() {
   const canRead = user?.active && user.permissions.includes('accounts.read')
   const accounts = useQuery<Account[]>(canRead ? '/api/accounts' : null)
   const error = access.error || accounts.error
-  return <Paper sx={{ p: { xs: 2, sm: 3 } }}>
-    <Stack direction="row" sx={{ gap: 2, justifyContent: 'space-between', flexWrap: 'wrap', mb: 2 }}>
-      <Typography variant="h6" component="h2">{t('accountAccess')}</Typography>
-      <Button startIcon={<RefreshRounded />} disabled={access.loading} onClick={() => { cache.invalidate(); refreshAccess() }}>{t('refreshAccess')}</Button>
-    </Stack>
+  return <SectionCard title={t('accountAccess')} actions={<Button startIcon={<RefreshRounded />} disabled={access.loading} onClick={() => { cache.invalidate(); refreshAccess() }}>{t('refreshAccess')}</Button>}>
     {(access.loading || accounts.loading) && <LinearProgress aria-label={t('common:loading')} />}
     {error && <Alert severity="warning">{t(error)}</Alert>}
     {user && <Stack spacing={2}>
@@ -28,5 +25,5 @@ export default function AccessPortal() {
       {accounts.data?.map((account) => <Typography key={account.id}><bdi>{account.name}</bdi></Typography>)}
       {canRead && accounts.data?.length === 0 && <Typography color="text.secondary">{t('noAccounts')}</Typography>}
     </Stack>}
-  </Paper>
+  </SectionCard>
 }

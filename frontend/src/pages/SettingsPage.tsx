@@ -3,6 +3,7 @@ import { Box, Tabs, Tab, Typography } from '@mui/material'
 import { useTranslation } from 'react-i18next'
 import { useSearchParams } from 'react-router-dom'
 import RolePermissions from '../settings/RolePermissions'
+import PageHeader from '../components/common/PageHeader'
 
 const AuthenticationSettings = lazy(() => import('../settings/AuthenticationSettings'))
 
@@ -22,7 +23,7 @@ export default function SettingsPage() {
       <Tab id="settings-auth-tab" aria-controls="settings-auth-panel" label={t('auth:title')} />
     </Tabs>
     <Box role="tabpanel" id="settings-roles-panel" aria-labelledby="settings-roles-tab" hidden={tab !== 0}>
-      <Typography component="h2" variant="h6" sx={{ mb: 2 }}>{t('rolesPermissions')}</Typography>
+      <Box sx={{ mb: 2 }}><PageHeader title={t('rolesPermissions')} component="h2" compact /></Box>
       <RolePermissions />
     </Box>
     <Box role="tabpanel" id="settings-auth-panel" aria-labelledby="settings-auth-tab" hidden={tab !== 1} sx={{ minWidth: 0 }}>

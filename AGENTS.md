@@ -16,5 +16,6 @@ For frontend work:
 - Run `cd frontend && npm test && npm run lint && npm run build`, followed by `git diff --check`, after frontend changes. Report any check that could not run.
 - Give each dialog or drawer one title. Group its primary and secondary actions in a consistent footer, and keep destructive or security-sensitive confirmation within the active workflow instead of stacking dialogs.
 - Use shared detail sections and copy controls for technical identifiers, human-readable labels for technical states, and responsive tables whose actions remain visible at narrow widths.
+- Use the semantic typography roles from `frontend/src/design/theme.ts`: page title, section title, primary value, supporting text, detail label, and table header. Keep heading levels meaningful; use `PageHeader`, `SectionCard`, `TwoColumnKeyValue`, `CompactTable`, and `StatusBadge` before styling equivalent structures locally.
 
 Use [the frontend design system guide](docs/frontend-design-system.md) for component and token usage. Do not add a second routing or UI framework without a demonstrated need.

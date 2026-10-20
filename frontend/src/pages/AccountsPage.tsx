@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { Box, Button, Checkbox, FormControlLabel, Paper, TableCell, TableRow, Chip, TextField, Typography } from '@mui/material'
+import { Box, Button, Checkbox, FormControlLabel, TableCell, TableRow, Chip, TextField } from '@mui/material'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery } from '../api/queries'
 import type { Account } from '../api/client'
 import CompactTable from '../components/CompactTable'
 import { Pager, PageTools } from '../components/PageTools'
+import SectionCard from '../components/common/SectionCard'
 
 export default function AccountsPage() {
   const { t } = useTranslation(['admin', 'common'])
@@ -18,8 +19,7 @@ export default function AccountsPage() {
   const busy = query.loading || saving
   return <>
     <PageTools busy={busy} error={error || query.error} onRefresh={clearError} />
-    <Paper sx={{ p: { xs: 2, sm: 3 }, maxWidth: 880 }} aria-busy={busy}>
-      <Typography variant="h6" component="h2" gutterBottom>{t('accounts')}</Typography>
+    <Box sx={{ maxWidth: 880 }}><SectionCard title={t('accounts')} busy={busy}>
       <CompactTable label={t('common:navAccounts')} headers={[t('accountName'), t('common:status')]}
         empty={!query.loading && !query.error && accounts.length === 0} emptyMessage={t('accountsEmpty')} minWidth={360}>
         {accounts.map((account) => <TableRow key={account.id} selected={account.id === accountID} hover>
@@ -37,6 +37,6 @@ export default function AccountsPage() {
       <FormControlLabel label={t('activeAccount')} control={<Checkbox checked={accountActive} disabled={busy} onChange={(_, checked) => setAccountActive(checked)} />} />
       <Box><Button variant="contained" disabled={busy || !accountName.trim()} onClick={() => void mutate(accountID ? `/api/admin/accounts/${accountID}` : '/api/admin/accounts', accountID ? 'PUT' : 'POST', { name: accountName.trim(), active: accountActive })}>{t(accountID ? 'saveAccount' : 'createAccount')}</Button></Box>
 
-    </Paper>
+    </SectionCard></Box>
   </>
 }

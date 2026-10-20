@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { I18nextProvider } from 'react-i18next'
-import { Button } from '@mui/material'
+import { Button, TableCell, TableRow } from '@mui/material'
 import LanguageProvider from '../../LanguageProvider'
 import { createI18n, resources } from '../../i18n'
 import { mockMedia } from '../../test/fixtures'
@@ -10,6 +10,9 @@ import StatusBadge from './StatusBadge'
 import SectionCard from './SectionCard'
 import TwoColumnKeyValue from './TwoColumnKeyValue'
 import DetailDrawer from './DetailDrawer'
+import PageHeader from './PageHeader'
+import CompactTable from '../CompactTable'
+import { createAppTheme, typographyRoles } from '../../design/theme'
 
 beforeEach(() => { mockMedia(); localStorage.clear() })
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
@@ -52,4 +55,33 @@ it.each([['en', 'right'], ['ar', 'left']] as const)('anchors the detail drawer o
   await userEvent.keyboard('{Enter}')
   expect(close).toHaveBeenCalledOnce()
   expect(document.documentElement.dir).toBe(language === 'ar' ? 'rtl' : 'ltr')
+})
+
+it.each(['light', 'dark'] as const)('uses semantic typography roles and readable detail values in %s mode', (mode) => {
+  localStorage.setItem('gwf.appearance', mode)
+  render(<I18nextProvider i18n={createI18n('en')}><LanguageProvider>
+    <PageHeader title="Security dashboard" description="Current application state" actions={<Button>Review</Button>} />
+    <SectionCard title="Provider status" description="Verified configuration">
+      <TwoColumnKeyValue items={[{ label: 'Issuer', value: <bdi>https://issuer.example.test</bdi> }]} />
+      <StatusBadge label="Ready" tone="success" />
+    </SectionCard>
+    <CompactTable label="Recent changes" headers={['Event', 'Time']} empty={false} emptyMessage="No events">
+      <TableRow><TableCell>Updated</TableCell><TableCell>Today</TableCell></TableRow>
+    </CompactTable>
+  </LanguageProvider></I18nextProvider>)
+  expect(screen.getByRole('heading', { level: 1, name: 'Security dashboard' })).toBeTruthy()
+  expect(screen.getByRole('heading', { level: 2, name: 'Provider status' })).toBeTruthy()
+  expect(getComputedStyle(screen.getByText('Issuer')).fontWeight).toBe('600')
+  expect(getComputedStyle(screen.getByText('Ready').closest('.MuiChip-root')!).fontWeight).toBe('650')
+  expect(screen.getByRole('table', { name: 'Recent changes' }).querySelectorAll('th')).toHaveLength(2)
+  expect(createAppTheme(mode, 'ltr', 'en').typography[typographyRoles.pageTitle].fontSize).toContain('clamp(')
+})
+
+it('keeps the shared page heading and details semantic in Arabic RTL', () => {
+  mount('ar')
+  expect(document.documentElement.dir).toBe('rtl')
+  expect(screen.getByRole('heading', { level: 2, name: 'Security overview' })).toBeTruthy()
+  const details = screen.getByRole('region', { name: 'Security overview' })
+  expect(details.querySelectorAll('dt')).toHaveLength(2)
+  expect(details.querySelectorAll('dd')).toHaveLength(2)
 })

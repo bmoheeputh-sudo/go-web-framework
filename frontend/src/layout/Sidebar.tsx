@@ -9,7 +9,7 @@ import ShieldOutlined from '@mui/icons-material/ShieldOutlined'
 import { NavLink, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import type { NavItem } from '../navigation/NavigationRegistry'
-import { designTokens } from '../design/theme'
+import { designTokens, typographyRoles } from '../design/theme'
 
 const MiniDrawer = styled(MuiDrawer, { shouldForwardProp: (prop) => prop !== 'expanded' })<{ expanded: boolean }>(({ theme, expanded, variant }) => ({
   width: variant === 'temporary' ? undefined : expanded ? designTokens.sidebarExpanded : designTokens.sidebarCollapsed,
@@ -100,7 +100,8 @@ export default function Sidebar({ items, desktop, expanded, mobileOpen, onToggle
               onClick={() => { if (!desktop) onClose() }}
               sx={{ mx: 1, mb: 0.5, px: 1.75, height: 48, borderRadius: 2, gap: 1.5, color: active ? 'primary.main' : 'text.secondary', '&.Mui-selected': { backgroundColor: alpha(theme.palette.primary.main, theme.palette.action.selectedOpacity) } }}>
               <ListItemIcon sx={{ minWidth: 24, color: 'inherit' }}>{item.icon}</ListItemIcon>
-              <ListItemText primary={t(item.labelKey)} sx={{ display: showLabels ? 'block' : 'none', whiteSpace: 'nowrap' }} slotProps={{ primary: { sx: { fontWeight: active ? 600 : 500, fontSize: 14 } } }} />
+              <ListItemText primary={t(item.labelKey)} sx={{ display: showLabels ? 'block' : 'none', whiteSpace: 'nowrap' }}
+                slotProps={{ primary: { sx: { typography: typographyRoles.primaryValue, fontWeight: active ? 650 : 500 } } }} />
             </ListItemButton>
           </Tooltip>
         })}

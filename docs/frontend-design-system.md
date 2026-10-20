@@ -10,10 +10,17 @@ MUI's 8 px spacing scale, default breakpoints (`xs` through `xl`), 12 px surface
 
 Buttons have no elevation, text fields and tables default to small size, table headings use a consistent weight, and dialogs and drawers inherit MUI theme surfaces. Keep headings semantic (`h1` for the page, `h2` for sections) even when their visual variant differs. Use the shared `CompactTable`, `PageTools`, and Snackbar notification provider for lists, loading, refresh, and mutation feedback.
 
+## Typography and visual hierarchy
+
+`typographyRoles` in `frontend/src/design/theme.ts` maps page titles, toolbar titles, section titles, primary values, supporting text, detail labels, and table headers to MUI variants. The theme sets responsive heading sizes, weights, line heights, and letter spacing. Use semantic HTML heading levels independently of visual variants: the route title in the toolbar is `h1`; a page's content sections use `h2`, followed by `h3` for subsections. Avoid duplicate large headings below the toolbar.
+
+Primary values use `body1` with stronger weight; detail labels use a smaller, secondary-color caption without uppercase transformation, which preserves readability across all 12 languages. Supporting descriptions use `body2` and short line lengths. Table headers use `subtitle2`, while table rows retain compact padding and theme-derived hover colors. Tabs, buttons, labels, chips, and form controls inherit their typography from the global MUI overrides.
+
 ## Shared primitives
 
 Import from `frontend/src/components/common/`:
 
+- `PageHeader` displays a responsive semantic page heading, optional description, and optional actions. Use `component="h2"` when the toolbar already provides the route's `h1`.
 - `StatusBadge` displays a localized label with a semantic `neutral`, `success`, `warning`, `error`, or `info` tone. It does not choose a state from a provider identifier or translate the label itself.
 - `SectionCard` provides a labeled section, optional description and actions, responsive padding, and an explicitly outlined surface.
 - `TwoColumnKeyValue` renders responsive `dt`/`dd` details. Supply already localized labels and preserve the exact value of user-created data. Wrap untrusted LTR identifiers in `<bdi>` where needed.
@@ -27,7 +34,7 @@ Group detail metadata into short labeled sections with `TwoColumnKeyValue`. Rend
 
 Keep tables dense enough for ordinary desktop widths and ensure the action column remains visible on narrow screens through a scrollable table container. Use one clear primary action and secondary actions with less visual weight. Integrate security confirmation into the existing wizard instead of opening a second dialog. Ambiguous activation outcomes remain visible outside the wizard and must block another activation until explicitly resolved.
 
-These primitives are opt-in. Existing pages remain unchanged in this foundation phase. Prefer them for new Settings sections, Users/Accounts details, Audit inspection, and future modules; migrate old sections only when their feature is next edited.
+Core pages now use these primitives for section headings, tables, statuses, and details. Future modules should use them by default; add a new primitive only when an existing one cannot express the needed structure.
 
 ## Extension checks
 

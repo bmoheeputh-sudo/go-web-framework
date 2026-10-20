@@ -1,11 +1,12 @@
 import { useState } from 'react'
-import { Paper, TableCell, TableRow, Typography } from '@mui/material'
+import { TableCell, TableRow, Typography } from '@mui/material'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '../api/queries'
 import type { Audit } from '../api/client'
 import { actionKeys, formatDate } from '../i18n'
 import { Pager, PageTools } from '../components/PageTools'
 import CompactTable from '../components/CompactTable'
+import SectionCard from '../components/common/SectionCard'
 
 export default function AuditLogsPage() {
   const { t, i18n } = useTranslation(['admin', 'common'])
@@ -13,8 +14,7 @@ export default function AuditLogsPage() {
   const query = useQuery<Audit[]>(`/api/admin/audit?offset=${page * 100}`)
   return <>
     <PageTools busy={query.loading} error={query.error} />
-    <Typography variant="h6" component="h2" sx={{ mb: 2 }}>{t('auditHistory')}</Typography>
-    <Paper sx={{ overflow: 'hidden' }}>
+    <SectionCard title={t('auditHistory')}>
       <CompactTable label={t('common:navAudit')} headers={[t('auditEvent'), t('auditWho'), t('rawDetails')]}
         empty={!query.loading && !query.error && query.data?.length === 0} emptyMessage={t('auditEmpty')} minWidth={640}>
         {query.data?.map((event) => <TableRow key={event.id}>
@@ -23,7 +23,7 @@ export default function AuditLogsPage() {
           <TableCell sx={{ minWidth: 200 }}><Typography variant="body2" component="pre" dir="ltr" sx={{ whiteSpace: 'pre-wrap', m: 0, textAlign: 'start' }}>{JSON.stringify(event.details)}</Typography></TableCell>
         </TableRow>)}
       </CompactTable>
-    </Paper>
+    </SectionCard>
     <Pager label={t('common:navAudit')} page={page} count={query.data?.length || 0} busy={query.loading} onChange={setPage} />
   </>
 }
