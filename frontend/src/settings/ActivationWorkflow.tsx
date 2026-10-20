@@ -13,6 +13,7 @@ import type {
   ActivationPreparation, ActivationResult, ActivationStatus, AuthRevision, ConnectionTest, RecoveryReadiness,
 } from '../api/authConfiguration'
 import { useSession } from '../auth/session'
+import { useAuthenticationCacheSync } from '../api/authCache'
 import { formatNumber } from '../i18n'
 import { useNotifications } from '../notifications/notifications'
 import ActivationConfirmDialog from './ActivationConfirmDialog'
@@ -59,6 +60,7 @@ export default function ActivationWorkflow({ revision, isolatedTest, enrolledUse
 }) {
   const { t, i18n } = useTranslation(['auth', 'common'])
   const notify = useNotifications()
+  const { refreshViews, refreshAfterChange } = useAuthenticationCacheSync()
   const { expire } = useSession()
   const [status, setStatus] = useState<ActivationStatus | null>(null)
   const [statusError, setStatusError] = useState(false)
@@ -234,9 +236,14 @@ export default function ActivationWorkflow({ revision, isolatedTest, enrolledUse
         confirm: true,
         reason: confirmation.reason,
       })
-      setState({ kind: 'outcome', result }); void loadStatus()
+      setState({ kind: 'outcome', result })
+      if (result.outcome === 'committed_applied' || result.outcome === 'committed_not_applied') refreshAfterChange()
+      if (result.outcome !== 'commit_uncertain') void loadStatus()
     } catch (error) {
-      if (error instanceof AuthConfigurationError && error.activation) setState({ kind: 'outcome', result: error.activation })
+      if (error instanceof AuthConfigurationError && error.activation) {
+        setState({ kind: 'outcome', result: error.activation })
+        if (error.activation.outcome === 'committed_applied' || error.activation.outcome === 'committed_not_applied') refreshAfterChange()
+      }
       else {
         setState({ kind: 'outcome', result: { outcome: 'outcome_unknown', desired_generation: preparation.target_activation_generation, revision_id: revision.id } })
         if (error instanceof APIError && (error.status === 401 || error.status === 403)) expire()
@@ -247,6 +254,9 @@ export default function ActivationWorkflow({ revision, isolatedTest, enrolledUse
   async function inspect() {
     const value = await loadStatus()
     if (!value || state.kind !== 'outcome') return
+    // An ambiguous HTTP response does not invalidate cached configuration.
+    // Refresh it only after this explicit authoritative read succeeds.
+    refreshViews()
     const result = state.result
     if (result.outcome === 'outcome_unknown' || result.outcome === 'commit_uncertain') {
       if (value.authoritative_generation === result.desired_generation && value.authoritative_revision_id === result.revision_id) {
@@ -267,6 +277,7 @@ export default function ActivationWorkflow({ revision, isolatedTest, enrolledUse
     try {
       const value = await reconcileActivation(status.authoritative_generation)
       setStatus(value)
+      refreshAfterChange()
     } catch (error) {
       if (error instanceof APIError && error.status === 401) expire()
       setStatusError(true)

@@ -5,6 +5,7 @@ import { APIError } from '../api/client'
 import { createRecoveryDraft } from '../api/authConfiguration'
 import type { AuthRevision } from '../api/authConfiguration'
 import { useSession } from '../auth/session'
+import { useAuthenticationCacheSync } from '../api/authCache'
 import { useNotifications } from '../notifications/notifications'
 
 const validReason = (value: string) => {
@@ -24,6 +25,7 @@ export default function RecoveryDraftDialog({ revision, latestVersion, open, onC
 }) {
   const { t } = useTranslation(['auth', 'common'])
   const notify = useNotifications()
+  const { refreshAfterChange } = useAuthenticationCacheSync()
   const { expire } = useSession()
   const [reason, setReason] = useState(''), [busy, setBusy] = useState(false), [failed, setFailed] = useState(false)
   const submitting = useRef(false)
@@ -32,6 +34,7 @@ export default function RecoveryDraftDialog({ revision, latestVersion, open, onC
     submitting.current = true; setBusy(true); setFailed(false)
     try {
       const result = await createRecoveryDraft(revision.id, latestVersion, reason.trim())
+      refreshAfterChange()
       notify({ severity: 'success', messageKey: 'auth:recoveryDraftCreated' })
       onCreated(result.revision)
     } catch (error) {

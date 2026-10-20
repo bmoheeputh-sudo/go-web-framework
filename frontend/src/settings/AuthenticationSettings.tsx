@@ -5,6 +5,7 @@ import { APIError, errorKey } from '../api/client'
 import { authProviderSetupPath, authSettingsPath, authStatusPath } from '../api/authConfiguration'
 import type { AuthHistory, AuthRevision, AuthStatus, OIDCProviderSetupMetadata } from '../api/authConfiguration'
 import { useQuery, useQueryCache } from '../api/queries'
+import { useAuthenticationCacheSync } from '../api/authCache'
 import CompactTable from '../components/CompactTable'
 import { PageTools } from '../components/PageTools'
 import { formatDate, formatNumber } from '../i18n'
@@ -21,6 +22,7 @@ import type { ConnectionTest } from '../api/authConfiguration'
 export default function AuthenticationSettings() {
   const { t, i18n } = useTranslation(['auth', 'common', 'admin'])
   const cache = useQueryCache(), notify = useNotifications()
+  const { refreshViews } = useAuthenticationCacheSync()
   const status = useQuery<AuthStatus>(authStatusPath)
   const setup = useQuery<OIDCProviderSetupMetadata>(authProviderSetupPath)
   const [cursors, setCursors] = useState([0])
@@ -64,7 +66,7 @@ export default function AuthenticationSettings() {
         : key === 'errorUnavailable' || key === 'errorRequest' ? 'auth:settingsUnavailable' : `admin:${key}`
       setMutationError(messageKey)
       notify({ severity: conflict ? 'warning' : 'error', messageKey })
-      if (conflict) cache.invalidate() // Refresh metadata/generations; never retry a write automatically.
+      if (conflict) refreshViews() // Refresh metadata/generations; never retry a write automatically.
       return false
     } finally { mutating.current = false; setBusy(false) }
   }
@@ -143,7 +145,7 @@ export default function AuthenticationSettings() {
     </Dialog>
     {recoverySource && <RecoveryDraftDialog revision={recoverySource} latestVersion={status.data?.latest_revision?.configuration_version || 0}
       open onClose={() => setRecoverySource(null)} onCreated={(revision) => {
-        setRecoverySource(null); setSelected(revision.id); setCursors([0]); cache.invalidate()
+        setRecoverySource(null); setSelected(revision.id); setCursors([0])
       }} />}
   </Stack>
 }

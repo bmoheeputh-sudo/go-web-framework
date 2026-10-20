@@ -10,6 +10,9 @@ import { admin, identity, mockMedia } from '../test/fixtures'
 import type { ActivationPreparation, ActivationResult, ActivationStatus, AuthRevision, ConnectionTest } from '../api/authConfiguration'
 import ActivationWorkflow from './ActivationWorkflow'
 import RecoveryDraftDialog from './RecoveryDraftDialog'
+import { QueryCache } from '../api/cache'
+import { QueryContext, useQuery } from '../api/queries'
+import { authSettingsPath, authStatusPath } from '../api/authConfiguration'
 
 const en = resources.en.auth
 const future = () => new Date(Date.now() + 300_000).toISOString()
@@ -54,6 +57,14 @@ type SetupOptions = {
   popupBlocked?: boolean
   wrongInstance?: boolean
   readinessPending?: boolean
+  withCachedViews?: boolean
+}
+
+function CachedViews() {
+  const settings = useQuery<{ marker: string }>(authStatusPath)
+  const history = useQuery<{ marker: string }>(`${authSettingsPath}?limit=20&before_version=0`)
+  return <><span data-testid="cached-auth-status">{settings.data?.marker}</span>
+    <span data-testid="cached-auth-history">{history.data?.marker}</span></>
 }
 
 beforeEach(() => { mockMedia(); vi.useFakeTimers(); localStorage.clear(); sessionStorage.clear() })
@@ -65,6 +76,8 @@ function setup(options: SetupOptions = {}) {
   const popup = { closed: false, opener: window, location: { replace: vi.fn() }, close: vi.fn(() => { popup.closed = true }) }
   vi.spyOn(window, 'open').mockReturnValue(options.popupBlocked ? null : popup as unknown as Window)
   const fetcher = vi.fn(async (path: string, init?: RequestInit) => {
+    if (path === authStatusPath) return Response.json({ marker: activationSubmitted ? 'committed' : 'initial' })
+    if (path === `${authSettingsPath}?limit=20&before_version=0`) return Response.json({ marker: activationSubmitted ? 'updated' : 'initial' })
     if (path === '/api/admin/auth/activation/status') {
       const committedNotApplied = activationSubmitted && typeof options.activation === 'object' && options.activation.outcome === 'committed_not_applied'
       return Response.json(committedNotApplied ? {
@@ -101,10 +114,12 @@ function setup(options: SetupOptions = {}) {
     logout: vi.fn(), expire: vi.fn(), refreshAccess: vi.fn(),
   }
   const instance = createI18n('en')
-  const view = render(<I18nextProvider i18n={instance}><LanguageProvider><NotificationProvider><SessionContext.Provider value={session}>
+  const cache = new QueryCache(vi.fn())
+  const view = render(<I18nextProvider i18n={instance}><LanguageProvider><NotificationProvider><SessionContext.Provider value={session}><QueryContext.Provider value={cache}>
+    {options.withCachedViews && <CachedViews />}
     <ActivationWorkflow revision={revision} isolatedTest={isolated} enrolledUser={admin} disabled={false} onResolvedUser={vi.fn()} />
-  </SessionContext.Provider></NotificationProvider></LanguageProvider></I18nextProvider>)
-  return { ...view, fetcher, popup, session, instance }
+  </QueryContext.Provider></SessionContext.Provider></NotificationProvider></LanguageProvider></I18nextProvider>)
+  return { ...view, fetcher, popup, session, instance, cache }
 }
 
 async function tick(ms = 0) { await act(async () => { await vi.advanceTimersByTimeAsync(ms) }) }
@@ -171,20 +186,54 @@ describe('OIDC activation state machine', () => {
     expect(localWrite).not.toHaveBeenCalled()
   })
 
+  it('refreshes cached authentication status and history after a committed activation', async () => {
+    const { fetcher } = setup({ withCachedViews: true })
+    await tick()
+    expect(screen.getByTestId('cached-auth-status').textContent).toBe('initial')
+    expect(screen.getByTestId('cached-auth-history').textContent).toBe('initial')
+    await submitActivation()
+    await tick()
+    expect(screen.getByTestId('cached-auth-status').textContent).toBe('committed')
+    expect(screen.getByTestId('cached-auth-history').textContent).toBe('updated')
+    expect(fetcher.mock.calls.filter(([path]) => path === authStatusPath)).toHaveLength(2)
+    expect(fetcher.mock.calls.filter(([path]) => path === `${authSettingsPath}?limit=20&before_version=0`)).toHaveLength(2)
+  })
+
   it('preserves structured committed-not-applied responses and reconciles without resubmitting activation', async () => {
-    const { fetcher } = setup({ activation: committed('committed_not_applied'), activationStatus: 503 })
+    const { fetcher } = setup({ activation: committed('committed_not_applied'), activationStatus: 503, withCachedViews: true })
+    await tick()
     await prepareAndVerify(); await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationReview })) })
     const dialog = screen.getByRole('dialog')
     fireEvent.change(within(dialog).getByLabelText(new RegExp(en.activationReason)), { target: { value: 'Approved security cutover' } })
     for (const checkbox of within(dialog).getAllByRole('checkbox')) fireEvent.click(checkbox)
     await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: en.activationConfirmAction })) })
     expect(screen.getByText(en.activationOutcome_committed_not_applied)).toBeTruthy()
+    await tick()
+    expect(screen.getByTestId('cached-auth-history').textContent).toBe('updated')
+    expect(fetcher.mock.calls.filter(([path]) => path === authStatusPath)).toHaveLength(2)
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationRefreshStatus })) })
     const reconcileButton = screen.getByRole('button', { name: en.activationReconcile }) as HTMLButtonElement
     expect(reconcileButton.disabled).toBe(false)
     await act(async () => { fireEvent.click(reconcileButton) })
+    await tick()
     const reconcile = fetcher.mock.calls.find(([path]) => path === '/api/admin/auth/activation/reconcile')!
     expect(JSON.parse(reconcile[1]!.body as string)).toEqual({ expected_desired_generation: 1, confirm: true })
+    expect(fetcher.mock.calls.filter(([path]) => String(path).endsWith('/activate'))).toHaveLength(1)
+    expect(screen.getByTestId('cached-auth-history').textContent).toBe('updated')
+    expect(fetcher.mock.calls.filter(([path]) => path === authStatusPath).length).toBeGreaterThanOrEqual(3)
+    expect(fetcher.mock.calls.filter(([path]) => path === '/api/admin/auth/activation/status' || String(path).includes('/activation-preparations/') || String(path).endsWith('/activation/prepare'))
+      .every(([, init]) => init?.cache === 'no-store')).toBe(true)
+  })
+
+  it('leaves cached authentication views alone after an unknown outcome until explicit inspection', async () => {
+    const { fetcher } = setup({ activation: 'network', withCachedViews: true })
+    await tick()
+    await submitActivation()
+    expect(screen.getByText(en.activationOutcome_outcome_unknown)).toBeTruthy()
+    expect(fetcher.mock.calls.filter(([path]) => path === authStatusPath)).toHaveLength(1)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationInspectStatus })) })
+    await tick()
+    expect(fetcher.mock.calls.filter(([path]) => path === authStatusPath)).toHaveLength(2)
     expect(fetcher.mock.calls.filter(([path]) => String(path).endsWith('/activate'))).toHaveLength(1)
   })
 
@@ -268,16 +317,35 @@ describe('OIDC activation state machine', () => {
 })
 
 it('creates an immutable recovery draft with explicit confirmation data', async () => {
-  const fetcher = vi.fn(async () => Response.json({ revision: { ...revision, id: 'recovery-8', configuration_version: 8, status: 'draft' }, activation_required: true }, { status: 201 }))
+  let createdDraft = false
+  const fetcher = vi.fn(async (path: string, init?: RequestInit) => {
+    if (path === authStatusPath) return Response.json({ marker: createdDraft ? 'new-draft' : 'initial' })
+    if (path === `${authSettingsPath}?limit=20&before_version=0`) return Response.json({ marker: createdDraft ? 'new-draft' : 'initial' })
+    if (path.endsWith('/rollback') && init?.method === 'POST') {
+      createdDraft = true
+      return Response.json({ revision: { ...revision, id: 'recovery-8', configuration_version: 8, status: 'draft' }, activation_required: true }, { status: 201 })
+    }
+    throw new Error(`unexpected endpoint ${path}`)
+  })
   vi.stubGlobal('fetch', fetcher)
   const session: Session = { authentication: { status: 'authenticated', identity }, access: { loading: false, user: admin, error: '' }, health: 'ok', oidcEnabled: false, loggingOut: false, logoutFailed: false, loginFailed: false, logout: vi.fn(), expire: vi.fn(), refreshAccess: vi.fn() }
   const created = vi.fn()
-  render(<I18nextProvider i18n={createI18n('en')}><LanguageProvider><NotificationProvider><SessionContext.Provider value={session}>
+  const cache = new QueryCache(vi.fn())
+  const storageWrite = vi.spyOn(Storage.prototype, 'setItem')
+  render(<I18nextProvider i18n={createI18n('en')}><LanguageProvider><NotificationProvider><SessionContext.Provider value={session}><QueryContext.Provider value={cache}>
+    <CachedViews />
     <RecoveryDraftDialog revision={{ ...revision, status: 'superseded' }} latestVersion={7} open onClose={vi.fn()} onCreated={created} />
-  </SessionContext.Provider></NotificationProvider></LanguageProvider></I18nextProvider>)
+  </QueryContext.Provider></SessionContext.Provider></NotificationProvider></LanguageProvider></I18nextProvider>)
+  await tick()
+  expect(screen.getByTestId('cached-auth-history').textContent).toBe('initial')
   fireEvent.change(screen.getByLabelText(new RegExp(en.activationReason)), { target: { value: 'Restore trusted provider' } })
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.recoveryCreateAction })) })
+  await tick()
   const calls = fetcher.mock.calls as unknown as [string, RequestInit][]
-  expect(JSON.parse(calls[0][1].body as string)).toEqual({ expected_latest_version: 7, confirm: true, reason: 'Restore trusted provider' })
+  const rollback = calls.find(([path]) => path.endsWith('/rollback'))!
+  expect(JSON.parse(rollback[1].body as string)).toEqual({ expected_latest_version: 7, confirm: true, reason: 'Restore trusted provider' })
   expect(created).toHaveBeenCalledWith(expect.objectContaining({ id: 'recovery-8', status: 'draft' }))
+  expect(screen.getByTestId('cached-auth-status').textContent).toBe('new-draft')
+  expect(screen.getByTestId('cached-auth-history').textContent).toBe('new-draft')
+  expect(storageWrite).not.toHaveBeenCalled()
 })
