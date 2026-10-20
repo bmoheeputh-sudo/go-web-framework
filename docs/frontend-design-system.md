@@ -19,6 +19,14 @@ Import from `frontend/src/components/common/`:
 - `TwoColumnKeyValue` renders responsive `dt`/`dd` details. Supply already localized labels and preserve the exact value of user-created data. Wrap untrusted LTR identifiers in `<bdi>` where needed.
 - `DetailDrawer` provides a responsive, scrollable detail panel with a translated Close control and a trailing edge that mirrors in Arabic RTL. Pass actions as normal React controls; the caller retains authorization and mutation logic.
 
+## Settings interaction patterns
+
+Use one title in each dialog or drawer. Put primary and secondary actions together in its footer; connect dialog submit buttons to the actual form so Enter submits through the same validation and duplicate-submission guard. Clear unsent secrets when a form closes.
+
+Group detail metadata into short labeled sections with `TwoColumnKeyValue`. Render UUIDs, issuer URLs, client IDs, and callback URLs in a compact monospace style with accessible copy controls when useful. Translate technical state labels without altering the underlying IDs. Keep lifecycle actions together in the drawer footer, while preserving any related test status and evidence panel in the drawer body.
+
+Keep tables dense enough for ordinary desktop widths and ensure the action column remains visible on narrow screens through a scrollable table container. Use one clear primary action and secondary actions with less visual weight. Integrate security confirmation into the existing wizard instead of opening a second dialog. Ambiguous activation outcomes remain visible outside the wizard and must block another activation until explicitly resolved.
+
 These primitives are opt-in. Existing pages remain unchanged in this foundation phase. Prefer them for new Settings sections, Users/Accounts details, Audit inspection, and future modules; migrate old sections only when their feature is next edited.
 
 ## Extension checks

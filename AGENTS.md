@@ -14,5 +14,7 @@ For frontend work:
 - Use keyboard-operable controls, visible focus, semantic headings, and accessible names for icons, dialogs, and status messages.
 - Never persist credentials, tokens, evidence IDs, or other authentication secrets in browser storage or logs.
 - Run `cd frontend && npm test && npm run lint && npm run build`, followed by `git diff --check`, after frontend changes. Report any check that could not run.
+- Give each dialog or drawer one title. Group its primary and secondary actions in a consistent footer, and keep destructive or security-sensitive confirmation within the active workflow instead of stacking dialogs.
+- Use shared detail sections and copy controls for technical identifiers, human-readable labels for technical states, and responsive tables whose actions remain visible at narrow widths.
 
 Use [the frontend design system guide](docs/frontend-design-system.md) for component and token usage. Do not add a second routing or UI framework without a demonstrated need.

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Stack, TableCell, TableRow, Typography } from '@mui/material'
+import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Stack, TableCell, TableRow, Typography } from '@mui/material'
+import ExpandMore from '@mui/icons-material/ExpandMore'
 import { useTranslation } from 'react-i18next'
 import { APIError, errorKey } from '../api/client'
 import type { User } from '../api/client'
@@ -16,8 +17,9 @@ import TwoColumnKeyValue from '../components/common/TwoColumnKeyValue'
 import { formatDate, formatNumber } from '../i18n'
 import { useNotifications } from '../notifications/notifications'
 import type { Notification } from '../notifications/notifications'
-import AuthDraftForm from './AuthDraftForm'
+import AuthDraftForm, { authDraftFormID } from './AuthDraftForm'
 import ActivationWorkflow from './ActivationWorkflow'
+import type { DisplayedOutcome } from './ActivationOutcomePanel'
 import OIDCProviderSetup from './OIDCProviderSetup'
 import RecoveryDraftDialog from './RecoveryDraftDialog'
 import RevisionDetailDrawer from './RevisionDetailDrawer'
@@ -38,6 +40,7 @@ export default function AuthenticationSettings() {
   const [enrolledUser, setEnrolledUser] = useState<User | null>(null)
   const [recoverySource, setRecoverySource] = useState<AuthRevision | null>(null)
   const [activationRevision, setActivationRevision] = useState<AuthRevision | null>(null)
+  const [activationOutcome, setActivationOutcome] = useState<DisplayedOutcome | null>(null)
   const [busy, setBusy] = useState(false), [mutationError, setMutationError] = useState('')
   const mutating = useRef(false), reportedError = useRef('')
   const queryError = status.error || history.error || detail.error
@@ -50,7 +53,8 @@ export default function AuthenticationSettings() {
   const language = i18n.resolvedLanguage || 'en'
   const date = (value?: string) => value ? formatDate(value, language) : t('common:none')
   const version = (revision: AuthRevision) => t('revisionLabel', { version: formatNumber(revision.configuration_version, language) })
-  const summary = (revision: AuthRevision | null) => revision ? `${version(revision)} · ${revision.provider} · ${t(`revisionStatus_${revision.status}`)}` : t('common:none')
+  const providerLabel = (provider: string) => t(provider === 'oidc' ? 'providerOidc' : provider === 'google_iap' ? 'providerIap' : provider === 'local_dev' ? 'providerLocal' : 'common:none')
+  const summary = (revision: AuthRevision | null) => revision ? `${version(revision)} · ${providerLabel(revision.provider)} · ${t(`revisionStatus_${revision.status}`)}` : t('common:none')
   const metadata = detail.data?.id === selected ? detail.data : undefined
   const environment = status.data?.latest_revision?.environment || status.data?.database_active_revision?.environment
   const development = environment ? environment === 'development' : status.data?.runtime_provider === 'local_dev'
@@ -76,38 +80,41 @@ export default function AuthenticationSettings() {
 
   return <Stack spacing={2} sx={{ minWidth: 0 }}>
     <PageTools busy={locked} error={queryMessage} onRefresh={() => setMutationError('')} />
-    {mutationError && <Alert severity={mutationError === 'auth:revisionConflict' ? 'warning' : 'error'}>{t(mutationError)}</Alert>}
+    {mutationError && !draftOpen && <Alert severity={mutationError === 'auth:revisionConflict' ? 'warning' : 'error'}>{t(mutationError)}</Alert>}
     <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'repeat(2, minmax(0, 1fr))' }, gap: 2, alignItems: 'start' }}>
       {status.data && <SectionCard title={t('runtimeTitle')}>
-        <Stack spacing={2}>
+        <Stack spacing={1.5}>
           <TwoColumnKeyValue items={[
-            { label: t('runtimeProvider'), value: <bdi>{status.data.runtime_provider}</bdi> },
+            { label: t('runtimeProvider'), value: providerLabel(status.data.runtime_provider) },
             { label: t('configurationSource'), value: t(status.data.runtime_source === 'database' ? 'sourceDatabase' : 'sourceEnvironment') },
+          ]} />
+          {status.data.management_only && <Alert severity="info">{t('managementOnly')}</Alert>}
+          <Accordion disableGutters variant="outlined" sx={{ '&::before': { display: 'none' } }}>
+            <AccordionSummary expandIcon={<ExpandMore />}>{t('technicalDetails')}</AccordionSummary>
+            <AccordionDetails><TwoColumnKeyValue items={[
             { label: t('validationMode'), value: t('offlineValidation') },
             { label: t('latestRevision'), value: summary(status.data.latest_revision) },
             { label: t('databaseActiveRevision'), value: summary(status.data.database_active_revision) },
-          ]} />
-          {status.data.management_only && <Alert severity="info">{t('managementOnly')}</Alert>}
+          ]} /></AccordionDetails>
+          </Accordion>
         </Stack>
       </SectionCard>}
       <ActivationWorkflow revision={activationRevision} open={Boolean(activationRevision)} onClose={() => setActivationRevision(null)}
-        isolatedTest={isolatedTest} enrolledUser={enrolledUser} disabled={locked || Boolean(queryError)} onResolvedUser={setEnrolledUser} />
+        isolatedTest={isolatedTest} enrolledUser={enrolledUser} disabled={locked || Boolean(queryError)} onResolvedUser={setEnrolledUser} onOutcomeChange={setActivationOutcome} />
     </Box>
 
     <SectionCard title={t('history')} actions={<Stack direction="row" sx={{ gap: 1, flexWrap: 'wrap' }}>
-      <Button variant="contained" disabled={locked || !status.data} onClick={() => setDraftOpen(true)}>{t('newDraft')}</Button>
+      <Button variant="contained" disabled={locked || !status.data} onClick={() => { setMutationError(''); setDraftOpen(true) }}>{t('newDraft')}</Button>
       <Button variant="outlined" onClick={() => setGuideOpen(true)}>{t('setupTitle')}</Button>
     </Stack>}>
-      <CompactTable label={t('revision')} headers={[t('revision'), t('provider'), t('issuerURL'), t('common:status'), t('activationAuthoritativeGeneration'), t('createdAt'), t('actions')]}
-        empty={Boolean(history.data) && !history.data?.revisions?.length} emptyMessage={t('emptyHistory')} minWidth={800}>
+      <CompactTable label={t('revision')} headers={[t('revision'), t('provider'), t('common:status'), t('createdAt'), t('actions')]}
+        empty={Boolean(history.data) && !history.data?.revisions?.length} emptyMessage={t('emptyHistory')} minWidth={480}>
         {history.data?.revisions?.map((revision) => <TableRow key={revision.id} hover>
           <TableCell>{formatNumber(revision.configuration_version, language)}</TableCell>
-          <TableCell><bdi>{revision.provider}</bdi></TableCell>
-          <TableCell sx={{ maxWidth: 220 }}><Typography variant="body2" noWrap title={revision.issuer_url || undefined}><bdi>{revision.issuer_url || t('common:none')}</bdi></Typography></TableCell>
+          <TableCell>{providerLabel(revision.provider)}</TableCell>
           <TableCell><StatusBadge label={t(`revisionStatus_${revision.status}`)} tone={revision.status === 'active' ? 'success' : revision.status === 'approved' ? 'info' : 'neutral'} /></TableCell>
-          <TableCell>{formatNumber(revision.generation, language)}</TableCell>
           <TableCell>{date(revision.created_at)}</TableCell>
-          <TableCell><Button size="small" disabled={locked} onClick={() => { setSelected(revision.id); setMutationError('') }} aria-label={t('viewRevision', { version: formatNumber(revision.configuration_version, language) })}>{t('view')}</Button></TableCell>
+          <TableCell sx={{ whiteSpace: 'nowrap' }}><Button size="small" disabled={locked} onClick={() => { setSelected(revision.id); setMutationError('') }} aria-label={t('viewRevision', { version: formatNumber(revision.configuration_version, language) })}>{t('view')}</Button></TableCell>
         </TableRow>)}
       </CompactTable>
       <Stack direction="row" sx={{ mt: 2, flexWrap: 'wrap', gap: 1 }}>
@@ -117,23 +124,26 @@ export default function AuthenticationSettings() {
     </SectionCard>
 
     <RevisionDetailDrawer open={Boolean(selected)} revision={metadata} loading={detail.loading} disabled={locked || detail.loading || Boolean(queryError)}
+      prepareDisabled={Boolean(activationOutcome)}
       onClose={() => setSelected(null)} onValidate={(revision) => void mutate(`${authSettingsPath}/${revision.id}/validate`, { expected_generation: revision.generation }, 'auth:validationSaved')}
-      onApprove={setApproval} onPrepare={(revision) => { setActivationRevision(revision); setSelected(null) }} onRecovery={setRecoverySource}
+      onApprove={setApproval} onPrepare={(revision) => { if (activationOutcome) return; setActivationRevision(revision); setSelected(null) }} onRecovery={setRecoverySource}
       onTestResult={(result) => { setIsolatedTest(result); setEnrolledUser(null) }} onEnrolled={setEnrolledUser} />
 
     <Dialog open={draftOpen && Boolean(status.data)} onClose={() => { if (!busy) setDraftOpen(false) }} fullWidth maxWidth="sm" aria-labelledby="auth-draft-title">
       <DialogTitle id="auth-draft-title">{t('newDraft')}</DialogTitle>
-      <DialogContent dividers>{status.data && <AuthDraftForm development={development} latestVersion={status.data.latest_revision?.configuration_version || 0}
+      <DialogContent dividers>{mutationError && <Alert severity={mutationError === 'auth:revisionConflict' ? 'warning' : 'error'} sx={{ mb: 2 }}>{t(mutationError)}</Alert>}
+        {draftOpen && status.data && <AuthDraftForm development={development} latestVersion={status.data.latest_revision?.configuration_version || 0}
         busy={locked || Boolean(queryError)} trustedRedirectURI={setup.data?.normal_callback_url} onCreate={async (body) => {
           const success = await mutate(authSettingsPath, body, 'auth:draftCreated')
           if (success) { setCursors([0]); setDraftOpen(false) }
           return success
         }} />}</DialogContent>
-      <DialogActions><Button disabled={busy} onClick={() => setDraftOpen(false)}>{t('common:cancel')}</Button></DialogActions>
+      <DialogActions><Button disabled={busy} onClick={() => setDraftOpen(false)}>{t('common:cancel')}</Button>
+        <Button variant="contained" type="submit" form={authDraftFormID} disabled={locked || Boolean(queryError)}>{t('createDraft')}</Button></DialogActions>
     </Dialog>
 
     <DetailDrawer open={guideOpen} onClose={() => setGuideOpen(false)} title={t('setupTitle')}>
-      <OIDCProviderSetup metadata={setup.data} loading={setup.loading} error={setup.error} defaultExpanded />
+      <OIDCProviderSetup metadata={setup.data} loading={setup.loading} error={setup.error} />
     </DetailDrawer>
 
     <Dialog open={Boolean(approval)} onClose={() => { if (!busy) setApproval(null) }} fullWidth maxWidth="sm" aria-labelledby="auth-approve-title">

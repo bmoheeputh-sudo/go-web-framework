@@ -115,11 +115,12 @@ function setup(options: SetupOptions = {}) {
   }
   const instance = createI18n('en')
   const cache = new QueryCache(vi.fn())
-  const view = render(<I18nextProvider i18n={instance}><LanguageProvider><NotificationProvider><SessionContext.Provider value={session}><QueryContext.Provider value={cache}>
+  const tree = (selectedRevision: AuthRevision) => <I18nextProvider i18n={instance}><LanguageProvider><NotificationProvider><SessionContext.Provider value={session}><QueryContext.Provider value={cache}>
     {options.withCachedViews && <CachedViews />}
-    <ActivationWorkflow revision={revision} isolatedTest={isolated} enrolledUser={admin} disabled={false} onResolvedUser={vi.fn()} />
-  </QueryContext.Provider></SessionContext.Provider></NotificationProvider></LanguageProvider></I18nextProvider>)
-  return { ...view, fetcher, popup, session, instance, cache }
+    <ActivationWorkflow revision={selectedRevision} isolatedTest={isolated} enrolledUser={admin} disabled={false} onResolvedUser={vi.fn()} />
+  </QueryContext.Provider></SessionContext.Provider></NotificationProvider></LanguageProvider></I18nextProvider>
+  const view = render(tree(revision))
+  return { ...view, rerenderRevision: (selectedRevision: AuthRevision) => view.rerender(tree(selectedRevision)), fetcher, popup, session, instance, cache }
 }
 
 async function tick(ms = 0) { await act(async () => { await vi.advanceTimersByTimeAsync(ms) }) }
@@ -167,6 +168,9 @@ describe('OIDC activation state machine', () => {
     await prepareAndVerify()
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationReview })) })
     const dialog = screen.getByRole('dialog')
+    expect(screen.getAllByRole('dialog')).toHaveLength(1)
+    expect(within(dialog).getByRole('region', { name: en.activationConfirmTitle })).toBeTruthy()
+    expect(within(dialog).getAllByRole('heading', { name: en.activationWorkflowTitle })).toHaveLength(1)
     const activate = within(dialog).getByRole('button', { name: en.activationConfirmAction }) as HTMLButtonElement
     expect(activate.disabled).toBe(true)
     expect(within(dialog).getAllByRole('checkbox').every((item) => !(item as HTMLInputElement).checked)).toBe(true)
@@ -185,6 +189,19 @@ describe('OIDC activation state machine', () => {
     expect(screen.getByText(en.activationOutcome_committed_applied)).toBeTruthy()
     expect(screen.queryByRole('dialog', { name: en.activationWorkflowTitle })).toBeNull()
     expect(localWrite).not.toHaveBeenCalled()
+  })
+
+  it('keeps ambiguous outcomes visible after the wizard closes without reopening or retrying activation', async () => {
+    const { fetcher, rerenderRevision } = setup({ activation: 'network' })
+    await submitActivation()
+    expect(screen.queryByRole('dialog', { name: en.activationWorkflowTitle })).toBeNull()
+    expect(screen.getByText(en.activationOutcome_outcome_unknown)).toBeTruthy()
+    rerenderRevision({ ...revision, id: 'another-approved-revision' })
+    expect(screen.getByText(en.activationOutcome_outcome_unknown)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: en.activationPrepare })).toBeNull()
+    await tick(20_000)
+    expect(screen.getByText(en.activationOutcome_outcome_unknown)).toBeTruthy()
+    expect(fetcher.mock.calls.filter(([path]) => String(path).endsWith('/activate'))).toHaveLength(1)
   })
 
   it('refreshes cached authentication status and history after a committed activation', async () => {

@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import ContentCopy from '@mui/icons-material/ContentCopy'
-import ExpandMore from '@mui/icons-material/ExpandMore'
 import {
-  Accordion, AccordionDetails, AccordionSummary, Alert, Box, CircularProgress,
+  Alert, Box, CircularProgress,
   IconButton, MenuItem, Stack, TextField, Tooltip, Typography,
 } from '@mui/material'
 import { useTranslation } from 'react-i18next'
@@ -38,11 +37,10 @@ function CopyValue({ label, value }: { label: string; value: string }) {
   </Box>
 }
 
-export default function OIDCProviderSetup({ metadata, loading, error, defaultExpanded = false }: {
+export default function OIDCProviderSetup({ metadata, loading, error }: {
   metadata?: OIDCProviderSetupMetadata
   loading: boolean
   error: string
-  defaultExpanded?: boolean
 }) {
   const { t } = useTranslation(['auth', 'common'])
   const notify = useNotifications()
@@ -59,14 +57,8 @@ export default function OIDCProviderSetup({ metadata, loading, error, defaultExp
     okta: t('setupProviderOkta'), auth0: t('setupProviderAuth0'), entra: t('setupProviderEntra'),
     google: t('setupProviderGoogle'), generic: t('setupProviderGeneric'),
   }
-  return <Accordion component="section" role="region" aria-labelledby="oidc-provider-setup-title" defaultExpanded={defaultExpanded} disableGutters sx={{ '&::before': { display: 'none' } }}>
-    <AccordionSummary expandIcon={<ExpandMore />} aria-controls="oidc-provider-setup-content" id="oidc-provider-setup-header">
-      <Box>
-        <Typography id="oidc-provider-setup-title" component="h2" variant="h6">{t('setupTitle')}</Typography>
-        <Typography variant="body2" color="text.secondary">{t('setupSummary')}</Typography>
-      </Box>
-    </AccordionSummary>
-    <AccordionDetails id="oidc-provider-setup-content">
+  return <Stack component="section" role="region" aria-label={t('setupTitle')} spacing={2.5}>
+      <Typography variant="body2" color="text.secondary">{t('setupSummary')}</Typography>
       {loading && <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}><CircularProgress size={20} /><Typography>{t('common:loading')}</Typography></Stack>}
       {error && <Alert severity="warning">{t('setupUnavailable')}</Alert>}
       {metadata && <Stack spacing={3}>
@@ -102,6 +94,5 @@ export default function OIDCProviderSetup({ metadata, loading, error, defaultExp
           <Typography>{t('setupDraftHelp')}</Typography>
         </Box>
       </Stack>}
-    </AccordionDetails>
-  </Accordion>
+  </Stack>
 }

@@ -6,10 +6,11 @@ import CloseRounded from '@mui/icons-material/CloseRounded'
 import { useTranslation } from 'react-i18next'
 import { designTokens } from '../../design/theme'
 
-export default function DetailDrawer({ open, onClose, title, actions, children }: {
+export default function DetailDrawer({ open, onClose, title, titleAdornment, actions, children }: {
   open: boolean
   onClose: () => void
   title: string
+  titleAdornment?: ReactNode
   actions?: ReactNode
   children: ReactNode
 }) {
@@ -23,7 +24,10 @@ export default function DetailDrawer({ open, onClose, title, actions, children }
       style: { left: rtl ? 0 : 'auto', right: rtl ? 'auto' : 0 },
       sx: { width: { xs: '100%', sm: designTokens.detailDrawerWidth }, maxWidth: '100vw', display: 'flex', flexDirection: 'column' } } }}>
     <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', gap: 1, px: 2, py: 1.5 }}>
-      <Typography id={titleID} component="h2" variant="h6" sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>{title}</Typography>
+      <Stack direction="row" sx={{ minWidth: 0, alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+        <Typography id={titleID} component="h2" variant="h6" sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>{title}</Typography>
+        {titleAdornment}
+      </Stack>
       <Tooltip title={t('close')}><IconButton aria-label={t('close')} onClick={onClose}><CloseRounded /></IconButton></Tooltip>
     </Stack>
     <Divider />

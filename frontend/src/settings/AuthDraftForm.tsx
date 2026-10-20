@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Alert, Box, Button, Checkbox, FormControlLabel, IconButton, InputAdornment, MenuItem, Stack, TextField, Typography } from '@mui/material'
+import { useRef, useState } from 'react'
+import { Alert, Box, Checkbox, FormControlLabel, IconButton, InputAdornment, MenuItem, Stack, TextField } from '@mui/material'
 import Visibility from '@mui/icons-material/Visibility'
 import VisibilityOff from '@mui/icons-material/VisibilityOff'
 import { useTranslation } from 'react-i18next'
@@ -15,6 +15,7 @@ function validOIDC(issuer: string, redirect: string, allowHTTP: boolean) {
   } catch { return false }
 }
 const audiencePattern = /^\/projects\/[0-9]+\/(apps\/[a-z][a-z0-9-]*|global\/backendServices\/[0-9]+|locations\/[a-z][a-z0-9-]*\/services\/[a-z][a-z0-9-]*)$/
+export const authDraftFormID = 'auth-draft-form'
 
 export default function AuthDraftForm({ development, latestVersion, busy, trustedRedirectURI, onCreate }: {
   development: boolean; latestVersion: number; busy: boolean; trustedRedirectURI?: string; onCreate: (body: NewAuthDraft) => Promise<boolean>
@@ -25,10 +26,11 @@ export default function AuthDraftForm({ development, latestVersion, busy, truste
   const [secret, setSecret] = useState(''), [showSecret, setShowSecret] = useState(false)
   const [enteredRedirect, setEnteredRedirect] = useState(''), [audience, setAudience] = useState('')
   const [allowHTTP, setAllowHTTP] = useState(false), [invalid, setInvalid] = useState(false)
+  const submitting = useRef(false)
   const redirect = trustedRedirectURI || enteredRedirect
   async function submit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (busy) return
+    if (busy || submitting.current) return
     const valid = provider === 'oidc' ? Boolean(clientID.trim() && secret.trim() && validOIDC(issuer.trim(), redirect.trim(), development && allowHTTP))
       : provider === 'google_iap' ? audiencePattern.test(audience.trim()) : development
     if (!valid) { setInvalid(true); return }
@@ -36,12 +38,21 @@ export default function AuthDraftForm({ development, latestVersion, busy, truste
       ? { provider, expected_latest_version: latestVersion, issuer_url: issuer.trim(), client_id: clientID.trim(), client_secret: secret, redirect_uri: redirect.trim(), allow_http_development: development && allowHTTP }
       : provider === 'google_iap' ? { provider, expected_latest_version: latestVersion, iap_audience: audience.trim() }
         : { provider, expected_latest_version: latestVersion }
+    submitting.current = true
     setSecret(''); setShowSecret(false); setInvalid(false)
-    await onCreate(body) // Only the request owns the submitted secret; never persisted or cached.
+    try { await onCreate(body) } // Only the request owns the submitted secret; never persisted or cached.
+    finally { submitting.current = false }
   }
-  return <Box component="form" onSubmit={(event) => void submit(event)} noValidate autoComplete="off" sx={{ pt: 1, minWidth: 0 }} aria-label={t('newDraft')}>
+  return <Box component="form" id={authDraftFormID} onSubmit={(event) => void submit(event)}
+    onKeyDown={(event) => {
+      // The submit button lives in DialogActions outside the form; preserve Enter on text inputs.
+      if (event.key === 'Enter' && event.target instanceof HTMLInputElement && event.target.type !== 'hidden') {
+        event.preventDefault()
+        event.currentTarget.requestSubmit()
+      }
+    }}
+    noValidate autoComplete="off" sx={{ pt: 1, minWidth: 0 }} aria-label={t('newDraft')}>
     <Stack spacing={2}>
-      <Typography component="h3" variant="h6">{t('newDraft')}</Typography>
       {invalid && <Alert severity="error">{t('admin:errorInvalid')}</Alert>}
       <TextField select fullWidth label={t('provider')} value={provider} disabled={busy} onChange={(event) => {
         setProvider(event.target.value as AuthProvider); setSecret(''); setShowSecret(false); setInvalid(false)
@@ -67,7 +78,6 @@ export default function AuthDraftForm({ development, latestVersion, busy, truste
         <TextField fullWidth required label={t('iapAudience')} disabled={busy} value={audience} onChange={(e) => setAudience(e.target.value)} slotProps={{ htmlInput: { maxLength: 512, dir: 'ltr' } }} />
       </>}
       {provider === 'local_dev' && <Alert severity="warning">{t('localHelp')}</Alert>}
-      <Button type="submit" variant="contained" disabled={busy || (provider === 'local_dev' && !development)} sx={{ alignSelf: 'flex-start' }}>{t('createDraft')}</Button>
     </Stack>
   </Box>
 }

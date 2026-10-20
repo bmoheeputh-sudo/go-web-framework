@@ -4,11 +4,12 @@ import { useTranslation } from 'react-i18next'
 
 export type ActivationStep = 'prepare' | 'evidence' | 'confirm'
 
-export default function ActivationWizardDialog({ open, busy, step, onClose, children }: {
+export default function ActivationWizardDialog({ open, busy, step, onClose, actions, children }: {
   open: boolean
   busy: boolean
   step: ActivationStep
   onClose: () => void
+  actions?: ReactNode
   children: ReactNode
 }) {
   const { t } = useTranslation(['auth', 'common'])
@@ -22,6 +23,6 @@ export default function ActivationWizardDialog({ open, busy, step, onClose, chil
       </Stepper>
       {children}
     </DialogContent>
-    <DialogActions><Button disabled={busy} onClick={onClose}>{t('common:close')}</Button></DialogActions>
+    <DialogActions>{actions ?? <Button disabled={busy} onClick={onClose}>{t('common:close')}</Button>}</DialogActions>
   </Dialog>
 }

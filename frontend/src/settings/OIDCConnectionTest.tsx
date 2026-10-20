@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { Alert, Button, Stack, Typography } from '@mui/material'
 import { useTranslation } from 'react-i18next'
 import { api, APIError } from '../api/client'
@@ -22,26 +22,31 @@ function stop(run: Run) {
   run.popup.close()
 }
 
-export default function OIDCConnectionTest({ revision, disabled, onResult, onEnrolled }: {
+export type OIDCConnectionTestHandle = { start: () => void }
+
+const OIDCConnectionTest = forwardRef<OIDCConnectionTestHandle, {
   revision: AuthRevision; disabled: boolean
+  externalTrigger?: boolean
+  onBusyChange?: (busy: boolean) => void
   onResult?: (result: ConnectionTest | null) => void
   onEnrolled?: (user: User) => void
-}) {
+}>(function OIDCConnectionTest({ revision, disabled, externalTrigger = false, onBusyChange, onResult, onEnrolled }, ref) {
   const { t, i18n } = useTranslation('auth')
   const notify = useNotifications(), cache = useQueryCache(), { expire } = useSession()
   const active = useRef<Run | null>(null)
   const [busy, setBusy] = useState(false), [result, setResult] = useState<ConnectionTest | null>(null)
   const [error, setError] = useState(false)
   useEffect(() => () => {
+    onBusyChange?.(false)
     const run = active.current
     if (run && !run.stopped) {
       stop(run)
       if (run.id) void api(testPath(run.id) + '/cancel', 'POST', {}).catch(() => { /* Server expiry still applies. */ })
     }
-  }, [])
+  }, [onBusyChange])
   function fail(run: Run, error: unknown) {
     if (run.stopped) return
-    stop(run); setBusy(false); setError(true)
+    stop(run); setBusy(false); onBusyChange?.(false); setError(true)
     if (error instanceof APIError && error.status === 401) expire()
     if (error instanceof APIError && error.status === 409) {
       notify({ severity: 'warning', messageKey: 'auth:revisionConflict' }); cache.invalidate()
@@ -50,7 +55,7 @@ export default function OIDCConnectionTest({ revision, disabled, onResult, onEnr
   function accept(run: Run, value: ConnectionTest) {
     setResult(value); onResult?.(value)
     if (pending(value)) return false
-    stop(run); setBusy(false)
+    stop(run); setBusy(false); onBusyChange?.(false)
     notify({ severity: value.status === 'succeeded' ? 'success' : value.status === 'failed' ? 'error' : 'warning', messageKey: `auth:test_${value.status}` })
     return true
   }
@@ -80,7 +85,7 @@ export default function OIDCConnectionTest({ revision, disabled, onResult, onEnr
     if (!popup) { notify({ severity: 'warning', messageKey: 'auth:testPopupBlocked' }); return }
     popup.opener = null // Provider pages cannot navigate the administrator's window.
     const run: Run = { popup, stopped: false, controller: new AbortController() }
-    active.current = run; setBusy(true); setError(false); setResult(null); onResult?.(null)
+    active.current = run; setBusy(true); onBusyChange?.(true); setError(false); setResult(null); onResult?.(null)
     run.timer = setTimeout(() => fail(run, new Error('start deadline')), 25_000)
     try {
       const started = await api<StartedConnectionTest>(`${authSettingsPath}/${encodeURIComponent(revision.id)}/test`, 'POST', { expected_generation: revision.generation }, run.controller.signal)
@@ -96,11 +101,12 @@ export default function OIDCConnectionTest({ revision, disabled, onResult, onEnr
       run.timer = setTimeout(() => void poll(run, Date.parse(value.expires_at)), 2000)
     } catch (error) { fail(run, error) }
   }
+  useImperativeHandle(ref, () => ({ start: () => { if (!disabled) void start() } }))
   return <Stack spacing={2} sx={{ mt: 2, minWidth: 0 }}>
     <Alert severity="info">{t('testHelp')}</Alert>
     <Stack direction="row" sx={{ gap: 1, flexWrap: 'wrap' }}>
-      <Button variant="outlined" disabled={disabled || busy} onClick={() => void start()}>{t('testConnection')}</Button>
-      {busy && <Button onClick={() => { if (active.current?.id) void cancel(active.current); else if (active.current) { stop(active.current); setBusy(false); notify({ severity: 'warning', messageKey: 'auth:test_cancelled' }) } }}>{t('testCancel')}</Button>}
+      {!externalTrigger && <Button variant="outlined" disabled={disabled || busy} onClick={() => void start()}>{t('testConnection')}</Button>}
+      {busy && <Button onClick={() => { if (active.current?.id) void cancel(active.current); else if (active.current) { stop(active.current); setBusy(false); onBusyChange?.(false); notify({ severity: 'warning', messageKey: 'auth:test_cancelled' }) } }}>{t('testCancel')}</Button>}
     </Stack>
     {busy && <Typography role="status">{t('testInProgress')}</Typography>}
     {error && <Alert severity="error">{t('testUnavailable')}</Alert>}
@@ -114,4 +120,6 @@ export default function OIDCConnectionTest({ revision, disabled, onResult, onEnr
       {result.evidence_id && <IdentityEnrollment key={result.evidence_id} revision={revision} result={result} disabled={disabled || busy} onEnrolled={onEnrolled} />}
     </Stack>}
   </Stack>
-}
+})
+
+export default OIDCConnectionTest

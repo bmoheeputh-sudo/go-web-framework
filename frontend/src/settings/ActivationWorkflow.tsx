@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert, Button, CircularProgress, Divider, LinearProgress, Stack, Typography,
+  Accordion, AccordionDetails, AccordionSummary, Alert, Button, CircularProgress, Divider, LinearProgress, Stack, Typography,
 } from '@mui/material'
+import ExpandMore from '@mui/icons-material/ExpandMore'
 import { useTranslation } from 'react-i18next'
 import type { User } from '../api/client'
 import { APIError } from '../api/client'
@@ -16,8 +17,9 @@ import { useSession } from '../auth/session'
 import { useAuthenticationCacheSync } from '../api/authCache'
 import { formatNumber } from '../i18n'
 import { useNotifications } from '../notifications/notifications'
-import ActivationConfirmDialog from './ActivationConfirmDialog'
-import type { ActivationConfirmation } from './ActivationConfirmDialog'
+import ActivationConfirmationStep from './ActivationConfirmationStep'
+import { emptyActivationConfirmation, validActivationConfirmation } from './activationConfirmation'
+import type { ActivationConfirmation } from './activationConfirmation'
 import ActivationOutcomePanel from './ActivationOutcomePanel'
 import type { DisplayedOutcome } from './ActivationOutcomePanel'
 import ActivationWizardDialog from './ActivationWizardDialog'
@@ -55,12 +57,13 @@ function stopReadiness(run: ReadinessRun) {
   run.popup.close()
 }
 
-export default function ActivationWorkflow({ revision, isolatedTest, enrolledUser, disabled, onResolvedUser, open, onClose }: {
+export default function ActivationWorkflow({ revision, isolatedTest, enrolledUser, disabled, onResolvedUser, onOutcomeChange, open, onClose }: {
   revision: AuthRevision | null
   isolatedTest: ConnectionTest | null
   enrolledUser: User | null
   disabled: boolean
   onResolvedUser: (user: User | null) => void
+  onOutcomeChange?: (outcome: DisplayedOutcome | null) => void
   open?: boolean
   onClose?: () => void
 }) {
@@ -72,6 +75,7 @@ export default function ActivationWorkflow({ revision, isolatedTest, enrolledUse
   const [statusError, setStatusError] = useState(false)
   const [state, setState] = useState<WorkflowState>({ kind: 'idle' })
   const [confirming, setConfirming] = useState(false)
+  const [confirmation, setConfirmation] = useState<ActivationConfirmation>(emptyActivationConfirmation)
   const [recovery, setRecovery] = useState<RecoveryReadiness | null>(null)
   const [recoveryError, setRecoveryError] = useState(false)
   const [now, setNow] = useState(Date.now())
@@ -218,7 +222,9 @@ export default function ActivationWorkflow({ revision, isolatedTest, enrolledUse
       const current = await getActivationPreparation(preparation.preparation_id)
       if (!validPreparation(current)) { setState({ kind: 'expired', preparation: current }); return }
       if (current.normal_callback_status !== 'succeeded' || !current.normal_evidence_id) { setState({ kind: 'blocked', reason: 'readiness_failed' }); return }
-      setState({ kind: 'ready_to_confirm', preparation: current }); setConfirming(true)
+      setState({ kind: 'ready_to_confirm', preparation: current })
+      setConfirmation(emptyActivationConfirmation)
+      setConfirming(true)
     } catch (error) {
       if (error instanceof AuthConfigurationError && error.code === 'activation_preparation_wrong_instance') setState({ kind: 'blocked', reason: 'wrong_instance' })
       else setState({ kind: 'expired', preparation })
@@ -243,15 +249,19 @@ export default function ActivationWorkflow({ revision, isolatedTest, enrolledUse
         reason: confirmation.reason,
       })
       setState({ kind: 'outcome', result })
+      onOutcomeChange?.(result)
       if (result.outcome === 'committed_applied' || result.outcome === 'committed_not_applied') refreshAfterChange()
       if (result.outcome !== 'commit_uncertain') void loadStatus()
     } catch (error) {
       if (error instanceof AuthConfigurationError && error.activation) {
         setState({ kind: 'outcome', result: error.activation })
+        onOutcomeChange?.(error.activation)
         if (error.activation.outcome === 'committed_applied' || error.activation.outcome === 'committed_not_applied') refreshAfterChange()
       }
       else {
-        setState({ kind: 'outcome', result: { outcome: 'outcome_unknown', desired_generation: preparation.target_activation_generation, revision_id: revision.id } })
+        const unknown: DisplayedOutcome = { outcome: 'outcome_unknown', desired_generation: preparation.target_activation_generation, revision_id: revision.id }
+        setState({ kind: 'outcome', result: unknown })
+        onOutcomeChange?.(unknown)
         if (error instanceof APIError && (error.status === 401 || error.status === 403)) expire()
       }
     } finally { submitting.current = false }
@@ -274,6 +284,7 @@ export default function ActivationWorkflow({ revision, isolatedTest, enrolledUse
           commit_uncertain: false, reconciliation_required: !value.reconciled, automatic_retry_allowed: false,
         }
         setState({ kind: 'outcome', result: known })
+        onOutcomeChange?.(known)
       }
     }
   }
@@ -304,9 +315,9 @@ export default function ActivationWorkflow({ revision, isolatedTest, enrolledUse
   const outcome = state.kind === 'outcome' ? state.result : null
   const wizardOpen = (open ?? Boolean(revision)) && Boolean(revision) && !outcome
   const wizardBusy = state.kind === 'preparing' || state.kind === 'readiness_pending' || state.kind === 'activating'
-  const wizardStep = state.kind === 'idle' || state.kind === 'preparing' ? 'prepare' : ready ? 'confirm' : 'evidence'
+  const wizardStep = state.kind === 'idle' || state.kind === 'preparing' ? 'prepare' : confirming ? 'confirm' : 'evidence'
   function closeWizard() {
-    if (wizardBusy) return
+    if (wizardBusy || confirming || outcome) return
     setState({ kind: 'idle' })
     setConfirming(false)
     onClose?.()
@@ -318,12 +329,9 @@ export default function ActivationWorkflow({ revision, isolatedTest, enrolledUse
         {!status && !statusError && <LinearProgress aria-label={t('common:loading')} />}
         {status && <>
           <TwoColumnKeyValue items={[
-            { label: t('activationAuthoritativeSource'), value: <bdi>{status.authoritative_source}</bdi> },
             { label: t('activationAuthoritativeGeneration'), value: formatNumber(status.authoritative_generation, language) },
-            { label: t('activationAuthoritativeRevision'), value: <bdi>{status.authoritative_revision_id || t('common:none')}</bdi> },
-            { label: t('activationLocalState', { source: status.local_source, generation: formatNumber(status.local_applied_generation, language) }), value: <bdi>{status.local_provider}</bdi> },
-            { label: t('activationLocalRevision'), value: <bdi>{status.local_revision_id || t('common:none')}</bdi> },
-            { label: t('activationAffinityMode'), value: <bdi>{status.preparation_affinity_mode || t('common:none')}</bdi> },
+            { label: t('activationLocalGeneration'), value: formatNumber(status.local_applied_generation, language) },
+            { label: t('activationAffinityMode'), value: status.preparation_affinity_mode === 'single_instance' ? t('affinitySingleInstance') : status.preparation_affinity_mode === 'session_affinity' ? t('affinitySessionAffinity') : t('common:none') },
           ]} />
           <Stack direction="row" sx={{ gap: 1, flexWrap: 'wrap' }}>
             <StatusBadge tone={status.listener_connected ? 'success' : 'warning'} label={t(status.listener_connected ? 'activationListenerConnected' : 'activationListenerDisconnected')} />
@@ -332,13 +340,37 @@ export default function ActivationWorkflow({ revision, isolatedTest, enrolledUse
           </Stack>
           {status.reconciliation_required && !statusError && !outcome && <Button variant="outlined" sx={{ alignSelf: 'flex-start' }} onClick={() => void reconcile()}>{t('activationReconcile')}</Button>}
           {!status.preparation_enabled && <Alert severity="warning">{t('activationAffinityUnavailable')}</Alert>}
+          <Accordion disableGutters variant="outlined" sx={{ '&::before': { display: 'none' } }}>
+            <AccordionSummary expandIcon={<ExpandMore />}>{t('technicalDetails')}</AccordionSummary>
+            <AccordionDetails><TwoColumnKeyValue items={[
+              { label: t('activationAuthoritativeSource'), value: t(status.authoritative_source === 'database' ? 'sourceDatabase' : 'sourceEnvironment') },
+              { label: t('activationAuthoritativeRevision'), value: <bdi>{status.authoritative_revision_id || t('common:none')}</bdi> },
+              { label: t('activationLocalState', { source: t(status.local_source === 'database' ? 'sourceDatabase' : 'sourceEnvironment'), generation: formatNumber(status.local_applied_generation, language) }), value: t(status.local_provider === 'oidc' ? 'providerOidc' : status.local_provider === 'google_iap' ? 'providerIap' : status.local_provider === 'local_dev' ? 'providerLocal' : 'common:none') },
+              { label: t('activationLocalRevision'), value: <bdi>{status.local_revision_id || t('common:none')}</bdi> },
+              { label: t('activationListenerConnected'), value: t(status.listener_connected ? 'yes' : 'no') },
+            ]} /></AccordionDetails>
+          </Accordion>
         </>}
       </Stack>
     </SectionCard>
 
-    {revision && !outcome && <ActivationWizardDialog open={wizardOpen} busy={wizardBusy} step={wizardStep} onClose={closeWizard}>
+    {revision && !outcome && <ActivationWizardDialog open={wizardOpen} busy={wizardBusy || confirming} step={wizardStep} onClose={closeWizard}
+      actions={confirming && preparation ? <>
+        <Button disabled={wizardBusy} onClick={() => setConfirming(false)}>{t('common:cancel')}</Button>
+        <Button variant="contained" disabled={wizardBusy || !ready || !validActivationConfirmation(confirmation, preparation, false)}
+          onClick={() => void activate({ ...confirmation, reason: confirmation.reason.trim(),
+            transitionSeconds: preparation.requires_reauthentication ? 0 : confirmation.transitionSeconds,
+            acknowledgeReauthentication: preparation.requires_reauthentication && confirmation.acknowledgeReauthentication,
+            acknowledgeEmergencyRecovery: preparation.requires_reauthentication && confirmation.acknowledgeEmergencyRecovery,
+          })}>{t('activationConfirmAction')}</Button>
+      </> : undefined}>
       <Stack spacing={2}>
-        <Typography>{t('activationSelectedRevision')}: <bdi>{revision.id}</bdi></Typography>
+        {!confirming && <Typography>{t('activationSelectedRevision')}: <bdi>{revision.id}</bdi></Typography>}
+        {confirming && preparation && isolatedTest?.tested_identity && enrolledUser && <ActivationConfirmationStep
+          revision={revision} preparation={preparation} identity={isolatedTest.tested_identity}
+          enrolledUserID={enrolledUser.id} expired={!ready} busy={state.kind === 'activating'}
+          value={confirmation} onChange={setConfirmation} />}
+        {!confirming && <>
         {state.kind === 'idle' && <Button variant="contained" disabled={disabled || !status?.preparation_enabled} onClick={() => void prepare()}>{t('activationPrepare')}</Button>}
         {state.kind === 'preparing' && <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}><CircularProgress size={20} /><Typography role="status">{t('activationPreparing')}</Typography></Stack>}
         {preparation && <>
@@ -371,15 +403,13 @@ export default function ActivationWorkflow({ revision, isolatedTest, enrolledUse
           <br />{t('recoveryNotLiveHealth')}
         </Alert>}
         {recoveryError && <Alert severity="info">{t('recoveryReadinessUnavailable')}</Alert>}
+        </>}
       </Stack>
     </ActivationWizardDialog>}
 
     {outcome && <ActivationOutcomePanel outcome={outcome} status={statusError ? undefined : status || undefined} busy={false}
-      onInspect={() => void inspect()} onReconcile={() => void reconcile()} onReset={() => setState({ kind: 'idle' })} />}
-
-    {confirming && revision && preparation && isolatedTest?.tested_identity && enrolledUser && <ActivationConfirmDialog
-      open revision={revision} preparation={preparation} identity={isolatedTest.tested_identity}
-      enrolledUserID={enrolledUser.id} expired={!ready} busy={state.kind === 'activating'}
-      onClose={() => setConfirming(false)} onConfirm={(value) => void activate(value)} />}
+      onInspect={() => void inspect()} onReconcile={() => void reconcile()} onReset={() => {
+        setState({ kind: 'idle' }); onOutcomeChange?.(null); onClose?.()
+      }} />}
   </Stack>
 }
