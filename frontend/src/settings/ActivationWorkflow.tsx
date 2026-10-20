@@ -7,7 +7,8 @@ import { useTranslation } from 'react-i18next'
 import type { User } from '../api/client'
 import { APIError } from '../api/client'
 import {
-  activateOIDC, AuthConfigurationError, findEnrolledOIDCAdministrator, getActivationPreparation,
+  activateOIDC, AuthConfigurationError, cancelActivationPreparation, cancelCurrentActivationPreparation,
+  findEnrolledOIDCAdministrator, getActivationPreparation,
   getActivationStatus, getRecoveryReadiness, prepareActivation, reconcileActivation, startNormalReadiness,
 } from '../api/authConfiguration'
 import type {
@@ -15,7 +16,7 @@ import type {
 } from '../api/authConfiguration'
 import { useSession } from '../auth/session'
 import { useAuthenticationCacheSync } from '../api/authCache'
-import { formatNumber } from '../i18n'
+import { formatDate, formatNumber } from '../i18n'
 import { useNotifications } from '../notifications/notifications'
 import ActivationConfirmationStep from './ActivationConfirmationStep'
 import { emptyActivationConfirmation, validActivationConfirmation } from './activationConfirmation'
@@ -26,6 +27,8 @@ import ActivationWizardDialog from './ActivationWizardDialog'
 import SectionCard from '../components/common/SectionCard'
 import StatusBadge from '../components/common/StatusBadge'
 import TwoColumnKeyValue from '../components/common/TwoColumnKeyValue'
+import OIDCConnectionTest from './OIDCConnectionTest'
+import type { OIDCConnectionTestHandle } from './OIDCConnectionTest'
 
 type WorkflowState =
   | { kind: 'idle' }
@@ -36,7 +39,7 @@ type WorkflowState =
   | { kind: 'activating'; preparation: ActivationPreparation }
   | { kind: 'outcome'; result: DisplayedOutcome }
   | { kind: 'expired'; preparation: ActivationPreparation }
-  | { kind: 'blocked'; reason: 'affinity' | 'wrong_instance' | 'provider_unavailable' | 'popup_closed' | 'readiness_failed' }
+  | { kind: 'blocked'; reason: 'affinity' | 'wrong_instance' | 'provider_unavailable' | 'popup_closed' | 'readiness_failed' | 'preparation_conflict'; preparation?: ActivationPreparation }
 
 type ReadinessRun = {
   popup: Window
@@ -57,11 +60,12 @@ function stopReadiness(run: ReadinessRun) {
   run.popup.close()
 }
 
-export default function ActivationWorkflow({ revision, isolatedTest, enrolledUser, disabled, onResolvedUser, onOutcomeChange, open, onClose }: {
+export default function ActivationWorkflow({ revision, isolatedTest, enrolledUser, disabled, onIsolatedTestResult, onResolvedUser, onOutcomeChange, open, onClose }: {
   revision: AuthRevision | null
   isolatedTest: ConnectionTest | null
   enrolledUser: User | null
   disabled: boolean
+  onIsolatedTestResult: (result: ConnectionTest | null) => void
   onResolvedUser: (user: User | null) => void
   onOutcomeChange?: (outcome: DisplayedOutcome | null) => void
   open?: boolean
@@ -79,8 +83,11 @@ export default function ActivationWorkflow({ revision, isolatedTest, enrolledUse
   const [recovery, setRecovery] = useState<RecoveryReadiness | null>(null)
   const [recoveryError, setRecoveryError] = useState(false)
   const [now, setNow] = useState(Date.now())
+  const [canceling, setCanceling] = useState(false)
   const requestSequence = useRef(0)
   const submitting = useRef(false)
+  const cancelingRef = useRef(false)
+  const testRef = useRef<OIDCConnectionTestHandle>(null)
   const readiness = useRef<ReadinessRun | null>(null)
   const polling = useRef<{ controller: AbortController; timer?: ReturnType<typeof setTimeout>; attempts: number } | null>(null)
   const preparation = preparationOf(state)
@@ -125,13 +132,13 @@ export default function ActivationWorkflow({ revision, isolatedTest, enrolledUse
   }, [preparation, state.kind, isolatedTest?.evidence_expires_at])
 
   useEffect(() => {
-    if (!isolatedTest?.tested_identity || !evidenceFresh(isolatedTest) || enrolledUser && enrolledUser.issuer === isolatedTest.tested_identity.issuer && enrolledUser.subject === isolatedTest.tested_identity.subject) return
+    if (!isolatedTest?.tested_identity || isolatedTest.status !== 'succeeded' || isolatedTest.revision_id !== revision?.id || isolatedTest.generation !== revision?.generation || enrolledUser && enrolledUser.issuer === isolatedTest.tested_identity.issuer && enrolledUser.subject === isolatedTest.tested_identity.subject) return
     const controller = new AbortController()
     void findEnrolledOIDCAdministrator(isolatedTest.tested_identity.issuer, isolatedTest.tested_identity.subject, controller.signal)
       .then((user) => { if (!controller.signal.aborted) onResolvedUser(user) })
       .catch((error) => { if (error instanceof APIError && error.status === 401) expire() })
     return () => controller.abort()
-  }, [isolatedTest, enrolledUser, onResolvedUser, expire])
+  }, [isolatedTest, enrolledUser, onResolvedUser, expire, revision])
 
   useEffect(() => () => {
     if (readiness.current && !readiness.current.stopped) stopReadiness(readiness.current)
@@ -168,6 +175,10 @@ export default function ActivationWorkflow({ revision, isolatedTest, enrolledUse
       if (error instanceof AuthConfigurationError && error.code === 'activation_preparation_wrong_instance') setState({ kind: 'blocked', reason: 'wrong_instance' })
       else if (error instanceof AuthConfigurationError && error.code === 'recovery_provider_unavailable') setState({ kind: 'blocked', reason: 'provider_unavailable' })
       else if (error instanceof AuthConfigurationError && error.code === 'activation_affinity_required') setState({ kind: 'blocked', reason: 'affinity' })
+      else if (error instanceof AuthConfigurationError && error.code === 'activation_preparation_conflict') setState({ kind: 'blocked', reason: 'preparation_conflict' })
+      else if (error instanceof AuthConfigurationError && error.status === 409) {
+        setState({ kind: 'idle' }); notify({ severity: 'warning', messageKey: 'auth:revisionConflict' }); void loadStatus()
+      }
       else { setState({ kind: 'idle' }); notify({ severity: 'error', messageKey: 'auth:settingsUnavailable' }) }
     }
   }
@@ -182,15 +193,15 @@ export default function ActivationWorkflow({ revision, isolatedTest, enrolledUse
         stopReadiness(run); setState({ kind: 'ready_to_confirm', preparation: value }); return
       }
       if (value.normal_callback_status === 'failed' || value.normal_callback_status === 'expired' || !validPreparation(value)) {
-        stopReadiness(run); setState(value.normal_callback_status === 'expired' || !validPreparation(value) ? { kind: 'expired', preparation: value } : { kind: 'blocked', reason: 'readiness_failed' }); return
+        stopReadiness(run); setState(value.normal_callback_status === 'expired' || !validPreparation(value) ? { kind: 'expired', preparation: value } : { kind: 'blocked', reason: 'readiness_failed', preparation: value }); return
       }
-      if (run.popup.closed) { stopReadiness(run); setState({ kind: 'blocked', reason: 'popup_closed' }); return }
+      if (run.popup.closed) { stopReadiness(run); setState({ kind: 'blocked', reason: 'popup_closed', preparation: value }); return }
       run.timer = setTimeout(() => void pollReadiness(run, preparationID), 2000)
     } catch (error) {
       if (run.stopped) return
       stopReadiness(run)
-      if (error instanceof AuthConfigurationError && error.code === 'activation_preparation_wrong_instance') setState({ kind: 'blocked', reason: 'wrong_instance' })
-      else setState({ kind: 'blocked', reason: 'readiness_failed' })
+      if (error instanceof AuthConfigurationError && error.code === 'activation_preparation_wrong_instance') setState({ kind: 'blocked', reason: 'wrong_instance', preparation })
+      else setState({ kind: 'blocked', reason: 'readiness_failed', preparation })
     }
   }
 
@@ -211,8 +222,8 @@ export default function ActivationWorkflow({ revision, isolatedTest, enrolledUse
       run.timer = setTimeout(() => void pollReadiness(run, preparation.preparation_id), 1000)
     } catch (error) {
       if (!run.stopped) stopReadiness(run)
-      if (error instanceof AuthConfigurationError && error.code === 'activation_preparation_wrong_instance') setState({ kind: 'blocked', reason: 'wrong_instance' })
-      else setState({ kind: 'blocked', reason: 'readiness_failed' })
+      if (error instanceof AuthConfigurationError && error.code === 'activation_preparation_wrong_instance') setState({ kind: 'blocked', reason: 'wrong_instance', preparation })
+      else setState({ kind: 'blocked', reason: 'readiness_failed', preparation })
     }
   }
 
@@ -221,12 +232,12 @@ export default function ActivationWorkflow({ revision, isolatedTest, enrolledUse
     try {
       const current = await getActivationPreparation(preparation.preparation_id)
       if (!validPreparation(current)) { setState({ kind: 'expired', preparation: current }); return }
-      if (current.normal_callback_status !== 'succeeded' || !current.normal_evidence_id) { setState({ kind: 'blocked', reason: 'readiness_failed' }); return }
+      if (current.normal_callback_status !== 'succeeded' || !current.normal_evidence_id) { setState({ kind: 'blocked', reason: 'readiness_failed', preparation: current }); return }
       setState({ kind: 'ready_to_confirm', preparation: current })
       setConfirmation(emptyActivationConfirmation)
       setConfirming(true)
     } catch (error) {
-      if (error instanceof AuthConfigurationError && error.code === 'activation_preparation_wrong_instance') setState({ kind: 'blocked', reason: 'wrong_instance' })
+      if (error instanceof AuthConfigurationError && error.code === 'activation_preparation_wrong_instance') setState({ kind: 'blocked', reason: 'wrong_instance', preparation })
       else setState({ kind: 'expired', preparation })
     }
   }
@@ -311,16 +322,41 @@ export default function ActivationWorkflow({ revision, isolatedTest, enrolledUse
     }
   }
 
+  async function abandon(close = false) {
+    if (submitting.current || cancelingRef.current || state.kind === 'outcome') return
+    const current = preparationOf(state)
+    if (!current && state.kind !== 'blocked') {
+      setState({ kind: 'idle' }); setConfirming(false); if (close) onClose?.()
+      return
+    }
+    if (readiness.current && !readiness.current.stopped) stopReadiness(readiness.current)
+    cancelingRef.current = true; setCanceling(true)
+    try {
+      if (current) await cancelActivationPreparation(current.preparation_id)
+      else if (state.kind === 'blocked' && state.reason === 'preparation_conflict') await cancelCurrentActivationPreparation()
+      else { setState({ kind: 'idle' }); if (close) onClose?.(); return }
+      setState({ kind: 'idle' }); setConfirming(false); if (close) onClose?.()
+    } catch (error) {
+      if (error instanceof AuthConfigurationError && error.status === 404) {
+        // Expired or already discarded preparations cannot be activated.
+        setState({ kind: 'idle' }); setConfirming(false); if (close) onClose?.()
+      } else if (error instanceof AuthConfigurationError && error.code === 'activation_preparation_wrong_instance') {
+        setState({ kind: 'blocked', reason: 'wrong_instance', preparation: current })
+      } else {
+        if (error instanceof APIError && error.status === 401) expire()
+        notify({ severity: 'error', messageKey: 'auth:activationCancelFailed' })
+      }
+    } finally { cancelingRef.current = false; setCanceling(false) }
+  }
+
   const countdown = preparation ? Math.max(0, Math.ceil((Date.parse(preparation.expires_at) - now) / 1000)) : 0
   const outcome = state.kind === 'outcome' ? state.result : null
   const wizardOpen = (open ?? Boolean(revision)) && Boolean(revision) && !outcome
-  const wizardBusy = state.kind === 'preparing' || state.kind === 'readiness_pending' || state.kind === 'activating'
+  const wizardBusy = state.kind === 'preparing' || state.kind === 'readiness_pending' || state.kind === 'activating' || canceling
   const wizardStep = state.kind === 'idle' || state.kind === 'preparing' ? 'prepare' : confirming ? 'confirm' : 'evidence'
   function closeWizard() {
-    if (wizardBusy || confirming || outcome) return
-    setState({ kind: 'idle' })
-    setConfirming(false)
-    onClose?.()
+    if (state.kind === 'preparing' || state.kind === 'activating' || canceling || confirming || outcome) return
+    void abandon(true)
   }
   return <Stack spacing={2}>
     <SectionCard title={t('activationStatusTitle')}>
@@ -379,18 +415,30 @@ export default function ActivationWorkflow({ revision, isolatedTest, enrolledUse
           <Typography>{t('activationCurrentRuntime', { provider: preparation.current_provider, source: preparation.current_source })}</Typography>
           <Typography>{t('activationMaximumTransition', { seconds: preparation.maximum_transition_seconds })}</Typography>
           <Typography role="timer" aria-live="polite">{t('activationExpiresCountdown', { seconds: countdown })}</Typography>
+          <Typography>{t('activationPreparationExpiry', { date: formatDate(preparation.expires_at, language) })}</Typography>
           {preparation.requires_reauthentication && <Alert severity="warning">{t('activationFirstCutoverWarning')}</Alert>}
           {preparation.emergency_recovery_required && <Alert severity="warning">{t('activationEmergencyRecoveryRequired')}</Alert>}
           <Typography>{t('activationIsolatedEvidence')}: {isolatedEligible ? t('activationEvidenceReady') : t('activationEvidenceMissing')}</Typography>
+          <Typography>{t('activationIsolatedExpiry', { date: isolatedTest?.evidence_expires_at ? formatDate(isolatedTest.evidence_expires_at, language) : t('common:none') })}</Typography>
+          {!isolatedEligible && <Alert severity="warning">{t(isolatedTest?.evidence_expires_at && Date.parse(isolatedTest.evidence_expires_at) <= now ? 'activationIsolatedExpiredBlocker' : 'activationIsolatedMissingBlocker')}</Alert>}
           <Typography>{t('activationEnrolledAdministrator')}: {enrolledEligible ? <bdi>{enrolledUser!.id}</bdi> : t('activationEnrollmentMissing')}</Typography>
+          {!enrolledEligible && <Alert severity="warning">{t('activationEnrollmentBlocker')}</Alert>}
           <Typography>{t('activationNormalEvidence')}: {normalEligible ? t('activationEvidenceReady') : t('activationEvidenceMissing')}</Typography>
+          <Typography>{t('activationNormalExpiry', { date: preparation.normal_evidence_expires_at ? formatDate(preparation.normal_evidence_expires_at, language) : t('common:none') })}</Typography>
+          {!normalEligible && <Alert severity="warning">{t(preparation.normal_evidence_expires_at && Date.parse(preparation.normal_evidence_expires_at) <= now ? 'activationNormalExpiredBlocker' : 'activationNormalMissingBlocker')}</Alert>}
+          {validPreparation(preparation) && <>
+            <Button variant="outlined" disabled={disabled || wizardBusy} onClick={() => testRef.current?.start()}>{t('activationRefreshIsolated')}</Button>
+            <OIDCConnectionTest key={revision.id} ref={testRef} revision={revision} disabled={disabled || wizardBusy} externalTrigger showEnrollment={false}
+              onResult={onIsolatedTestResult} />
+          </>}
           {state.kind === 'prepared' && <Button variant="outlined" disabled={disabled} onClick={() => void beginReadiness()}>{t('activationRunNormalTest')}</Button>}
           {state.kind === 'readiness_pending' && <Typography role="status">{t('activationNormalTestPending')}</Typography>}
           {(state.kind === 'ready_to_confirm' || state.kind === 'prepared') && <Button variant="contained" disabled={!ready || disabled} onClick={() => void openConfirmation()}>{t('activationReview')}</Button>}
+          {state.kind !== 'activating' && <Button disabled={canceling} onClick={() => void abandon()}>{t('activationAbandon')}</Button>}
         </>}
         {state.kind === 'expired' && <Alert severity="error">{t('activationPreparationExpired')}</Alert>}
         {state.kind === 'blocked' && <Alert severity="error">{t(`activationBlocked_${state.reason}`)}</Alert>}
-        {(state.kind === 'expired' || state.kind === 'blocked') && <Button onClick={() => setState({ kind: 'idle' })}>{t('activationStartOver')}</Button>}
+        {state.kind === 'blocked' && !preparation && <Button disabled={canceling} onClick={() => void abandon()}>{t(state.reason === 'preparation_conflict' ? 'activationDiscardExisting' : 'activationStartOver')}</Button>}
         {state.kind === 'activating' && <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}><CircularProgress size={20} /><Typography role="status">{t('activationSubmitting')}</Typography></Stack>}
         <Divider />
         <Button variant="text" onClick={() => void checkRecovery()}>{t('recoveryCheckReadiness')}</Button>

@@ -237,6 +237,8 @@ func (h *activationHTTP) withAuthoritativeState(ctx context.Context, result Acti
 func (h *activationHTTP) register(route func(string, http.HandlerFunc)) {
 	route("POST /api/admin/auth/settings/{id}/activation/prepare", h.prepare)
 	route("GET /api/admin/auth/activation-preparations/{preparation}", h.status)
+	route("POST /api/admin/auth/activation-preparations/{preparation}/cancel", h.cancel)
+	route("POST /api/admin/auth/activation-preparations/current/cancel", h.cancelCurrent)
 	route("POST /api/admin/auth/activation-preparations/{preparation}/readiness", h.readiness)
 	route("POST /api/admin/auth/activation-preparations/{preparation}/activate", h.activate)
 	route("POST /api/admin/auth/settings/{id}/rollback", h.rollback)
@@ -276,6 +278,10 @@ func (h *activationHTTP) prepare(w http.ResponseWriter, r *http.Request) {
 	item := &activationPreparation{id: h.instance + "." + oauth2.GenerateVerifier(), actor: actor.ID, prepared: p}
 	if err := h.add(item); err != nil {
 		p.Close()
+		if errors.Is(err, ErrConflict) {
+			reply(w, http.StatusConflict, map[string]string{"error": "activation_preparation_conflict"})
+			return
+		}
 		httpError(w, err)
 		return
 	}
@@ -306,6 +312,57 @@ func (h *activationHTTP) status(w http.ResponseWriter, r *http.Request) {
 	response := responseForPreparation(item)
 	h.mu.Unlock()
 	reply(w, http.StatusOK, response)
+}
+
+// Cancel only releases an unclaimed, process-local preparation owned by this
+// verified administrator. A claimed activation is removed before its database
+// transaction begins, so cancellation can never interrupt an uncertain commit.
+func (h *activationHTTP) cancel(w http.ResponseWriter, r *http.Request) {
+	h.cancelOwned(w, r, r.PathValue("preparation"))
+}
+
+func (h *activationHTTP) cancelCurrent(w http.ResponseWriter, r *http.Request) {
+	h.cancelOwned(w, r, "")
+}
+
+func (h *activationHTTP) cancelOwned(w http.ResponseWriter, r *http.Request, id string) {
+	if !h.requirePreparation(w) {
+		return
+	}
+	var body struct{}
+	if !access.DecodeJSON(w, r, &body) {
+		return
+	}
+	actor, ok := access.Principal(r.Context())
+	if !ok {
+		httpError(w, ErrDenied)
+		return
+	}
+	h.mu.Lock()
+	h.pruneLocked(time.Now())
+	if prefix, _, found := strings.Cut(id, "."); id != "" && found && prefix != h.instance {
+		h.mu.Unlock()
+		httpError(w, ErrPreparationWrongInstance)
+		return
+	}
+	if id == "" {
+		for candidate, existing := range h.items {
+			if existing.actor == actor.ID && !existing.claimed {
+				id = candidate
+				break
+			}
+		}
+	}
+	item := h.items[id]
+	if item == nil || item.actor != actor.ID || item.claimed {
+		h.mu.Unlock()
+		httpError(w, ErrNotFound)
+		return
+	}
+	delete(h.items, id)
+	h.mu.Unlock()
+	item.prepared.Close()
+	reply(w, http.StatusOK, map[string]string{"status": "cancelled"})
 }
 
 func (h *activationHTTP) readiness(w http.ResponseWriter, r *http.Request) {

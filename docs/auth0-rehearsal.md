@@ -12,10 +12,21 @@ as a production recovery plan.
 
 - PostgreSQL 14, the existing `go_web_app` role, `psql`, `createdb`, `dropdb`,
   `migrate`, `openssl`, `curl`, `jq`, Go, and frontend dependencies.
-- Authorized local PostgreSQL administration credentials supplied through
-  `PGHOST`, `PGPORT`, `PGUSER`, and protected `PGPASSWORD` or local peer auth.
-  `PGHOST` must be a local Unix socket or loopback address. The scripts always
-  connect to the `postgres` maintenance database for creation and deletion.
+- Local `sudo -u postgres` access and PostgreSQL peer authentication over a
+  Unix socket. Run `sudo -v` before setup, checks, or cleanup; the scripts use
+  `sudo -n` and fail if authorization is unavailable. By default they use
+  `/var/run/postgresql` and port 5432. Set `REHEARSAL_PG_SOCKET_DIR` and
+  `REHEARSAL_PG_PORT` explicitly if the local server uses another socket/port.
+  Existing `PGHOST`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, and other `PG*`
+  variables are ignored by these scripts.
+- Loopback TCP authentication for `go_web_app` on the same PostgreSQL port.
+  Administrative commands use the Unix socket as `postgres`; migrations and
+  the Go application connect as `go_web_app` over `127.0.0.1` with its existing
+  password. Setup refuses to infer that password from ambient credentials.
+- The existing `go_web_app` password for the **rehearsal migration only**.
+  Setup prompts without echoing it, or accepts the explicit
+  `REHEARSAL_DB_PASSWORD` environment variable. It never reads the development
+  `.env` or an ambient `PGPASSWORD`.
 - Ports **18080** (Go) and **15173** (Vite) free on `127.0.0.1`. Run exactly
   one Go instance and one Vite instance for this deployment. Do not expose
   Local DEV through a proxy, tunnel, port forward, or public listener.
@@ -36,17 +47,22 @@ From the repository root, in a terminal with **local** PostgreSQL administrator
 access (not the development application's `DB_*` configuration):
 
 ```bash
+sudo -v
 ./scripts/rehearsal/setup.sh
 vi scripts/rehearsal/.env.rehearsal.local
 ```
 
 Setup creates only the fixed rehearsal database, runs framework migrations
-000001–000007 through `scripts/migrate-framework.sh`, and verifies a clean
+000001–000007 as `go_web_app` through `scripts/migrate-framework.sh`, and verifies a clean
 `public.schema_migrations` version 7. It does not run module migrations,
 create framework users or revisions, or activate authentication. Set
 `DB_PASSWORD` for the existing `go_web_app` role in the generated file. Do not
 copy passwords, Auth0 secrets, or encrypted revisions from the development
-database. Keep the generated file out of Git and backups.
+database. The `postgres` role creates the new database with `go_web_app` as its
+owner and revokes the default PUBLIC database grant. `go_web_app` gains no
+cluster-wide `CREATEDB` or superuser privilege. The generated file remains
+owned by your WSL user with mode 600; `sudo` runs only PostgreSQL client
+commands. Keep the file out of Git and backups.
 
 If setup stops partway through, inspect the output and database marker before
 retrying. Setup deliberately refuses to reuse a partially created database.
@@ -100,7 +116,7 @@ The optional `AUTH_REHEARSAL_FRONTEND_PORT` and
 ports. Ordinary development retains ports 5173/8080. Do not add Auth0 secrets
 to `VITE_*` variables.
 
-In the PostgreSQL administrator terminal, run:
+In the PostgreSQL administrator terminal, run (renew `sudo -v` if needed):
 
 ```bash
 ./scripts/rehearsal/check.sh
@@ -178,6 +194,7 @@ rehearsal database after correcting the Auth0 configuration.
 With the rehearsal processes stopped, run:
 
 ```bash
+sudo -v
 ./scripts/rehearsal/cleanup.sh
 ```
 

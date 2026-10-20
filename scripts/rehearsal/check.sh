@@ -5,9 +5,10 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
 
 [[ $# == 0 ]] || rehearsal_error 'check takes no arguments'
 rehearsal_require_local_postgres
-for program in psql curl jq python3; do
+for program in sudo curl jq python3; do
   command -v "$program" >/dev/null || rehearsal_error "$program is required"
 done
+[[ -x /usr/bin/psql ]] || rehearsal_error '/usr/bin/psql is required'
 [[ -f $REHEARSAL_ENV_FILE && ! -L $REHEARSAL_ENV_FILE ]] || rehearsal_error 'run setup.sh first'
 rehearsal_verify_marker
 
@@ -21,7 +22,7 @@ check() { printf '%-34s %s\n' "$1" "$2"; }
 problem() { check "$1" "$2"; issues=$((issues + 1)); }
 
 [[ ${APP_ENV:-} == development && ${AUTH_PROVIDER:-} == local_dev && ${AUTH_CONFIG_DEPLOYMENT:-} == "$REHEARSAL_DEPLOYMENT" ]] || rehearsal_error 'trusted development authentication scope does not match rehearsal'
-[[ ${DB_NAME:-} == "$REHEARSAL_DB" && ${DB_HOST:-} == 127.0.0.1 && ${DB_USER:-} == go_web_app ]] || rehearsal_error 'DB_* must point only to the fixed local rehearsal database'
+[[ ${DB_NAME:-} == "$REHEARSAL_DB" && ${DB_HOST:-} == 127.0.0.1 && ${DB_PORT:-} == "$REHEARSAL_PG_PORT" && ${DB_USER:-} == go_web_app && ${DB_SSLMODE:-} == disable ]] || rehearsal_error 'DB_* must point only to the fixed local rehearsal database'
 [[ ${HTTP_ADDR:-} == "127.0.0.1:$REHEARSAL_BACKEND_PORT" && ${APP_ORIGIN:-} == "http://127.0.0.1:$REHEARSAL_FRONTEND_PORT" ]] || rehearsal_error 'rehearsal backend or browser origin does not match the loopback configuration'
 [[ ${AUTH_REHEARSAL_BACKEND_PORT:-} == "$REHEARSAL_BACKEND_PORT" && ${AUTH_REHEARSAL_FRONTEND_PORT:-} == "$REHEARSAL_FRONTEND_PORT" ]] || rehearsal_error 'Vite proxy ports do not match the rehearsal listeners'
 [[ ${AUTH_ACTIVATION_AFFINITY_MODE:-} == single_instance && ${RBAC_ENABLED:-} == true && -z ${ENABLED_MODULES:-} ]] || rehearsal_error 'single-instance affinity, RBAC and core-only modules are required'
@@ -35,7 +36,7 @@ else
   problem 'Rehearsal encryption key' 'invalid or missing'
 fi
 
-version="$(PGDATABASE="$REHEARSAL_DB" psql -X -qAt -v ON_ERROR_STOP=1 -c "SELECT version::text || '|' || dirty::text FROM public.schema_migrations" 2>/dev/null || true)"
+version="$(rehearsal_db_sql "SELECT version::text || '|' || dirty::text FROM public.schema_migrations" 2>/dev/null || true)"
 if [[ $version == '7|false' ]]; then
   check 'PostgreSQL migration journal' 'clean version 7'
 else
@@ -45,7 +46,7 @@ fi
 if [[ -z ${DB_PASSWORD:-} ]]; then
   problem 'Application database credentials' 'DB_PASSWORD is not configured in the local rehearsal file'
 else
-  app_marker="$(PGPASSWORD="$DB_PASSWORD" PGHOST="$DB_HOST" PGPORT="$DB_PORT" PGUSER="$DB_USER" PGDATABASE="$DB_NAME" psql -X -qAt -v ON_ERROR_STOP=1 -c "SELECT COALESCE(shobj_description(oid,'pg_database'),'') FROM pg_database WHERE datname=current_database()" 2>/dev/null || true)"
+  app_marker="$(env -i PATH=/usr/bin:/bin PGPASSWORD="$DB_PASSWORD" PGHOST="$DB_HOST" PGPORT="$DB_PORT" PGUSER="$DB_USER" PGDATABASE="$DB_NAME" PGSSLMODE=disable PGCONNECT_TIMEOUT=5 /usr/bin/psql -X -w -qAt -v ON_ERROR_STOP=1 -c "SELECT COALESCE(shobj_description(oid,'pg_database'),'') FROM pg_database WHERE datname=current_database()" 2>/dev/null || true)"
   if [[ $app_marker == "$REHEARSAL_MARKER_PREFIX$(rehearsal_file_marker)" ]]; then
     check 'Application database credentials' 'connected to the marked rehearsal database'
   else
@@ -53,10 +54,10 @@ else
   fi
 fi
 
-head="$(PGDATABASE="$REHEARSAL_DB" psql -X -qAt -v ON_ERROR_STOP=1 -c "SELECT COALESCE((SELECT runtime_source || '|' || generation::text || '|' || COALESCE(active_revision_id::text,'') FROM framework.auth_activation_heads WHERE deployment_id='$REHEARSAL_DEPLOYMENT' AND environment='development'),'environment|0|')" 2>/dev/null || true)"
-history="$(PGDATABASE="$REHEARSAL_DB" psql -X -qAt -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM framework.auth_activation_history WHERE deployment_id='$REHEARSAL_DEPLOYMENT' AND environment='development'" 2>/dev/null || true)"
-active="$(PGDATABASE="$REHEARSAL_DB" psql -X -qAt -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM framework.auth_config_lifecycle WHERE deployment_id='$REHEARSAL_DEPLOYMENT' AND environment='development' AND status='active'" 2>/dev/null || true)"
-other_database="$(PGDATABASE="$REHEARSAL_DB" psql -X -qAt -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM framework.auth_activation_heads WHERE runtime_source='database' AND (deployment_id<>'$REHEARSAL_DEPLOYMENT' OR environment<>'development')" 2>/dev/null || true)"
+head="$(rehearsal_db_sql "SELECT COALESCE((SELECT runtime_source || '|' || generation::text || '|' || COALESCE(active_revision_id::text,'') FROM framework.auth_activation_heads WHERE deployment_id='$REHEARSAL_DEPLOYMENT' AND environment='development'),'environment|0|')" 2>/dev/null || true)"
+history="$(rehearsal_db_sql "SELECT count(*) FROM framework.auth_activation_history WHERE deployment_id='$REHEARSAL_DEPLOYMENT' AND environment='development'" 2>/dev/null || true)"
+active="$(rehearsal_db_sql "SELECT count(*) FROM framework.auth_config_lifecycle WHERE deployment_id='$REHEARSAL_DEPLOYMENT' AND environment='development' AND status='active'" 2>/dev/null || true)"
+other_database="$(rehearsal_db_sql "SELECT count(*) FROM framework.auth_activation_heads WHERE runtime_source='database' AND (deployment_id<>'$REHEARSAL_DEPLOYMENT' OR environment<>'development')" 2>/dev/null || true)"
 if [[ $head == 'environment|0|' && $history == 0 && $active == 0 && $other_database == 0 ]]; then
   check 'Authoritative authentication' 'Local DEV eligible; generation 0; no active revision'
 else
@@ -67,8 +68,8 @@ normal="$APP_ORIGIN/api/auth/callback"
 isolated="$APP_ORIGIN/api/auth/test/callback"
 check 'Trusted normal callback' "$normal"
 check 'Trusted isolated callback' "$isolated"
-bad_redirects="$(PGDATABASE="$REHEARSAL_DB" psql -X -qAt -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM framework.auth_config_revisions r JOIN framework.auth_config_lifecycle l ON l.revision_id=r.id WHERE r.deployment_id='$REHEARSAL_DEPLOYMENT' AND r.environment='development' AND r.provider='oidc' AND l.status='approved' AND r.redirect_uri<>'$normal'" 2>/dev/null || true)"
-approved="$(PGDATABASE="$REHEARSAL_DB" psql -X -qAt -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM framework.auth_config_revisions r JOIN framework.auth_config_lifecycle l ON l.revision_id=r.id WHERE r.deployment_id='$REHEARSAL_DEPLOYMENT' AND r.environment='development' AND r.provider='oidc' AND l.status='approved'" 2>/dev/null || true)"
+bad_redirects="$(rehearsal_db_sql "SELECT count(*) FROM framework.auth_config_revisions r JOIN framework.auth_config_lifecycle l ON l.revision_id=r.id WHERE r.deployment_id='$REHEARSAL_DEPLOYMENT' AND r.environment='development' AND r.provider='oidc' AND l.status='approved' AND r.redirect_uri<>'$normal'" 2>/dev/null || true)"
+approved="$(rehearsal_db_sql "SELECT count(*) FROM framework.auth_config_revisions r JOIN framework.auth_config_lifecycle l ON l.revision_id=r.id WHERE r.deployment_id='$REHEARSAL_DEPLOYMENT' AND r.environment='development' AND r.provider='oidc' AND l.status='approved'" 2>/dev/null || true)"
 if [[ $bad_redirects == 0 ]]; then
   check 'Approved OIDC callback consistency' "OK ($approved approved rehearsal revisions)"
 else

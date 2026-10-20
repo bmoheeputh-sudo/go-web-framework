@@ -201,6 +201,10 @@ export const startNormalReadiness = (preparationID: string, signal?: AbortSignal
   configurationRequest<NormalReadinessStart>(`/api/admin/auth/activation-preparations/${encodeURIComponent(preparationID)}/readiness`, 'POST', {}, signal)
 export const getActivationPreparation = (preparationID: string, signal?: AbortSignal) =>
   configurationRequest<ActivationPreparation>(`/api/admin/auth/activation-preparations/${encodeURIComponent(preparationID)}`, 'GET', undefined, signal)
+export const cancelActivationPreparation = (preparationID: string, signal?: AbortSignal) =>
+  configurationRequest<void>(`/api/admin/auth/activation-preparations/${encodeURIComponent(preparationID)}/cancel`, 'POST', {}, signal)
+export const cancelCurrentActivationPreparation = (signal?: AbortSignal) =>
+  configurationRequest<void>('/api/admin/auth/activation-preparations/current/cancel', 'POST', {}, signal)
 export async function activateOIDC(preparationID: string, request: ActivateRequest, signal?: AbortSignal): Promise<ActivationResult> {
   // A successful HTTP status is not proof that a proxy delivered the activation
   // contract. After submitting a mutation, an invalid response is ambiguous.

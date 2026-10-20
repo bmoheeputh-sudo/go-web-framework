@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/access"
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/auth"
@@ -39,6 +41,143 @@ func prepareThroughAPI(t *testing.T, h http.Handler, m Metadata, generation int6
 		t.Fatal("invalid activation preparation response")
 	}
 	return result
+}
+
+func TestActivationHTTPAbandonPreparationAndRetry(t *testing.T) {
+	f, service, _, revision := activationServiceFixture(t)
+	h := activationAPIHandler(t, f, service, fixedAuth{f.identity})
+	first := prepareThroughAPI(t, h, revision, 0)
+	conflict := apiRequest(t, h, http.MethodPost, settingsPath+"/"+revision.ID+"/activation/prepare", map[string]any{
+		"expected_revision_generation": revision.Generation, "expected_activation_generation": 0,
+	}, http.StatusConflict)
+	if !strings.Contains(conflict.Body.String(), "activation_preparation_conflict") {
+		t.Fatal("duplicate preparation did not return its specific conflict code")
+	}
+	path := "/api/admin/auth/activation-preparations/" + first.ID + "/cancel"
+	apiRequest(t, h, http.MethodPost, path, map[string]any{"actor": "forged"}, http.StatusBadRequest)
+	apiRequest(t, h, http.MethodGet, "/api/admin/auth/activation-preparations/"+first.ID, nil, http.StatusOK)
+	apiRequest(t, h, http.MethodPost, path, map[string]any{}, http.StatusOK)
+	apiRequest(t, h, http.MethodGet, "/api/admin/auth/activation-preparations/"+first.ID, nil, http.StatusNotFound)
+	second := prepareThroughAPI(t, h, revision, 0)
+	apiRequest(t, h, http.MethodPost, "/api/admin/auth/activation-preparations/current/cancel", map[string]any{}, http.StatusOK)
+	apiRequest(t, h, http.MethodGet, "/api/admin/auth/activation-preparations/"+second.ID, nil, http.StatusNotFound)
+	prepareThroughAPI(t, h, revision, 0)
+}
+
+type selectingAdminAuth struct{ first, second auth.Identity }
+
+func (a selectingAdminAuth) Authenticate(r *http.Request) (auth.Identity, error) {
+	if r.Header.Get("X-Test-Administrator") == "second" {
+		return a.second, nil
+	}
+	return a.first, nil
+}
+
+func TestActivationHTTPCancelOwnershipOriginAndInstance(t *testing.T) {
+	f, service, _, revision := activationServiceFixture(t)
+	other := auth.Identity{Issuer: f.identity.Issuer, Subject: "other-admin", Provider: auth.OIDC}
+	user, err := f.store.Resolve(context.Background(), other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.owner.Exec(context.Background(), `INSERT INTO framework.user_roles(user_id,role) VALUES ($1,'Admin')`, user.ID); err != nil {
+		t.Fatal(err)
+	}
+	h := activationAPIHandler(t, f, service, selectingAdminAuth{f.identity, other})
+	prepared := prepareThroughAPI(t, h, revision, 0)
+	path := "/api/admin/auth/activation-preparations/" + prepared.ID + "/cancel"
+	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}"))
+	request.Header.Set("Origin", apiOrigin)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Test-Administrator", "second")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, request)
+	checkAPIResponse(t, w, http.StatusNotFound)
+	request = httptest.NewRequest(http.MethodPost, "/api/admin/auth/activation-preparations/current/cancel", strings.NewReader("{}"))
+	request.Header.Set("Origin", apiOrigin)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Test-Administrator", "second")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, request)
+	checkAPIResponse(t, w, http.StatusNotFound)
+	request = httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}"))
+	request.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, request)
+	checkAPIResponse(t, w, http.StatusForbidden)
+	otherInstance := activationAPIHandler(t, f, service, fixedAuth{f.identity})
+	w = apiRequest(t, otherInstance, http.MethodPost, path, map[string]any{}, http.StatusServiceUnavailable)
+	if !strings.Contains(w.Body.String(), "activation_preparation_wrong_instance") {
+		t.Fatal("cross-instance cancellation lacked a routing error")
+	}
+	apiRequest(t, h, http.MethodGet, "/api/admin/auth/activation-preparations/"+prepared.ID, nil, http.StatusOK)
+	apiRequest(t, h, http.MethodPost, path, map[string]any{}, http.StatusOK)
+}
+
+func TestActivationHTTPCancelExpiredPreparation(t *testing.T) {
+	f, service, _, revision := activationServiceFixture(t)
+	h := newActivationHTTP(service, ActivationOperations{Affinity: ActivationAffinity{Mode: "single_instance"}})
+	f.run(t, func(ctx context.Context) {
+		prepared, err := service.Prepare(ctx, revision.ID, revision.Generation, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prepared.expires = time.Now().Add(-time.Second)
+		actor, _ := access.Principal(ctx)
+		id := h.instance + ".expired"
+		h.items[id] = &activationPreparation{id: id, actor: actor.ID, prepared: prepared}
+		request := httptest.NewRequest(http.MethodPost, "/api/admin/auth/activation-preparations/"+id+"/cancel", strings.NewReader("{}"))
+		request.SetPathValue("preparation", id)
+		response := httptest.NewRecorder()
+		h.cancel(response, request.WithContext(ctx))
+		if response.Code != http.StatusNotFound || len(h.items) != 0 {
+			t.Fatal("expired preparation remained active or was cancelled as fresh")
+		}
+	})
+}
+
+func TestActivationHTTPCancelRacingClaim(t *testing.T) {
+	f, service, _, revision := activationServiceFixture(t)
+	h := newActivationHTTP(service, ActivationOperations{Affinity: ActivationAffinity{Mode: "single_instance"}})
+	f.run(t, func(ctx context.Context) {
+		prepared, err := service.Prepare(ctx, revision.ID, revision.Generation, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		actor, _ := access.Principal(ctx)
+		id := h.instance + ".racing"
+		if err := h.add(&activationPreparation{id: id, actor: actor.ID, prepared: prepared}); err != nil {
+			t.Fatal(err)
+		}
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		var claimed *activationPreparation
+		var claimErr error
+		response := httptest.NewRecorder()
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			claimed, claimErr = h.claim(ctx, id)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			request := httptest.NewRequest(http.MethodPost, "/api/admin/auth/activation-preparations/"+id+"/cancel", strings.NewReader("{}"))
+			request.SetPathValue("preparation", id)
+			h.cancel(response, request.WithContext(ctx))
+		}()
+		close(start)
+		wg.Wait()
+		if claimed != nil {
+			defer claimed.prepared.Close()
+			if claimErr != nil || response.Code != http.StatusNotFound {
+				t.Fatal("cancellation interrupted an already claimed activation")
+			}
+		} else if !errors.Is(claimErr, ErrNotFound) || response.Code != http.StatusOK {
+			t.Fatal("racing cancellation and claim did not resolve to one owner")
+		}
+	})
 }
 
 func TestActivationHTTPNormalCallbackAndFirstCutover(t *testing.T) {

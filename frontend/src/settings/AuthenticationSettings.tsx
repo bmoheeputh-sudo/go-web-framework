@@ -100,7 +100,9 @@ export default function AuthenticationSettings() {
         </Stack>
       </SectionCard>}
       <ActivationWorkflow revision={activationRevision} open={Boolean(activationRevision)} onClose={() => setActivationRevision(null)}
-        isolatedTest={isolatedTest} enrolledUser={enrolledUser} disabled={locked || Boolean(queryError)} onResolvedUser={setEnrolledUser} onOutcomeChange={setActivationOutcome} />
+        isolatedTest={isolatedTest} enrolledUser={enrolledUser} disabled={locked || Boolean(queryError)}
+        onIsolatedTestResult={(result) => { setIsolatedTest(result); setEnrolledUser(null) }}
+        onResolvedUser={setEnrolledUser} onOutcomeChange={setActivationOutcome} />
     </Box>
 
     <SectionCard title={t('history')} actions={<Stack direction="row" sx={{ gap: 1, flexWrap: 'wrap' }}>

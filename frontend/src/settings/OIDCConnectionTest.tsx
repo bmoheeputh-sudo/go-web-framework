@@ -27,10 +27,11 @@ export type OIDCConnectionTestHandle = { start: () => void }
 const OIDCConnectionTest = forwardRef<OIDCConnectionTestHandle, {
   revision: AuthRevision; disabled: boolean
   externalTrigger?: boolean
+  showEnrollment?: boolean
   onBusyChange?: (busy: boolean) => void
   onResult?: (result: ConnectionTest | null) => void
   onEnrolled?: (user: User) => void
-}>(function OIDCConnectionTest({ revision, disabled, externalTrigger = false, onBusyChange, onResult, onEnrolled }, ref) {
+}>(function OIDCConnectionTest({ revision, disabled, externalTrigger = false, showEnrollment = true, onBusyChange, onResult, onEnrolled }, ref) {
   const { t, i18n } = useTranslation('auth')
   const notify = useNotifications(), cache = useQueryCache(), { expire } = useSession()
   const active = useRef<Run | null>(null)
@@ -117,7 +118,7 @@ const OIDCConnectionTest = forwardRef<OIDCConnectionTestHandle, {
         <Typography>{t('testIdentity')}</Typography>
         <Typography><bdi>{result.tested_identity.issuer}</bdi> · <bdi>{result.tested_identity.subject}</bdi></Typography>
       </>}
-      {result.evidence_id && <IdentityEnrollment key={result.evidence_id} revision={revision} result={result} disabled={disabled || busy} onEnrolled={onEnrolled} />}
+      {showEnrollment && result.evidence_id && <IdentityEnrollment key={result.evidence_id} revision={revision} result={result} disabled={disabled || busy} onEnrolled={onEnrolled} />}
     </Stack>}
   </Stack>
 })

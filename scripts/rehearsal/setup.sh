@@ -4,12 +4,27 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
 
 [[ $# == 0 ]] || rehearsal_error 'setup takes no arguments'
 rehearsal_require_local_postgres
-for program in psql createdb migrate openssl; do
+for program in sudo migrate openssl; do
   command -v "$program" >/dev/null || rehearsal_error "$program is required"
 done
+for program in psql createdb; do
+  [[ -x /usr/bin/$program ]] || rehearsal_error "/usr/bin/$program is required"
+done
 [[ ! -e $REHEARSAL_ENV_FILE && ! -L $REHEARSAL_ENV_FILE ]] || rehearsal_error 'local rehearsal environment file already exists; refusing to overwrite it'
+[[ $(rehearsal_admin_sql 'SELECT 1') == 1 ]] || rehearsal_error 'sudo -u postgres cannot use the selected local Unix socket; run sudo -v first'
 [[ $(rehearsal_database_exists) == 0 ]] || rehearsal_error 'rehearsal database already exists; refusing to overwrite or migrate it'
 [[ $(rehearsal_admin_sql "SELECT count(*) FROM pg_roles WHERE rolname='go_web_app'") == 1 ]] || rehearsal_error 'existing go_web_app PostgreSQL role is required'
+
+# The existing application role owns only this new database and its migration
+# objects. It never receives cluster-wide CREATEDB or superuser privileges.
+# Do not reuse ambient PGPASSWORD or credentials from the development .env.
+rehearsal_password="${REHEARSAL_DB_PASSWORD:-}"
+unset REHEARSAL_DB_PASSWORD
+if [[ -z $rehearsal_password && -t 0 ]]; then
+  IFS= read -r -s -p 'Existing go_web_app password for rehearsal migrations: ' rehearsal_password
+  printf '\n' >&2
+fi
+[[ -n $rehearsal_password ]] || rehearsal_error 'supply REHEARSAL_DB_PASSWORD or enter it interactively before setup'
 
 umask 077
 marker="$(openssl rand -hex 16)"
@@ -36,7 +51,7 @@ LOCAL_DEV_DISPLAY_NAME='Rehearsal Operator'
 RBAC_ENABLED=true
 ENABLED_MODULES=
 DB_HOST=127.0.0.1
-DB_PORT=${PGPORT:-5432}
+DB_PORT=$REHEARSAL_PG_PORT
 DB_NAME=$REHEARSAL_DB
 DB_USER=go_web_app
 # Set the existing go_web_app password locally, using shell quoting if needed.
@@ -55,14 +70,22 @@ EOF
 unset key
 chmod 600 "$REHEARSAL_ENV_FILE"
 
-# Creating a new fixed-name database never reads PGDATABASE from the caller.
-createdb --maintenance-db=postgres --template=template0 "$REHEARSAL_DB"
+# The postgres OS/database role creates the fixed database; the application
+# role owns it so the existing golang-migrate wrapper can run without DDL on
+# other databases. The default PUBLIC connect privilege is removed.
+rehearsal_admin_command postgres /usr/bin/createdb -w --maintenance-db=postgres --template=template0 --owner=go_web_app "$REHEARSAL_DB"
 rehearsal_admin_sql "COMMENT ON DATABASE $REHEARSAL_DB IS '$REHEARSAL_MARKER_PREFIX$marker'" >/dev/null
+rehearsal_admin_sql "REVOKE ALL ON DATABASE $REHEARSAL_DB FROM PUBLIC" >/dev/null
 rehearsal_admin_sql "GRANT CONNECT ON DATABASE $REHEARSAL_DB TO go_web_app" >/dev/null
 
-# The wrapper keeps public.schema_migrations and refuses down/force operations.
-PGDATABASE="$REHEARSAL_DB" "$REHEARSAL_ROOT/scripts/migrate-framework.sh" up 7
+# Run migrations as the owner through explicit loopback credentials. The
+# wrapper keeps public.schema_migrations and refuses down/force operations.
+env -i PATH="$PATH" PGHOST=127.0.0.1 PGPORT="$REHEARSAL_PG_PORT" \
+  PGUSER=go_web_app PGPASSWORD="$rehearsal_password" PGDATABASE="$REHEARSAL_DB" \
+  PGSSLMODE=disable PGCONNECT_TIMEOUT=5 \
+  "$REHEARSAL_ROOT/scripts/migrate-framework.sh" up 7
+unset rehearsal_password
 rehearsal_verify_marker
-version="$(PGDATABASE="$REHEARSAL_DB" psql -X -qAt -v ON_ERROR_STOP=1 -c "SELECT version::text || '|' || dirty::text FROM public.schema_migrations")"
+version="$(rehearsal_db_sql "SELECT version::text || '|' || dirty::text FROM public.schema_migrations")"
 [[ $version == '7|false' ]] || rehearsal_error 'migration journal is not at clean version 7'
 printf 'Isolated rehearsal database created at clean migration 7.\nLocal configuration: %s (mode 600; never commit it).\nEdit DB_PASSWORD, then start the two loopback servers and run check.sh.\n' "$REHEARSAL_ENV_FILE"

@@ -2,7 +2,7 @@
 
 The server exposes a protected backend control plane for preparation,
 normal-callback readiness testing, activation, and immutable recovery-draft
-creation. There are still no frontend activation controls. Startup rehydrates an
+creation. The administrator UI requires explicit evidence and confirmation; startup rehydrates an
 already committed database-required policy; any failure stops startup without
 environment or Local DEV fallback. No migration is required.
 
@@ -25,6 +25,13 @@ or identity/administrator claims supplied by the browser.
    the provider authorization URL and a separate HttpOnly readiness cookie.
    `GET /api/admin/auth/activation-preparations/{id}` reports safe progress and a
    durable normal-callback evidence ID after verified completion.
+   `POST /api/admin/auth/activation-preparations/{id}/cancel` with `{}` releases
+   an unused preparation owned by the verified administrator. If its ID was lost,
+   `POST /api/admin/auth/activation-preparations/current/cancel` releases that
+   administrator's unused preparation on the same instance. Both routes retain
+   administrator authorization, origin and JSON protections. Cancellation cannot
+   interrupt an activation after its one-shot claim; an uncertain activation
+   result must be resolved from authoritative status, never by cancelling and retrying.
 3. `POST /api/admin/auth/activation-preparations/{id}/activate` is one-shot. The
    request repeats revision/generations, references both fresh evidence records and
    the explicitly enrolled administrator, confirms the operation, supplies a
@@ -37,7 +44,13 @@ or identity/administrator claims supplied by the browser.
    validation, approval, both readiness tests, and normal activation.
 
 Preparation handles are bounded to sixteen and one per initiating administrator.
-They expire after five minutes and are process-local because they own prepared
+An abandoned handle should be explicitly cancelled before another preparation;
+otherwise the next prepare returns HTTP 409 with
+`activation_preparation_conflict` until it expires. Other generation conflicts
+retain their separate error handling. Isolated and normal
+callback evidence each have their own five-minute validity and can expire before
+the preparation does. Refreshing isolated evidence does not extend preparation
+or normal evidence lifetime. Handles expire after five minutes and are process-local because they own prepared
 cryptographic/network resources. A load-balanced administrator flow requires
 instance affinity until activation completes; losing that instance requires fresh
 preparation and readiness. Set `AUTH_ACTIVATION_AFFINITY_MODE=single_instance`
