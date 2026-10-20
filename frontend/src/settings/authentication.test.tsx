@@ -102,11 +102,6 @@ async function fillOIDC(secret = 'synthetic-test-secret') {
   fireEvent.change(screen.getByLabelText(en.clientSecret + ' *'), { target: { value: secret } })
   fireEvent.change(screen.getByLabelText(en.redirectURI + ' *'), { target: { value: 'https://app.example.test/api/auth/callback' } })
 }
-async function chooseProvider(name: string) {
-  if (!screen.queryByRole('dialog', { name: en.newDraft })) await userEvent.click(screen.getByRole('button', { name: en.newDraft }))
-  await userEvent.click(screen.getByRole('combobox', { name: en.provider }))
-  await userEvent.click(screen.getByRole('option', { name }))
-}
 async function view(version = 1) {
   await userEvent.click(await screen.findByRole('button', { name: `View revision ${version}` }))
   return await screen.findByRole('region', { name: en.revisionMetadata })
@@ -335,18 +330,15 @@ it('uses a trusted loopback HTTP callback only with explicit development allowan
   expect(screen.getByText(en.setupDevelopmentHTTP)).toBeTruthy()
 })
 
-it('does not offer IAP for new configurations', async () => {
+it('creates only OIDC drafts; Local DEV remains environment-configured', async () => {
   authAPI(); mount(); await openAuth()
   await userEvent.click(screen.getByRole('button', { name: en.newDraft }))
-  await userEvent.click(screen.getByRole('combobox', { name: en.provider }))
-  expect(screen.queryByRole('option', { name: en.providerIap })).toBeNull()
-})
-
-it('allows Local DEV only when development is confirmed and explains that it never changes runtime', async () => {
-  const { fetcher } = authAPI(); mount(); await openAuth(); await chooseProvider(en.providerLocal)
-  expect(screen.getByText(en.localHelp)).toBeTruthy()
-  await userEvent.click(screen.getByRole('button', { name: en.createDraft })); await screen.findByRole('status')
-  expect(JSON.parse(writes(fetcher)[0][1]!.body as string)).toEqual({ provider: 'local_dev', expected_latest_version: 0 })
+  const dialog = screen.getByRole('dialog', { name: en.newDraft })
+  expect(within(dialog).getByRole('textbox', { name: en.provider })).toHaveProperty('readOnly', true)
+  expect((within(dialog).getByRole('textbox', { name: en.provider }) as HTMLInputElement).value).toBe(en.providerOidc)
+  expect(within(dialog).queryByText(en.providerLocal)).toBeNull()
+  expect(within(dialog).queryByText(en.providerIap)).toBeNull()
+  expect(within(dialog).queryByRole('combobox', { name: en.provider })).toBeNull()
 })
 
 it.each(['production', 'test', 'unknown'] as const)('disables development-only options for %s environments', async (environment) => {
@@ -354,8 +346,7 @@ it.each(['production', 'test', 'unknown'] as const)('disables development-only o
   await userEvent.click(screen.getByRole('button', { name: en.newDraft }))
   expect(screen.queryByRole('checkbox', { name: en.allowHTTP })).toBeNull()
   expect(screen.queryByText(en.developmentUnavailable)).toBeNull()
-  await userEvent.click(screen.getByRole('combobox', { name: en.provider }))
-  expect(screen.getByRole('option', { name: en.providerLocal }).getAttribute('aria-disabled')).toBe('true')
+  expect(screen.queryByText(en.providerLocal)).toBeNull()
 })
 
 it('validates offline using the current generation, then requires explicit confirmation for approval', async () => {

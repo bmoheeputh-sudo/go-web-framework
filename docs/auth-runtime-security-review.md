@@ -107,7 +107,7 @@ Future regression tests must cover login-before/callback-after publication,
 rollback to the same revision under a new generation, cross-client/issuer/purpose
 confusion, flow replay, expired draining entries, deadline crossing during token
 exchange, concurrent activation, restart recovery, and no new old-provider login.
-IAP remains infrastructure-pinned and cannot be replaced to bypass assertions.
+The retired IAP provider is rejected; this callback design applies only to OIDC.
 
 ## Medium — resource ownership must precede repeated publication
 
@@ -127,7 +127,7 @@ application DB pool; the runtime has no retirement API or background worker.
   The wrapper does not forward `CloseIdleConnections`, so calling it on the
   current wrapped client is insufficient. Close idle connections on the owned
   underlying transport only after retirement; do not close a shared active
-  transport, shared IAP cache, or the application-wide PostgreSQL pool per revision.
+  transport or the application-wide PostgreSQL pool per revision.
 - The installed go-oidc v3.21.0 `Provider.Verifier` uses a background JWKS context.
   `RemoteKeySet` launches a coalesced on-demand fetch goroutine and uses
   `context.WithoutCancel`; even `VerifierContext` ignores cancellation. Cancelling
@@ -135,7 +135,7 @@ application DB pool; the runtime has no retirement API or background worker.
   the existing 10-second HTTP timeout. Future owned transport/lifetime handling
   must bound/track those fetches (and test blocked-JWKS retirement); do not assume
   a constructor cancellation function is sufficient. There is no periodic OIDC
-  refresh loop here; IAP refresh is synchronous and request-driven.
+  refresh loop here.
 - Cancel and join any future listener/drain timers on shutdown. Avoid goroutines
   per request or unbounded retirement queues. Keep response-body closure and
   shutdown ordering: stop admissions, bounded HTTP shutdown, release retired

@@ -1707,10 +1707,10 @@ are never included. Authorization is rechecked inside the shared advisory-locked
 `AdminTransaction`; mutation and audit commit or roll back together.
 
 The current policy allows the same authorized administrator to create, validate
-and approve a revision. Separate approvers, activation, and runtime keyring/rotation management remain
-future reviewed phases.
+and approve a revision. Separate-approver enforcement and managed key rotation
+remain future work. Activation has a separate evidence-backed confirmation flow.
 
-### Authentication Settings UI (Phase 9.2.3)
+### Authentication Settings UI
 
 Open `/settings` as an active user with `admin.manage`, then select
 **Authentication**. **Roles & Permissions** remains the default tab and retains
@@ -1719,16 +1719,23 @@ It supports all twelve languages, Arabic RTL and the existing appearance modes.
 
 - Runtime provider/source are displayed separately from the latest and active
   database revisions. Drafts and approvals never alter environment-based login.
-- Create an immutable OIDC or Local DEV draft. OIDC requires a newly
+- Create an immutable OIDC draft. Local DEV remains available only through trusted
+  development environment configuration; it requires no database draft. OIDC requires a newly
   entered secret every time; there is no copy-secret option. The password field
   offers an explicit visibility toggle. Secrets are not written to browser
-  storage or the query cache and are cleared on submission, provider changes,
-  and leaving the Authentication tab. JavaScript cannot guarantee memory erasure.
+  storage or the query cache and are cleared on submission and when the draft
+  dialog closes. JavaScript cannot guarantee memory erasure.
 - Browse history in pages of twenty and open a revision to fetch its metadata.
   Only a secret-present indicator is displayed for stored credentials.
-- **Validate settings** performs offline structural validation only. **Approve
-  revision** requires confirmation and records approval without activation.
-  Writes include the server version/generation. A 409 refreshes the current
+- For OIDC, the primary workflow is **Test Connection → Enable**. Test Connection
+  first performs offline structural validation and advances the draft through the
+  approved lifecycle, then guides the administrator through both required OIDC
+  verification flows. Both evidence records bind to the approved revision
+  generation. Neither validation, approval nor testing enables authentication.
+  Enable requires fresh evidence, an enrolled administrator and explicit
+  confirmation. Existing historical Local DEV drafts remain readable; they
+  cannot be enabled as database-managed authentication.
+- Writes include the server version/generation. A 409 refreshes the current
   status/history/selected revision and shows a warning; writes are never retried
   automatically. Review the refreshed state and re-enter a secret before retrying
   OIDC draft creation.
@@ -1751,22 +1758,24 @@ UI never runs migrations. Viewing status/history is read-only. Creating,
 validating or approving a draft writes management records and audit events to
 the configured database, so use a disposable environment for interactive tests.
 
-Test Connection is implemented in Phase 9.2.4 below. Activation and rollback
-remain reserved for Phase 9.2.5, with no operational controls or requests.
+The backend API still exposes distinct validation and approval lifecycle routes;
+the OIDC UI invokes them as part of Test Connection. Advanced troubleshooting
+retains authoritative status inspection, reconciliation and recovery guidance.
 Frontend tests mock all HTTP requests; they do not contact an identity provider
 or the live database. Automated responsive/RTL tests use a DOM environment;
 visual review in a real browser is still advisable.
 
-### Isolated OIDC connection tests (Phase 9.2.4)
+### Guided OIDC connection tests
 
-Select an **approved OIDC revision** under Settings → Authentication, open its
-metadata, and choose **Test Connection**. Allow the popup and sign in to the
-provider. The main window polls only this explicitly started operation and shows
-its revision, result, callback URL, and verified issuer/subject. Success proves
-only that particular identity authenticated with that immutable revision and
-generation. It does not prove that other users can log in or have application
-access. No provider is activated, and the tested identity is never registered as
-a framework user, assigned roles, or issued an application session.
+Select an OIDC revision under Settings → Authentication and choose **Test
+Connection**. A draft is validated and approved before either provider test
+starts; an already approved revision proceeds directly. Allow the guided popup
+and complete the isolated and normal-callback authorizations. The main window
+polls the protected test status. Success proves only that the tested identity
+authenticated with that immutable revision and generation. It does not prove
+that other users can log in or have application access. No provider is enabled,
+and testing never automatically registers a framework user, assigns roles or
+issues an application session.
 
 The test callback is **`APP_ORIGIN` + `/api/auth/test/callback`**, separate from
 normal `/api/auth/callback`. For the current local origin, add this exact URL to

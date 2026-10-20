@@ -41,8 +41,9 @@ workflow remain prerequisites before live activation. No activation endpoint is 
 
 ## Trusted evidence and enrollment
 
-1. In Settings → Authentication, select an approved OIDC revision and run the
-   existing isolated **Test Connection** flow. Its state, nonce, PKCE, issuer,
+1. In Settings → Authentication, select an OIDC revision and run **Test
+   Connection**. For a draft, the guided action first validates and approves it;
+   provider verification then uses the approved generation. Its state, nonce, PKCE, issuer,
    audience, signature, expiry, browser correlation and network restrictions are
    unchanged. The normal OIDC callback and application sessions are untouched.
 2. After verification, the server rechecks the initiating administrator and

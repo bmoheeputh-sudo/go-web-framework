@@ -22,10 +22,15 @@ export type AuthStatus = {
   validation_mode: 'offline_static'; latest_revision: AuthRevision | null; database_active_revision: AuthRevision | null
 }
 export type AuthHistory = { revisions: AuthRevision[]; next_before_version: number }
-export type NewAuthDraft = { expected_latest_version: number } & (
-  | { provider: 'oidc'; issuer_url: string; client_id: string; client_secret: string; redirect_uri: string; allow_http_development: boolean }
-  | { provider: 'local_dev' }
-)
+export type NewAuthDraft = {
+  expected_latest_version: number
+  provider: 'oidc'
+  issuer_url: string
+  client_id: string
+  client_secret: string
+  redirect_uri: string
+  allow_http_development: boolean
+}
 export const authSettingsPath = '/api/admin/auth/settings'
 export const authStatusPath = '/api/admin/auth/status' // No query parameters on this endpoint.
 export const authProviderSetupPath = '/api/admin/auth/provider-setup'
