@@ -360,18 +360,21 @@ func TestActivationExpiredEvidenceAndRevocation(t *testing.T) {
 		t.Fatal("revoked administrator", err)
 	}
 }
-func TestActivationHasNoHTTPRoute(t *testing.T) {
+func TestLegacyDirectActivationRouteRemainsUnavailable(t *testing.T) {
 	f, s, _, m := activationServiceFixture(t)
 	_ = s
 	h := configHandler(f, f.repo, fixedAuth{f.identity})
-	for _, suffix := range []string{"activate", "rollback"} {
-		r := httptest.NewRequest("POST", settingsPath+"/"+m.ID+"/"+suffix, strings.NewReader(`{}`))
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, r)
-		if w.Code != 404 {
-			t.Fatal("activation exposed over HTTP")
-		}
+	r := httptest.NewRequest("POST", settingsPath+"/"+m.ID+"/activate", strings.NewReader(`{}`))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusNotFound {
+		t.Fatal("legacy direct activation route was registered")
 	}
+	// The recovery-draft route is registered, but cannot operate without the
+	// server-owned activation capability.
+	apiRequest(t, h, http.MethodPost, settingsPath+"/"+m.ID+"/rollback", map[string]any{
+		"expected_latest_version": m.Version, "confirm": true, "reason": "controlled recovery request",
+	}, http.StatusServiceUnavailable)
 }
 
 func TestNormalCallbackReadinessIsVerifiedSessionlessAndSingleUse(t *testing.T) {

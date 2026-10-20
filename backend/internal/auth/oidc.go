@@ -87,6 +87,7 @@ type OIDCAuthenticator struct {
 	secureCookies             bool
 	absoluteTimeout           time.Duration
 	onVerified                func(context.Context, Identity) error
+	onComplete                func(bool)
 }
 
 // NewOIDC discovers trusted provider metadata before the application starts.
@@ -207,6 +208,10 @@ func (p *OIDCAuthenticator) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *OIDCAuthenticator) Callback(w http.ResponseWriter, r *http.Request) {
+	succeeded := false
+	if p.onComplete != nil {
+		defer func() { p.onComplete(succeeded) }()
+	}
 	authHeaders(w)
 	p.clearCookie(w, p.flowCookie)
 	// Reject malformed/ambiguous queries before exchanging a code. Callback errors
@@ -262,6 +267,7 @@ func (p *OIDCAuthenticator) Callback(w http.ResponseWriter, r *http.Request) {
 			fail()
 			return
 		}
+		succeeded = true
 		http.Redirect(w, r, p.origin+"/?auth_test=completed", http.StatusSeeOther)
 		return
 	}
@@ -284,6 +290,7 @@ func (p *OIDCAuthenticator) Callback(w http.ResponseWriter, r *http.Request) {
 	}
 	// The store atomically rotates the existing session before issuing a cookie.
 	p.setCookie(w, p.sessionCookie, id, expires)
+	succeeded = true
 	// ID/access/refresh tokens are discarded, never stored or sent to React.
 	http.Redirect(w, r, p.origin+"/", http.StatusSeeOther)
 }

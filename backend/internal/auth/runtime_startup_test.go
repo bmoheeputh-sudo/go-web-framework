@@ -83,7 +83,7 @@ func TestRuntimeShutdownReleasesReadinessAndCredentialReferences(t *testing.T) {
 	var closed atomic.Int32
 	candidate := preparedRuntime(t, f, store, revisionOne, 1, &closed)
 	w := httptest.NewRecorder()
-	if err := m.BeginReadiness(candidate, w, runtimeRequestFor("GET", "/internal"), func(context.Context, Identity) error { return nil }); err != nil {
+	if err := m.BeginReadiness(candidate, w, runtimeRequestFor("GET", "/internal"), func(context.Context, Identity) error { return nil }, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(m.readiness) != 1 {

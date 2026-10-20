@@ -30,7 +30,7 @@ func readinessCookie(secure bool) string {
 	return "gwf_dev_oidc_readiness"
 }
 
-func (m *Runtime) BeginReadiness(p *PreparedOIDC, w http.ResponseWriter, r *http.Request, verified func(context.Context, Identity) error) error {
+func (m *Runtime) BeginReadiness(p *PreparedOIDC, w http.ResponseWriter, r *http.Request, verified func(context.Context, Identity) error, completed func(bool)) error {
 	if p == nil || verified == nil {
 		return ErrRuntimeConflict
 	}
@@ -55,6 +55,7 @@ func (m *Runtime) BeginReadiness(p *PreparedOIDC, w http.ResponseWriter, r *http
 	copy.store = store
 	copy.flowCookie = readinessCookie(copy.secureCookies)
 	copy.onVerified = verified
+	copy.onComplete = completed
 	e.provider = &copy
 	// Login only writes a test flow and a readiness cookie; no session operation.
 	copy.Login(w, r)

@@ -237,9 +237,9 @@ func (r *Repository) LatestVersion(ctx context.Context) (int64, error) {
 	return version, nil
 }
 func (r *Repository) CreateDraft(ctx context.Context, expectedLatestVersion int64, settings Settings, secret Secret) (Metadata, error) {
-	return r.createDraft(ctx, expectedLatestVersion, settings, secret, "")
+	return r.createDraft(ctx, expectedLatestVersion, settings, secret, "", "")
 }
-func (r *Repository) createDraft(ctx context.Context, expectedLatestVersion int64, settings Settings, secret Secret, recovery string) (Metadata, error) {
+func (r *Repository) createDraft(ctx context.Context, expectedLatestVersion int64, settings Settings, secret Secret, recovery, recoveryReason string) (Metadata, error) {
 	if expectedLatestVersion < 0 || expectedLatestVersion == math.MaxInt64 || validate(r.scope, settings, secret) != nil {
 		return Metadata{}, ErrInvalid
 	}
@@ -293,7 +293,8 @@ func (r *Repository) createDraft(ctx context.Context, expectedLatestVersion int6
 			}
 			if access.RecordAudit(ctx, tx, actor.ID, "auth_config.recovery_draft", result.ID, struct {
 				Recovery string `json:"recovery_revision_id"`
-			}{recovery}) != nil {
+				Reason   string `json:"reason,omitempty"`
+			}{recovery, recoveryReason}) != nil {
 				return ErrAudit
 			}
 		}

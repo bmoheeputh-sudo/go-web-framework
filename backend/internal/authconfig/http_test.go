@@ -38,7 +38,7 @@ func configHandler(f *fixture, repo *Repository, provider auth.Authenticator) ht
 	if err != nil {
 		panic(err)
 	}
-	Register(mux, provider, f.store, apiOrigin, repo, runtime.Status)
+	Register(mux, provider, f.store, apiOrigin, repo, nil, runtime.Status)
 	return runtime.Capture(mux)
 }
 func apiRequest(t *testing.T, handler http.Handler, method, path string, body any, want int) *httptest.ResponseRecorder {
@@ -216,7 +216,7 @@ func TestAuthConfigurationHTTPWorkflow(t *testing.T) {
 func TestAuthConfigurationHTTPAuthorizationAndIsolation(t *testing.T) {
 	f := newFixture(t)
 	m := f.draft(t, 0)
-	paths := []struct{ method, path string }{{"GET", settingsPath}, {"GET", settingsPath + "/" + m.ID}, {"POST", settingsPath}, {"POST", settingsPath + "/" + m.ID + "/validate"}, {"POST", settingsPath + "/" + m.ID + "/approve"}, {"GET", statusPath}, {"GET", providerSetupPath}}
+	paths := []struct{ method, path string }{{"GET", settingsPath}, {"GET", settingsPath + "/" + m.ID}, {"POST", settingsPath}, {"POST", settingsPath + "/" + m.ID + "/validate"}, {"POST", settingsPath + "/" + m.ID + "/approve"}, {"POST", settingsPath + "/" + m.ID + "/activation/prepare"}, {"GET", "/api/admin/auth/activation-preparations/unknown"}, {"POST", "/api/admin/auth/activation-preparations/unknown/readiness"}, {"POST", "/api/admin/auth/activation-preparations/unknown/activate"}, {"POST", settingsPath + "/" + m.ID + "/rollback"}, {"GET", statusPath}, {"GET", providerSetupPath}}
 	for _, role := range []string{"User", "Viewer", "None", "Unauthenticated"} {
 		t.Run(role, func(t *testing.T) {
 			var provider auth.Authenticator

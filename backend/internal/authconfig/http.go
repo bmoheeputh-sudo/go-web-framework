@@ -50,8 +50,9 @@ func httpError(w http.ResponseWriter, err error) {
 
 // Register accepts server-owned scope/repository and a request-snapshot status reader.
 // Every repository call rechecks administrator authorization inside AdminTransaction.
-// There is deliberately no HTTP path to ReadSecretPrivileged or activation.
-func Register(mux *http.ServeMux, provider auth.Authenticator, store *access.Store, origin string, repo *Repository, runtimeStatus func(context.Context) (auth.RuntimeStatus, bool)) {
+// There is deliberately no HTTP path to ReadSecretPrivileged. Activation is
+// exposed only through the server-owned service and bounded preparation handles.
+func Register(mux *http.ServeMux, provider auth.Authenticator, store *access.Store, origin string, repo *Repository, activation *ActivationService, runtimeStatus func(context.Context) (auth.RuntimeStatus, bool)) func() {
 	route := func(pattern string, h http.HandlerFunc) {
 		available := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if repo == nil {
@@ -67,6 +68,8 @@ func Register(mux *http.ServeMux, provider auth.Authenticator, store *access.Sto
 		mux.Handle(pattern, auth.Require(provider, access.ProtectWrites(origin, store.Require(access.AdminManage, "", available))))
 	}
 	newConnectionTests(repo, origin).register(mux, route)
+	activationAPI := newActivationHTTP(activation)
+	activationAPI.register(route)
 	route("GET "+providerSetupPath, func(w http.ResponseWriter, r *http.Request) {
 		metadata, err := newProviderSetup(origin, repo.scope.Environment)
 		if err != nil {
@@ -195,14 +198,16 @@ func Register(mux *http.ServeMux, provider auth.Authenticator, store *access.Sto
 			activeRevision = &active
 		}
 		reply(w, http.StatusOK, struct {
-			RuntimeProvider auth.Provider `json:"runtime_provider"`
-			RuntimeSource   string        `json:"runtime_source"`
-			ManagementOnly  bool          `json:"management_only"`
-			ValidationMode  string        `json:"validation_mode"`
-			LatestRevision  *Metadata     `json:"latest_revision"`
-			ActiveRevision  *Metadata     `json:"database_active_revision"`
-		}{status.Provider, status.Source, true, "offline_static", latestRevision, activeRevision})
+			RuntimeProvider     auth.Provider `json:"runtime_provider"`
+			RuntimeSource       string        `json:"runtime_source"`
+			ManagementOnly      bool          `json:"management_only"`
+			ActivationAvailable bool          `json:"activation_api_available"`
+			ValidationMode      string        `json:"validation_mode"`
+			LatestRevision      *Metadata     `json:"latest_revision"`
+			ActiveRevision      *Metadata     `json:"database_active_revision"`
+		}{status.Provider, status.Source, activation == nil, activation != nil, "offline_static", latestRevision, activeRevision})
 	})
+	return activationAPI.close
 }
 
 func pagination(raw string) (int64, int, error) {

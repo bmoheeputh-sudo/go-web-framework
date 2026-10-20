@@ -257,12 +257,22 @@ func newServerWithPolicy(getenv func(string) string, policy func(func(string) st
 	// Missing/invalid management configuration yields protected 503 responses;
 	// it must not disable the existing environment-configured login provider.
 	configRepository, _ := authconfig.RepositoryFromEnv(authorization, getenv)
-	authconfig.Register(handler.ServeMux, runtime, authorization, origin, configRepository, runtime.Status)
+	var activationService *authconfig.ActivationService
+	if configRepository != nil && pool != nil {
+		sessions, sessionErr := auth.SessionConfigFromEnv(getenv)
+		if sessionErr == nil {
+			if sessionStore, storeErr := auth.NewPostgresStore(pool, sessions); storeErr == nil {
+				activationService, _ = authconfig.NewActivationService(configRepository, runtime, sessionStore, sessions, origin+"/api/auth/callback")
+			}
+		}
+	}
+	closeAuthManagement := authconfig.Register(handler.ServeMux, runtime, authorization, origin, configRepository, activationService, runtime.Status)
 	var syncStatus func() authconfig.SynchronizationStatus
 	if synchronization != nil {
 		syncStatus = synchronization.Status
 	}
 	return &application{synchronizationStatus: syncStatus, authProvider: status.Provider, closeResources: func() {
+		closeAuthManagement()
 		if synchronization != nil {
 			synchronization.Close()
 		}

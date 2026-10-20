@@ -13,8 +13,9 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// ActivationService is a trusted control-plane capability. The HTTP composition
-// root does not construct/expose it. No migration, polling or fallback occurs.
+// ActivationService is a trusted control-plane capability. The protected HTTP
+// adapter can invoke it, but cannot replace its transactional authorization,
+// evidence, generation, audit, notification, or publication checks.
 type ActivationService struct {
 	repo     *Repository
 	runtime  *auth.Runtime
@@ -150,14 +151,16 @@ type ActivationRequest struct {
 	Reason                                               string
 }
 type ActivationResult struct {
-	DesiredGeneration, AppliedGeneration int64
-	RevisionID                           string
-	Applied                              bool
-	Committed, CommitUncertain           bool
+	DesiredGeneration int64  `json:"desired_generation"`
+	AppliedGeneration int64  `json:"applied_generation"`
+	RevisionID        string `json:"revision_id"`
+	Applied           bool   `json:"applied"`
+	Committed         bool   `json:"committed"`
+	CommitUncertain   bool   `json:"commit_uncertain"`
 }
 
-// Activate is not registered as an HTTP endpoint. External work has already
-// finished. All administrator/evidence/head checks and writes share one lock/tx.
+// Activate runs only after external preparation. All administrator, evidence,
+// head, lifecycle, audit and notification checks/writes share one lock/tx.
 func (s *ActivationService) Activate(ctx context.Context, p *PreparedActivation, request ActivationRequest) (ActivationResult, error) {
 	if p == nil || p.service != s || request.Transition < 0 || request.Transition > 30*time.Minute || !validID(request.IsolatedEvidenceID) || !validID(request.NormalEvidenceID) || !validID(request.EnrolledUserID) || strings.TrimSpace(request.Reason) == "" || len(request.Reason) > 512 {
 		return ActivationResult{}, ErrInvalid

@@ -1,11 +1,46 @@
-# Controlled OIDC activation foundation (Phase 9.2.5E)
+# Controlled OIDC activation and administration APIs (Phase 9.2.5H)
 
-This is an internal backend capability, not an operational deployment feature.
-The HTTP composition root does **not** construct an activation service or expose
-activation, rollback, or normal-readiness-start endpoints. The existing Admin
-Portal cannot activate a provider. Startup now rehydrates an already committed
-database-required policy; any failure stops startup without environment or Local
-DEV fallback. No migration is required.
+The server exposes a protected backend control plane for preparation,
+normal-callback readiness testing, activation, and immutable recovery-draft
+creation. There are still no frontend activation controls. Startup rehydrates an
+already committed database-required policy; any failure stops startup without
+environment or Local DEV fallback. No migration is required.
+
+Every endpoint requires verified authentication, an active user, effective
+`admin.manage`, exact trusted origin for writes, and a bounded strict JSON body.
+The shared administrator transaction rechecks authorization under the advisory
+lock before mutation. Responses use `Cache-Control: no-store` and never contain
+client secrets, keys, OAuth tokens, authorization codes, raw provider responses,
+or identity/administrator claims supplied by the browser.
+
+## Protected HTTP workflow
+
+1. `POST /api/admin/auth/settings/{id}/activation/prepare` accepts only expected
+   revision and activation generations. It performs hardened discovery/JWKS
+   preparation outside the mutation transaction and returns a five-minute opaque,
+   instance-local preparation ID plus safe session-impact metadata. It does not
+   change the runtime or database activation head.
+2. `POST /api/admin/auth/activation-preparations/{id}/readiness` starts the
+   sessionless test through the real `/api/auth/callback`. The response contains
+   the provider authorization URL and a separate HttpOnly readiness cookie.
+   `GET /api/admin/auth/activation-preparations/{id}` reports safe progress and a
+   durable normal-callback evidence ID after verified completion.
+3. `POST /api/admin/auth/activation-preparations/{id}/activate` is one-shot. The
+   request repeats revision/generations, references both fresh evidence records and
+   the explicitly enrolled administrator, confirms the operation, supplies a
+   reason, and requests zero to 1,800 transition seconds. First cutover also
+   requires `acknowledge_reauthentication=true` and zero transition seconds.
+4. `POST /api/admin/auth/settings/{superseded-id}/rollback` creates a new immutable
+   recovery draft with fresh authenticated encryption and atomic reason/provenance
+   audit. It never reactivates history. The draft must independently pass
+   validation, approval, both readiness tests, and normal activation.
+
+Preparation handles are bounded to sixteen and one per initiating administrator.
+They expire after five minutes and are process-local because they own prepared
+cryptographic/network resources. A load-balanced administrator flow requires
+instance affinity until activation completes; losing that instance requires fresh
+preparation and readiness. Durable evidence and the final activation transaction
+remain PostgreSQL-authoritative.
 
 ## Trusted internal API
 
@@ -21,8 +56,8 @@ DEV fallback. No migration is required.
   policy: current provider/source, target revision, expected generation,
   `RequiresReauthentication`, and `MaximumSessionGrace`. Read it **before** asking
   an administrator to confirm; it does not replace transactional evidence checks.
-- `BeginNormalCallbackTest(candidate, writer, request)` is an internal, explicitly
-  invoked readiness operation. There is no HTTP start API. It exercises the
+- `BeginNormalCallbackTest(candidate, writer, request)` is invoked only by the
+  protected readiness adapter. It exercises the
   configured `/api/auth/callback` using the ordinary OIDC callback verifier but
   cannot create an application session. `NormalCallbackResult.Evidence` returns
   safe evidence metadata only after verified completion and atomic audit insertion.
@@ -38,10 +73,9 @@ DEV fallback. No migration is required.
   creates a new draft from a same-scope superseded OIDC revision. It does not
   approve or activate that draft.
 
-These APIs are trusted internal capabilities, not DTOs for direct HTTP binding.
-A future HTTP adapter must retain verified auth, effective `admin.manage`, origin
-and JSON write protection, explicit confirmation, and safe error mapping. It must
-not accept issuer, subject, actor, deployment or success flags as evidence.
+The HTTP adapter maps narrow DTOs into these trusted capabilities. It does not
+accept issuer, subject, actor, deployment, environment, or success flags as
+evidence.
 
 ## Preparation and test evidence
 
@@ -149,10 +183,10 @@ only to explicitly bound database sessions.
 Readiness therefore reports `RequiresReauthentication=true` and
 `MaximumSessionGrace=0` for Local DEV and environment OIDC. A future confirmation
 UI must explain: **"Existing sign-ins and pending environment logins will not
-carry over. Sign in again using the new OIDC configuration."** The internal API
+carry over. Sign in again using the new OIDC configuration."** The activation API
 requires explicit acknowledgment and a zero transition duration; activation history
-records equal activation/transition timestamps. No activation UI or public endpoint
-exists yet, so no claim is made that the present Admin Portal displays this notice.
+records equal activation/transition timestamps. No activation UI exists yet, so no
+claim is made that the present Admin Portal displays this notice.
 Subsequent database-to-database readiness reports a maximum of thirty minutes;
 the requested interval may be shorter and cannot extend original session/flow expiry.
 
@@ -351,8 +385,9 @@ cluster publication and cannot retroactively cancel prior application work.
 latest **observed** desired generation, applied generation, provider, connection
 state, last successful reconciliation, degraded/mismatched state and transition
 deadline. This is per-instance status, not a claim that every instance has activated.
-Existing management endpoints remain compatible; no new public endpoint or UI is
-added. Configuration keys and callback/listener settings are captured at process
+Existing management endpoints remain compatible. The protected Phase H endpoints
+do not claim cluster-wide success, and no activation UI is added. Configuration
+keys and callback/listener settings are captured at process
 startup. Provision historical keys on every instance before a new revision needs
 them; changing process secrets requires restarting that instance.
 
