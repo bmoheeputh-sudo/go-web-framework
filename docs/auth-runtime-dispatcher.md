@@ -1,4 +1,10 @@
-# Runtime authentication dispatcher (Phase 9.2.5C)
+# Runtime authentication dispatcher
+
+Phase 9.2.5E adds an [internal controlled activation foundation](auth-controlled-activation.md).
+The environment-only behavior below still describes the deployed HTTP composition
+root; no activation service or public activation endpoint is wired there. The new
+internal service, revision-bound credentials and lease cleanup are documented in
+that guide. Startup database loading and multi-instance reconciliation remain blocked.
 
 See the [focused security review](auth-runtime-security-review.md) for the
 startup-policy history, revision-bound callback requirements and
@@ -26,12 +32,12 @@ status all use that captured view. They do not load the atomic pointer again.
 Nested capture by the same manager retains the original view; missing or foreign
 captures fail closed. Exactly one authenticator is tried.
 
-The private compare-and-swap publication mechanism rejects stale writers and
-currently permits only the **same prepared configuration**. It has no exported
-setter, HTTP endpoint, database listener, or provider-switching caller. Future
-activation must replace this restrictive policy with reviewed preparation,
-binding, recovery, transition-expiry and concurrency checks before enabling
-configuration changes. No old provider is permitted in the current policy.
+The legacy `publish` path remains limited to environment initialization and the
+same prepared configuration. Phase E adds separate internal `Stage`/`Publication`
+capabilities used only by the trusted activation service. They enforce generation
+conflicts, bounded draining, a commit admission fence and resource leases. The
+HTTP composition root never constructs that service. See the controlled activation
+guide for its transaction/evidence requirements and deployment blockers.
 
 ## Stable routes and status
 

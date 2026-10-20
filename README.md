@@ -2068,6 +2068,16 @@ an environment provider. Database-required policy fails closed until database
 runtime loading is implemented. Missing or unreadable policy storage is never a
 reason to start Local DEV. There is no fallback flag or activation endpoint.
 
+## Controlled OIDC activation foundation (Phase 9.2.5E)
+
+The [internal activation and recovery guide](docs/auth-controlled-activation.md)
+documents prepared snapshots, revision-bound sessions/flows, isolated normal-callback
+readiness tests, transactional activation, bounded draining, transport cleanup and
+recovery through a fresh immutable revision. There are no activation or rollback
+HTTP endpoints, and the existing portal cannot switch providers. No new migration
+is needed. Startup database-runtime loading, multi-instance reconciliation and
+offline recovery remain blockers before any live activation.
+
 ## Backup to GitHub and Google Drive
 
 Run from the repository on the `main` branch:

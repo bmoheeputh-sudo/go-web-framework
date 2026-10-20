@@ -56,6 +56,16 @@ prove the identity of a different/empty database supplied by an operator. Protec
 deployment identity and DB configuration operationally. Do not activate a head
 while this environment-only runtime is deployed.
 
+## Phase E follow-up
+
+The [controlled activation foundation](auth-controlled-activation.md) implements
+revision-bound writers, callback selection, single-entry bounded draining and
+request leases for database authenticators. Preparation uses the hardened network
+transport and a synchronous validated keyset. The production composition root
+still exposes no activation operation. Startup loading, multi-instance
+reconciliation and emergency recovery remain deployment blockers. The original
+Phase C findings below describe the pre-implementation boundaries and rationale.
+
 ## High — Phase 9.2.5E callback binding and bounded draining
 
 The current callback uses the snapshot captured when the callback request arrives,

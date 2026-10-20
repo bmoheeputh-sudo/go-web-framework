@@ -186,7 +186,7 @@ func newServerWithPolicy(getenv func(string) string, policy func(func(string) st
 	// it must not disable the existing environment-configured login provider.
 	configRepository, _ := authconfig.RepositoryFromEnv(authorization, getenv)
 	authconfig.Register(handler.ServeMux, runtime, authorization, origin, configRepository, runtime.Status)
-	return &application{closeResources: closeResources, Server: &http.Server{
+	return &application{closeResources: func() { runtime.Close(); closeResources() }, Server: &http.Server{
 		Addr: address, Handler: handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second, WriteTimeout: 30 * time.Second,

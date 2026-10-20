@@ -1,5 +1,9 @@
 # Administrator identity enrollment and startup policy (Phase 9.2.5D)
 
+Phase 9.2.5E adds a separate [internal activation foundation](auth-controlled-activation.md).
+The deployed portal and startup protections described here remain in effect;
+no activation endpoint or operational recovery bypass has been added.
+
 This phase cannot activate a provider, load a database authenticator, or switch
 sessions. Environment authentication remains authoritative only when startup
 policy permits it. Migration 000006 supplies all required tables; no new SQL or

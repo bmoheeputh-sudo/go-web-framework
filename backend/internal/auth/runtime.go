@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -26,16 +27,23 @@ type RuntimeStatus struct {
 }
 
 type runtimeSnapshot struct {
-	status RuntimeStatus
-	auth   Authenticator
-	oidc   *OIDCAuthenticator
+	status             RuntimeStatus
+	auth               Authenticator
+	oidc               *OIDCAuthenticator
+	prepared, draining *PreparedOIDC
 }
 
 // Runtime owns immutable configuration snapshots. Provider caches and session
 // stores remain concurrency-safe services, not mutable configuration. There is
-// deliberately no exported publication/activation method or database reader.
+// no HTTP publication endpoint or automatic database activation reader.
 type Runtime struct {
-	current atomic.Pointer[runtimeSnapshot]
+	current           atomic.Pointer[runtimeSnapshot]
+	mu                sync.Mutex
+	closed, mismatch  bool
+	desiredGeneration int64
+	readiness         map[string]*readinessEntry
+	drainTimer        *time.Timer
+	pending           *Publication
 }
 
 type runtimeRequestKey struct{}
@@ -105,10 +113,10 @@ func prepareEnvironment(provider Authenticator, status RuntimeStatus) (*runtimeS
 	return s, nil
 }
 
-// publish is package-private and compare-and-swap protects against stale
-// writers. This phase permits only re-publication of the SAME prepared
-// configuration; provider/configuration transitions require a future reviewed
-// policy. In particular an IAP deployment cannot publish an OIDC authenticator.
+// publish is the legacy environment-only path: it permits only re-publication
+// of the same prepared configuration. Controlled database transitions use
+// Stage/Publication through the internal administrator activation service.
+// Neither path permits replacing an IAP deployment with OIDC.
 func (m *Runtime) publish(expected, next *runtimeSnapshot) bool {
 	if next == nil || next.status.Source != "environment" || next.status.TransitionState != "none" || next.status.AppliedGeneration != 0 ||
 		next.status.ActiveRevisionID != "" || next.status.PreviousRevisionID != "" ||
@@ -135,11 +143,25 @@ func (m *Runtime) Capture(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		m.mu.Lock()
 		snapshot := m.current.Load()
-		if snapshot == nil {
+		if m.closed || m.mismatch || m.pending != nil || snapshot == nil {
+			m.mu.Unlock()
 			runtimeUnavailable(w)
 			return
 		}
+		leases := []*providerLease{}
+		for _, p := range []*PreparedOIDC{snapshot.prepared, snapshot.draining} {
+			if p != nil && p.lease.retain() {
+				leases = append(leases, p.lease)
+			}
+		}
+		m.mu.Unlock()
+		defer func() {
+			for _, l := range leases {
+				l.release()
+			}
+		}()
 		ctx := context.WithValue(r.Context(), runtimeRequestKey{}, runtimeRequest{m, snapshot})
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -156,7 +178,7 @@ func (m *Runtime) Status(ctx context.Context) (RuntimeStatus, bool) {
 	if !ok {
 		return RuntimeStatus{}, false
 	}
-	return s.status, true
+	return snapshotStatus(s), true
 }
 
 func (m *Runtime) Authenticate(r *http.Request) (Identity, error) {
@@ -167,7 +189,14 @@ func (m *Runtime) Authenticate(r *http.Request) (Identity, error) {
 	if s.auth == nil {
 		return Identity{}, ErrUnauthenticated
 	}
-	// Exactly one authenticator. No fallback or credential-based selection.
+	if s.prepared != nil {
+		p, err := selectBoundProvider(r.Context(), s, r, false)
+		if err != nil {
+			return Identity{}, err
+		}
+		return p.Authenticate(r)
+	}
+	// Exactly one authenticator. No fallback.
 	return s.auth.Authenticate(r)
 }
 
@@ -190,11 +219,27 @@ func (m *Runtime) RegisterRoutes(mux *http.ServeMux) {
 				runtimeUnavailable(w)
 				return
 			}
+			if pattern == "GET /api/auth/callback" && m.readinessCallback(w, r) {
+				return
+			}
 			if s.oidc == nil {
 				http.NotFound(w, r)
 				return
 			}
-			operation(s.oidc, w, r)
+			p := s.oidc
+			if s.prepared != nil && pattern != "GET /api/auth/login" {
+				selected, err := selectBoundProvider(r.Context(), s, r, pattern == "GET /api/auth/callback")
+				if err != nil {
+					if errors.Is(err, ErrStoreUnavailable) {
+						runtimeUnavailable(w)
+					} else {
+						writeError(w, http.StatusUnauthorized, "unauthenticated")
+					}
+					return
+				}
+				p = selected
+			}
+			operation(p, w, r)
 		})
 	}
 	mux.HandleFunc("GET /api/auth/config", func(w http.ResponseWriter, r *http.Request) {
@@ -212,4 +257,12 @@ func (m *Runtime) RegisterRoutes(mux *http.ServeMux) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(identity)
 	})))
+}
+
+func snapshotStatus(s *runtimeSnapshot) RuntimeStatus {
+	status := s.status
+	if status.TransitionState == "draining" && !time.Now().Before(status.TransitionDeadline) {
+		status.TransitionState = "expired"
+	}
+	return status
 }

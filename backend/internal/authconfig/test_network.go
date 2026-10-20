@@ -99,6 +99,12 @@ type testTransport struct {
 	origin string
 }
 
+// Forward cleanup to the owned transport; no shared default transport is closed.
+func (t testTransport) CloseIdleConnections() {
+	if c, ok := t.base.(interface{ CloseIdleConnections() }); ok {
+		c.CloseIdleConnections()
+	}
+}
 func (t testTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	u, err := testHTTPS(r.URL.String())
 	if err != nil || u.Scheme+"://"+u.Host != t.origin {

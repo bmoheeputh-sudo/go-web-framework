@@ -86,6 +86,7 @@ type OIDCAuthenticator struct {
 	sessionCookie, flowCookie string
 	secureCookies             bool
 	absoluteTimeout           time.Duration
+	onVerified                func(context.Context, Identity) error
 }
 
 // NewOIDC discovers trusted provider metadata before the application starts.
@@ -248,6 +249,20 @@ func (p *OIDCAuthenticator) Callback(w http.ResponseWriter, r *http.Request) {
 	identity, tokenExpiry, err := VerifyOIDCIdentity(ctx, p.verifier, rawIDToken, p.issuer, p.config.ClientID, flow.Nonce)
 	if err != nil {
 		fail()
+		return
+	}
+	// A database-bound callback must still be inside its original flow and
+	// transition lifetime after token exchange. Environment semantics are unchanged.
+	if _, bound := p.store.(*databaseBoundStore); bound && !time.Now().Before(flow.Expires) {
+		fail()
+		return
+	}
+	if p.onVerified != nil {
+		if !time.Now().Before(flow.Expires) || p.onVerified(ctx, identity) != nil {
+			fail()
+			return
+		}
+		http.Redirect(w, r, p.origin+"/?auth_test=completed", http.StatusSeeOther)
 		return
 	}
 	expires := time.Now().Add(p.absoluteTimeout)

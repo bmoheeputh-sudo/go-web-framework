@@ -35,6 +35,7 @@ type mockConnectionIssuer struct {
 	metadata                          func(map[string]any)
 	claims                            func(map[string]any)
 	nonce, challenge                  string
+	callback                          string
 	exchanges                         int
 	badSignature, tokenError, badKeys bool
 }
@@ -49,6 +50,12 @@ func newMockConnectionIssuer(t *testing.T) *mockConnectionIssuer {
 
 const probeIssuer = "https://provider.example.test/"
 
+func (p *mockConnectionIssuer) expectedCallback() string {
+	if p.callback != "" {
+		return p.callback
+	}
+	return apiOrigin + "/api/auth/test/callback"
+}
 func (p *mockConnectionIssuer) client() *http.Client {
 	return &http.Client{Transport: testRoundTrip(func(r *http.Request) (*http.Response, error) {
 		p.mu.Lock()
@@ -72,7 +79,7 @@ func (p *mockConnectionIssuer) client() *http.Client {
 			_ = r.ParseForm()
 			client, secret, ok := r.BasicAuth()
 			challenge := sha256.Sum256([]byte(r.Form.Get("code_verifier")))
-			if p.tokenError || !ok || client != "test-client" || secret != apiSecret || r.Form.Get("code") != "synthetic-code" || base64.RawURLEncoding.EncodeToString(challenge[:]) != p.challenge || r.Form.Get("redirect_uri") != apiOrigin+"/api/auth/test/callback" {
+			if p.tokenError || !ok || client != "test-client" || secret != apiSecret || r.Form.Get("code") != "synthetic-code" || base64.RawURLEncoding.EncodeToString(challenge[:]) != p.challenge || r.Form.Get("redirect_uri") != p.expectedCallback() {
 				status = 400
 				value = map[string]any{"error": "invalid_grant", "error_description": "provider-secret-response"}
 				break
