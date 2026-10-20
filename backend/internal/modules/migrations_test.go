@@ -194,7 +194,7 @@ func TestIndependentModuleMigrations(t *testing.T) {
 		if err := owner.QueryRow(ctx, `SELECT (SELECT version FROM public.schema_migrations),(SELECT version FROM public.schema_migrations_example),(SELECT version FROM public.schema_migrations_reporting)`).Scan(&core, &example, &reporting); err != nil {
 			t.Fatal(err)
 		}
-		if core != 7 || example != 1 || reporting != 1 {
+		if core != 8 || example != 1 || reporting != 1 {
 			t.Fatal("migration numbering interfered", core, example, reporting)
 		}
 	})

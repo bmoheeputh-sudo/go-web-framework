@@ -157,9 +157,13 @@ func validate(scope Scope, s Settings, secret Secret) error {
 	return nil
 }
 func (r *Repository) transaction(ctx context.Context, fn func(context.Context, pgx.Tx, access.User) error) error {
+	return adminTransaction(ctx, r.access, fn)
+}
+
+func adminTransaction(ctx context.Context, store *access.Store, fn func(context.Context, pgx.Tx, access.User) error) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	err := r.access.AdminTransaction(ctx, fn)
+	err := store.AdminTransaction(ctx, fn)
 	if err == nil {
 		return nil
 	}
@@ -177,7 +181,7 @@ func (r *Repository) transaction(ctx context.Context, fn func(context.Context, p
 	case errors.Is(err, pgx.ErrNoRows):
 		return ErrNotFound
 	}
-	for _, known := range []error{ErrInvalid, ErrDenied, ErrConflict, ErrNotFound, ErrSecret, ErrCrypto, ErrAudit} {
+	for _, known := range []error{ErrInvalid, ErrDenied, ErrConflict, ErrNotFound, ErrSecret, ErrCrypto, ErrAudit, ErrLastOIDCAdministrator} {
 		if errors.Is(err, known) {
 			return known
 		}

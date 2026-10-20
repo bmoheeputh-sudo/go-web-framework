@@ -273,6 +273,13 @@ subsequent sign-in may reuse the provider's existing session.
 
 ### Database setup and manual migrations
 
+Migration 000008 adds the [OIDC access policy storage foundation](docs/oidc-access-policy.md).
+It creates no policy or approval automatically and does not change login, session
+issuance, RBAC grants or active authentication. Existing authentication remains
+compatible with schema 7; only the new internal policy repository requires 8.
+Initialization is an explicit, audited action by an existing OIDC administrator.
+The database still supports one security deployment, not multi-tenant RBAC.
+
 The pool defaults to 10 maximum connections, no minimum, a 30-minute connection
 lifetime and a five-minute idle connection lifetime. `DB_MAX_CONNS` accepts 1–100.
 Connection/startup checks have a five-second deadline; session operations have a

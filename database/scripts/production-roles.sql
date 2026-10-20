@@ -68,6 +68,15 @@ GRANT INSERT ON framework.auth_config_revisions TO go_web_app_runtime;
 GRANT SELECT,INSERT,UPDATE ON framework.auth_config_lifecycle,framework.auth_activation_heads TO go_web_app_runtime;
 GRANT SELECT,INSERT ON framework.auth_activation_history,framework.auth_test_evidence,framework.auth_recovery_audit TO go_web_app_runtime;
 GRANT USAGE ON SEQUENCE framework.audit_log_id_seq TO go_web_app_runtime;
+-- Optional storage foundation, introduced in 000008. Keep this proposal usable
+-- on version 7; no grants or policies are applied to the live deployment.
+DO $$
+BEGIN
+  IF to_regclass('framework.oidc_access_policies') IS NOT NULL THEN
+    GRANT SELECT,INSERT,UPDATE ON framework.oidc_access_policies,framework.oidc_identity_approvals TO go_web_app_runtime;
+    GRANT EXECUTE ON FUNCTION framework.valid_access_domains(TEXT[]) TO go_web_app_runtime;
+  END IF;
+END $$;
 -- admin_bootstrap is deliberately excluded: its one-time command uses an
 -- operator/migrator credential, not the ordinary HTTP runtime credential.
 

@@ -34,6 +34,12 @@ func TestOfflineRecoveryMigrationRollbackPolicy(t *testing.T) {
 	}
 }
 
+func TestOIDCAccessPolicyMigrationRollbackPolicy(t *testing.T) {
+	for _, name := range []string{"empty", "populated"} {
+		t.Run(name, func(t *testing.T) { testAuthConfigurationRollbackPolicy(t, name == "populated", 8) })
+	}
+}
+
 func testAuthConfigurationRollbackPolicy(t *testing.T, populated bool, targetVersion int) {
 	t.Helper()
 	cli, err := exec.LookPath("migrate")
@@ -159,7 +165,7 @@ func testAuthConfigurationRollbackPolicy(t *testing.T, populated bool, targetVer
 			t.Fatal("persistence migration enrolled or activated a deployment")
 		}
 	}
-	if targetVersion == 7 {
+	if targetVersion >= 7 {
 		oldSnapshot := snapshot()
 		if err := run("up", "1"); err != nil {
 			t.Fatal("isolated version 7 migration failed")
@@ -173,6 +179,22 @@ func testAuthConfigurationRollbackPolicy(t *testing.T, populated bool, targetVer
 		var recovery int
 		if err := pool.QueryRow(ctx, `SELECT count(*) FROM framework.auth_recovery_audit`).Scan(&recovery); err != nil || recovery != 0 {
 			t.Fatal("recovery migration created operator audit data")
+		}
+	}
+	if targetVersion >= 8 {
+		oldSnapshot := snapshot()
+		if err := run("up", "1"); err != nil {
+			t.Fatal("isolated version 8 migration failed")
+		}
+		if snapshot() != oldSnapshot {
+			t.Fatal("migration 8 changed configuration history or credentials")
+		}
+		if err := pool.QueryRow(ctx, `SELECT version,dirty,'public.schema_migrations'::regclass::oid FROM public.schema_migrations`).Scan(&version, &dirty, &after); err != nil || version != 8 || dirty || after != journal {
+			t.Fatal("access policy migration changed or corrupted migration history")
+		}
+		var policies, approvals int
+		if err := pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM framework.oidc_access_policies),(SELECT count(*) FROM framework.oidc_identity_approvals)`).Scan(&policies, &approvals); err != nil || policies != 0 || approvals != 0 {
+			t.Fatal("migration implicitly created access policies or approvals")
 		}
 	}
 	before := snapshot()

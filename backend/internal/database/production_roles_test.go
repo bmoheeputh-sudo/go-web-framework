@@ -51,6 +51,7 @@ func TestProposedProductionRolesInDisposableCluster(t *testing.T) {
 		"auth_config_revisions": "SELECT,INSERT", "auth_config_lifecycle": "SELECT,INSERT,UPDATE",
 		"auth_activation_heads": "SELECT,INSERT,UPDATE", "auth_activation_history": "SELECT,INSERT",
 		"auth_test_evidence": "SELECT,INSERT", "auth_recovery_audit": "SELECT,INSERT",
+		"oidc_access_policies": "SELECT,INSERT,UPDATE", "oidc_identity_approvals": "SELECT,INSERT,UPDATE",
 		"admin_bootstrap": "",
 	}
 	rows, err := owner.Query(ctx, `SELECT relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='framework' AND c.relkind IN ('r','p')`)
@@ -120,7 +121,7 @@ func TestProposedProductionRolesInDisposableCluster(t *testing.T) {
  (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='framework' AND c.relkind='S')`).Scan(&functionCount, &triggerCount, &sequenceCount); err != nil {
 		t.Fatal(err)
 	}
-	if functionCount != 7 || triggerCount != 19 || sequenceCount != 1 {
+	if functionCount != 9 || triggerCount != 23 || sequenceCount != 1 {
 		t.Fatalf("review framework functions/triggers/sequences: %d/%d/%d", functionCount, triggerCount, sequenceCount)
 	}
 	var actor string
@@ -132,6 +133,16 @@ func TestProposedProductionRolesInDisposableCluster(t *testing.T) {
 	}
 	if _, err := app.Exec(ctx, `INSERT INTO framework.audit_log(actor_user_id,action,target_id,details) VALUES($1::uuid,'role.test',$1::text,'{}')`, actor); err != nil {
 		t.Fatalf("atomic audit insert needs table and sequence rights: %v", err)
+	}
+	if _, err := app.Exec(ctx, `INSERT INTO framework.oidc_access_policies
+ (deployment_id,environment,mode,default_role,allowed_email_domains,created_by,updated_by,reason)
+ VALUES('role-test','test','approved_users_only','Viewer',ARRAY['example.test'],$1,$1,'runtime privilege test')`, actor); err != nil {
+		t.Fatalf("access policy table/check function privileges: %v", err)
+	}
+	if _, err := app.Exec(ctx, `INSERT INTO framework.oidc_identity_approvals
+ (deployment_id,environment,issuer,subject,status,source,created_by,updated_by,reason)
+ VALUES('role-test','test','https://issuer.example.test','role-test','approved','administrator',$1,$1,'runtime privilege test')`, actor); err != nil {
+		t.Fatalf("identity approval privileges: %v", err)
 	}
 	if _, err := app.Exec(ctx, `INSERT INTO framework.sessions(token_hash,issuer,subject,provider,expires_at)
  VALUES(decode(repeat('ab',32),'hex'),'https://issuer.example.test','role-test','oidc',clock_timestamp()+interval '1 hour')`); err != nil {

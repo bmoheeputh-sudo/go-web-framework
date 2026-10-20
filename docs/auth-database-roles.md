@@ -35,6 +35,16 @@ Runtime `UPDATE`, `DELETE`, `TRUNCATE`, and DDL are absent on append-only audit/
 
 ## Verification and operational procedures
 
+Migration 000008 adds optional `oidc_access_policies` and
+`oidc_identity_approvals` storage, with SELECT/INSERT/UPDATE runtime grants and no
+DELETE/TRUNCATE. `valid_access_domains(text[])` needs runtime EXECUTE for CHECK
+constraints; `guard_access_policy_record()` is an invoker trigger function with
+no direct runtime EXECUTE grant. Four additional triggers guard generation,
+identity/provenance and retention, bringing the function/trigger counts to 9/23.
+The proposal grants these only when installed, so version-7 installations remain
+supported. After a later migration, review ownership and explicit grants before
+using the new repository. See [OIDC access policy storage](oidc-access-policy.md).
+
 `go test ./internal/database -run TestProposedProductionRolesInDisposableCluster -count=1 -v` creates a disposable PostgreSQL 14 cluster, applies migrations there, applies the proposed SQL, connects as the runtime role, checks normal user/audit writes, and rejects audit/history modification, migration-journal writes, bootstrap writes, and DDL. It never reads `DB_*` or contacts the development database.
 
 Before a live Auth0 rehearsal, also run the existing targeted regression tests in a disposable cluster: `TestActivationPreparationRequiresExplicitAffinityAndOriginatingInstance`, `TestNormalCallbackReadinessRejectsAnotherInstanceWithoutConsumingFlow`, `TestActivationUnknownCommitOutcomeIsFencedAndNotRetryable`, `TestActivationAmbiguousCommitCanBeAuthoritativelyReconciledWithoutRetry`, `TestSubscribeBeforeReadAndMissedNotificationRecovery`, `TestReconnectBackoffAndTemporaryConnectionFailure`, `TestDiscoveryRetryIsBoundedAndIdempotentOnly`, `TestOfflineRecoveryRejectsUnsafeInputsAndRollsBack`, and `TestActivationPreparationRejectsUnsafeProviders`. They cover cross-instance routing, uncertain commits, listener recovery, IdP 429/503, unavailable database, and callback URI mismatch. For a real reverse proxy, separately inject 502/504 and a dropped response **after** submitting an activation in a non-production rehearsal; inspect authoritative status before any further action. To rehearse recovery during an IdP outage, use a synthetic/staging IdP and confirm preparation refuses recovery before the confirmation prompt. Never use an expired provider as an authentication bypass.
