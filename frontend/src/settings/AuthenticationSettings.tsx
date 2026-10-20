@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Paper, Stack, TableCell, TableRow, Typography } from '@mui/material'
 import { useTranslation } from 'react-i18next'
 import { APIError, errorKey } from '../api/client'
-import { authSettingsPath, authStatusPath } from '../api/authConfiguration'
-import type { AuthHistory, AuthRevision, AuthStatus } from '../api/authConfiguration'
+import { authProviderSetupPath, authSettingsPath, authStatusPath } from '../api/authConfiguration'
+import type { AuthHistory, AuthRevision, AuthStatus, OIDCProviderSetupMetadata } from '../api/authConfiguration'
 import { useQuery, useQueryCache } from '../api/queries'
 import CompactTable from '../components/CompactTable'
 import { PageTools } from '../components/PageTools'
@@ -12,11 +12,13 @@ import { useNotifications } from '../notifications/notifications'
 import type { Notification } from '../notifications/notifications'
 import AuthDraftForm from './AuthDraftForm'
 import OIDCConnectionTest from './OIDCConnectionTest'
+import OIDCProviderSetup from './OIDCProviderSetup'
 
 export default function AuthenticationSettings() {
   const { t, i18n } = useTranslation(['auth', 'common', 'admin'])
   const cache = useQueryCache(), notify = useNotifications()
   const status = useQuery<AuthStatus>(authStatusPath)
+  const setup = useQuery<OIDCProviderSetupMetadata>(authProviderSetupPath)
   const [cursors, setCursors] = useState([0])
   const history = useQuery<AuthHistory>(`${authSettingsPath}?limit=20&before_version=${cursors.at(-1)}`)
   const [selected, setSelected] = useState<string | null>(null)
@@ -73,8 +75,9 @@ export default function AuthenticationSettings() {
         <Typography><strong>{t('databaseActiveRevision')}: </strong>{summary(status.data.database_active_revision)}</Typography>
       </Stack>
     </Paper>}
+    <OIDCProviderSetup metadata={setup.data} loading={setup.loading} error={setup.error} />
     <Alert severity="info">{t('offlineHelp')} {t('futureCapabilities')}</Alert>
-    {status.data && <AuthDraftForm development={development} latestVersion={status.data.latest_revision?.configuration_version || 0} busy={locked || Boolean(queryError)} onCreate={async (body) => {
+    {status.data && <AuthDraftForm development={development} latestVersion={status.data.latest_revision?.configuration_version || 0} busy={locked || Boolean(queryError)} trustedRedirectURI={setup.data?.normal_callback_url} onCreate={async (body) => {
       const success = await mutate(authSettingsPath, body, 'auth:draftCreated')
       if (success) setCursors([0])
       return success

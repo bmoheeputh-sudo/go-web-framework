@@ -7,10 +7,13 @@ import App from '../App'
 import LanguageProvider from '../LanguageProvider'
 import { createI18n, resources } from '../i18n'
 import { bob, mockAPI, mockMedia } from '../test/fixtures'
-import { authSettingsPath as settings, authStatusPath as statusPath } from '../api/authConfiguration'
-import type { AuthProvider, AuthRevision } from '../api/authConfiguration'
+import { authProviderSetupPath as setupPath, authSettingsPath as settings, authStatusPath as statusPath } from '../api/authConfiguration'
+import type { AuthProvider, AuthRevision, OIDCProviderSetupMetadata } from '../api/authConfiguration'
 
-beforeEach(() => { mockMedia(); localStorage.clear(); sessionStorage.clear() })
+beforeEach(() => {
+  mockMedia(); localStorage.clear(); sessionStorage.clear()
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } })
+})
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 const en = resources.en.auth
 const stamp = '2026-10-19T10:00:00Z'
@@ -21,7 +24,7 @@ function revision(overrides: Partial<AuthRevision> = {}): AuthRevision {
     status: 'draft', generation: 1, created_by: '22222222-2222-4222-8222-222222222222', created_at: stamp,
     updated_by: '22222222-2222-4222-8222-222222222222', updated_at: stamp, validation: {}, has_secret: true, ...overrides }
 }
-function authAPI(initial: AuthRevision[] = [], runtime: AuthProvider = 'local_dev') {
+function authAPI(initial: AuthRevision[] = [], runtime: AuthProvider = 'local_dev', setupOverrides: Partial<OIDCProviderSetupMetadata> = {}) {
   const fixture = mockAPI({ provider: runtime })
   const records = structuredClone(initial)
   const original = fixture.fetcher.getMockImplementation()!
@@ -34,6 +37,10 @@ function authAPI(initial: AuthRevision[] = [], runtime: AuthProvider = 'local_de
     if (failure) return Response.json({ error: 'UNTRUSTED SERVER DETAILS' }, { status: failure })
     if (path === statusPath) return Response.json({ runtime_provider: runtime, runtime_source: 'environment', management_only: true,
       validation_mode: 'offline_static', latest_revision: records[0] || null, database_active_revision: records.find((r) => r.status === 'active') || null })
+    if (path === setupPath) return Response.json({ application_name: 'Vopak Enterprise Security', application_type: 'confidential_web_application',
+      normal_callback_url: 'https://app.example.test/api/auth/callback', test_callback_url: 'https://app.example.test/api/auth/test/callback',
+      grant_types: ['authorization_code'], pkce_methods: ['S256'], scopes: ['openid', 'profile', 'email'],
+      client_authentication_methods: ['client_secret_basic'], environment: 'development', development_http: false, ...setupOverrides })
     if (path.startsWith(settings + '?')) {
       const url = new URL(path, 'http://localhost'), before = Number(url.searchParams.get('before_version'))
       const list = records.filter((r) => !before || r.configuration_version < before).slice(0, 20)
@@ -118,6 +125,53 @@ it('shows empty history and future capability explanations without nonfunctional
   expect(writes(fetcher)).toHaveLength(0)
 })
 
+it('renders trusted provider setup metadata, provider templates, and copy feedback', async () => {
+  const { fetcher } = authAPI(); mount(); await openAuth()
+  const guide = screen.getByRole('region', { name: en.setupTitle })
+  expect(guide.textContent).toContain('Vopak Enterprise Security')
+  expect(guide.textContent).toContain('https://app.example.test/api/auth/callback')
+  expect(guide.textContent).toContain('https://app.example.test/api/auth/test/callback')
+  expect(guide.textContent).toContain('authorization_code')
+  expect(guide.textContent).toContain('S256')
+  expect(guide.textContent).toContain('openid profile email')
+  expect(guide.textContent).toContain('client_secret_basic')
+  expect(fetcher.mock.calls.some(([path]) => path === setupPath)).toBe(true)
+
+  const selector = within(guide).getByRole('combobox', { name: en.setupProvider })
+  for (const [name, help] of [
+    [en.setupProviderAuth0, en.setupProviderHelp_auth0], [en.setupProviderEntra, en.setupProviderHelp_entra],
+    [en.setupProviderGoogle, en.setupProviderHelp_google], [en.setupProviderGeneric, en.setupProviderHelp_generic],
+    [en.setupProviderOkta, en.setupProviderHelp_okta],
+  ]) {
+    await userEvent.click(selector)
+    await userEvent.click(screen.getByRole('option', { name }))
+    expect(within(guide).getByText(help)).toBeTruthy()
+  }
+
+  await userEvent.click(within(guide).getByRole('button', { name: en.copySetupValue.replace('{{field}}', en.setupNormalCallback) }))
+  expect(navigator.clipboard.writeText).toHaveBeenCalledWith('https://app.example.test/api/auth/callback')
+  expect((await screen.findByRole('status')).textContent).toContain(en.setupCopied.replace('{{field}}', en.setupNormalCallback))
+  const redirect = screen.getByLabelText(en.redirectURI + ' *') as HTMLInputElement
+  expect(redirect.value).toBe('https://app.example.test/api/auth/callback')
+  expect(redirect.readOnly).toBe(true)
+})
+
+it('localizes the provider guide in Arabic and preserves RTL direction', async () => {
+  authAPI(); const instance = mount(); await openAuth()
+  await act(async () => { await instance.changeLanguage('ar') })
+  expect(document.documentElement.dir).toBe('rtl')
+  const guide = screen.getByRole('region', { name: resources.ar.auth.setupTitle })
+  expect(within(guide).getByRole('combobox', { name: resources.ar.auth.setupProvider })).toBeTruthy()
+  expect(guide.textContent).toContain(resources.ar.auth.setupHTTPSCallbacks)
+})
+
+it('keeps existing authentication settings usable when setup metadata is unavailable', async () => {
+  const { failures } = authAPI(); failures.set(`GET ${setupPath}`, 503); mount(); await openAuth()
+  expect(screen.getAllByText(en.setupUnavailable).length).toBeGreaterThanOrEqual(1)
+  expect(screen.getByRole('button', { name: en.createDraft })).toBeTruthy()
+  expect(screen.getByRole('heading', { name: en.runtimeTitle })).toBeTruthy()
+})
+
 it('requires complete OIDC settings and a fresh secret; clears secrets after submission and never persists them', async () => {
   const { fetcher, records } = authAPI(); mount(); await openAuth()
   await userEvent.click(screen.getByRole('button', { name: en.createDraft }))
@@ -151,17 +205,21 @@ it.each(['http://issuer.example.test', 'https://user:password@issuer.test'])('re
   expect(writes(fetcher)).toHaveLength(0)
 })
 
-it('permits HTTP callbacks only with explicit development allowance and a loopback address', async () => {
-  const { fetcher } = authAPI(); mount(); await openAuth(); await fillOIDC()
+it('uses a trusted loopback HTTP callback only with explicit development allowance', async () => {
+  const { fetcher } = authAPI([], 'local_dev', {
+    normal_callback_url: 'http://localhost:8080/api/auth/callback',
+    test_callback_url: 'http://localhost:8080/api/auth/test/callback', development_http: true,
+  }); mount(); await openAuth(); await fillOIDC()
   const redirect = screen.getByLabelText(en.redirectURI + ' *')
-  fireEvent.change(redirect, { target: { value: 'http://localhost:8080/api/auth/callback' } })
+  expect((redirect as HTMLInputElement).value).toBe('http://localhost:8080/api/auth/callback')
+  expect((redirect as HTMLInputElement).readOnly).toBe(true)
   await userEvent.click(screen.getByRole('button', { name: en.createDraft })); expect(writes(fetcher)).toHaveLength(0)
   await userEvent.click(screen.getByRole('checkbox', { name: en.allowHTTP }))
-  fireEvent.change(redirect, { target: { value: 'http://app.example.test/api/auth/callback' } })
-  await userEvent.click(screen.getByRole('button', { name: en.createDraft })); expect(writes(fetcher)).toHaveLength(0)
-  fireEvent.change(redirect, { target: { value: 'http://localhost:8080/api/auth/callback' } })
   await userEvent.click(screen.getByRole('button', { name: en.createDraft })); await screen.findByRole('status')
-  expect(JSON.parse(writes(fetcher)[0][1]!.body as string).allow_http_development).toBe(true)
+  const body = JSON.parse(writes(fetcher)[0][1]!.body as string)
+  expect(body.allow_http_development).toBe(true)
+  expect(body.redirect_uri).toBe('http://localhost:8080/api/auth/callback')
+  expect(screen.getByText(en.setupDevelopmentHTTP)).toBeTruthy()
 })
 
 it('validates IAP audiences and sends only provider-specific settings', async () => {

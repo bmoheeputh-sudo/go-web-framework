@@ -67,6 +67,14 @@ func Register(mux *http.ServeMux, provider auth.Authenticator, store *access.Sto
 		mux.Handle(pattern, auth.Require(provider, access.ProtectWrites(origin, store.Require(access.AdminManage, "", available))))
 	}
 	newConnectionTests(repo, origin).register(mux, route)
+	route("GET "+providerSetupPath, func(w http.ResponseWriter, r *http.Request) {
+		metadata, err := newProviderSetup(origin, repo.scope.Environment)
+		if err != nil {
+			httpError(w, err)
+			return
+		}
+		reply(w, http.StatusOK, metadata)
+	})
 	route("POST /api/admin/auth/settings/{id}/enroll", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			EvidenceID string `json:"evidence_id"`

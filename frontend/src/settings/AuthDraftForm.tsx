@@ -16,15 +16,16 @@ function validOIDC(issuer: string, redirect: string, allowHTTP: boolean) {
 }
 const audiencePattern = /^\/projects\/[0-9]+\/(apps\/[a-z][a-z0-9-]*|global\/backendServices\/[0-9]+|locations\/[a-z][a-z0-9-]*\/services\/[a-z][a-z0-9-]*)$/
 
-export default function AuthDraftForm({ development, latestVersion, busy, onCreate }: {
-  development: boolean; latestVersion: number; busy: boolean; onCreate: (body: NewAuthDraft) => Promise<boolean>
+export default function AuthDraftForm({ development, latestVersion, busy, trustedRedirectURI, onCreate }: {
+  development: boolean; latestVersion: number; busy: boolean; trustedRedirectURI?: string; onCreate: (body: NewAuthDraft) => Promise<boolean>
 }) {
   const { t } = useTranslation(['auth', 'common', 'admin'])
   const [provider, setProvider] = useState<AuthProvider>('oidc')
   const [issuer, setIssuer] = useState(''), [clientID, setClientID] = useState('')
   const [secret, setSecret] = useState(''), [showSecret, setShowSecret] = useState(false)
-  const [redirect, setRedirect] = useState(''), [audience, setAudience] = useState('')
+  const [enteredRedirect, setEnteredRedirect] = useState(''), [audience, setAudience] = useState('')
   const [allowHTTP, setAllowHTTP] = useState(false), [invalid, setInvalid] = useState(false)
+  const redirect = trustedRedirectURI || enteredRedirect
   async function submit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault()
     if (busy) return
@@ -56,7 +57,9 @@ export default function AuthDraftForm({ development, latestVersion, busy, onCrea
         <TextField required fullWidth label={t('clientSecret')} type={showSecret ? 'text' : 'password'} value={secret} disabled={busy}
           autoComplete="new-password" onChange={(e) => setSecret(e.target.value)} helperText={t('secretRequired')}
           slotProps={{ htmlInput: { maxLength: 4096, dir: 'ltr', spellCheck: false }, input: { endAdornment: <InputAdornment position="end"><IconButton disabled={busy} aria-label={t(showSecret ? 'hideSecret' : 'showSecret')} aria-pressed={showSecret} onClick={() => setShowSecret(!showSecret)}>{showSecret ? <VisibilityOff /> : <Visibility />}</IconButton></InputAdornment> } }} />
-        <TextField required fullWidth label={t('redirectURI')} value={redirect} disabled={busy} onChange={(e) => setRedirect(e.target.value)} slotProps={{ htmlInput: { maxLength: 2048, dir: 'ltr' } }} />
+        <TextField required fullWidth label={t('redirectURI')} value={redirect} disabled={busy} onChange={(e) => setEnteredRedirect(e.target.value)}
+          helperText={trustedRedirectURI ? t('setupTrustedRedirect') : undefined}
+          slotProps={{ htmlInput: { maxLength: 2048, dir: 'ltr', readOnly: Boolean(trustedRedirectURI) } }} />
         {development && <FormControlLabel label={t('allowHTTP')} control={<Checkbox disabled={busy} checked={allowHTTP} onChange={(_, value) => setAllowHTTP(value)} />} />}
       </>}
       {provider === 'google_iap' && <>

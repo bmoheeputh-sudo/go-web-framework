@@ -27,6 +27,20 @@ export type NewAuthDraft = { expected_latest_version: number } & (
 )
 export const authSettingsPath = '/api/admin/auth/settings'
 export const authStatusPath = '/api/admin/auth/status' // No query parameters on this endpoint.
+export const authProviderSetupPath = '/api/admin/auth/provider-setup'
+
+export type OIDCProviderSetupMetadata = {
+  application_name: 'Vopak Enterprise Security'
+  application_type: 'confidential_web_application'
+  normal_callback_url: string
+  test_callback_url: string
+  grant_types: readonly ['authorization_code']
+  pkce_methods: readonly ['S256']
+  scopes: readonly ['openid', 'profile', 'email']
+  client_authentication_methods: readonly ['client_secret_basic']
+  environment: 'development' | 'test' | 'production'
+  development_http: boolean
+}
 
 export type ConnectionTest = {
   id: string; revision_id: string; configuration_version: number; generation: number

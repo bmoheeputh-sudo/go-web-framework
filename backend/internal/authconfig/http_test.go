@@ -216,7 +216,7 @@ func TestAuthConfigurationHTTPWorkflow(t *testing.T) {
 func TestAuthConfigurationHTTPAuthorizationAndIsolation(t *testing.T) {
 	f := newFixture(t)
 	m := f.draft(t, 0)
-	paths := []struct{ method, path string }{{"GET", settingsPath}, {"GET", settingsPath + "/" + m.ID}, {"POST", settingsPath}, {"POST", settingsPath + "/" + m.ID + "/validate"}, {"POST", settingsPath + "/" + m.ID + "/approve"}, {"GET", statusPath}}
+	paths := []struct{ method, path string }{{"GET", settingsPath}, {"GET", settingsPath + "/" + m.ID}, {"POST", settingsPath}, {"POST", settingsPath + "/" + m.ID + "/validate"}, {"POST", settingsPath + "/" + m.ID + "/approve"}, {"GET", statusPath}, {"GET", providerSetupPath}}
 	for _, role := range []string{"User", "Viewer", "None", "Unauthenticated"} {
 		t.Run(role, func(t *testing.T) {
 			var provider auth.Authenticator
@@ -274,6 +274,48 @@ func TestAuthConfigurationHTTPAuthorizationAndIsolation(t *testing.T) {
 	}
 	for _, route := range paths {
 		apiRequest(t, handler, route.method, route.path, `{}`, 403)
+	}
+}
+
+func TestOIDCProviderSetupMetadataUsesTrustedOrigin(t *testing.T) {
+	f := newFixture(t)
+	handler := configHandler(f, f.repo, fixedAuth{f.identity})
+	request := httptest.NewRequest(http.MethodGet, providerSetupPath, nil)
+	request.Host = "attacker.example"
+	request.Header.Set("Forwarded", "host=attacker.example;proto=http")
+	request.Header.Set("X-Forwarded-Host", "attacker.example")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	checkAPIResponse(t, response, http.StatusOK)
+	var metadata ProviderSetup
+	if json.Unmarshal(response.Body.Bytes(), &metadata) != nil {
+		t.Fatal("invalid provider setup metadata")
+	}
+	if metadata.ApplicationName != "Vopak Enterprise Security" || metadata.ApplicationType != "confidential_web_application" ||
+		metadata.NormalCallbackURL != apiOrigin+"/api/auth/callback" || metadata.TestCallbackURL != apiOrigin+"/api/auth/test/callback" ||
+		strings.Join(metadata.GrantTypes, " ") != "authorization_code" || strings.Join(metadata.PKCEMethods, " ") != "S256" ||
+		strings.Join(metadata.Scopes, " ") != "openid profile email" || strings.Join(metadata.ClientAuthMethods, " ") != "client_secret_basic" ||
+		metadata.Environment != "development" || metadata.DevelopmentHTTP {
+		t.Fatal("provider setup metadata did not match trusted server configuration")
+	}
+	if strings.Contains(response.Body.String(), "attacker.example") || strings.Contains(response.Body.String(), apiSecret) {
+		t.Fatal("provider setup metadata trusted request input or exposed a secret")
+	}
+	apiRequest(t, handler, http.MethodGet, providerSetupPath+"?origin=https://attacker.example", nil, http.StatusBadRequest)
+}
+
+func TestOIDCProviderSetupDevelopmentHTTPClassification(t *testing.T) {
+	metadata, err := newProviderSetup("http://127.0.0.1:8080", "development")
+	if err != nil || !metadata.DevelopmentHTTP || metadata.NormalCallbackURL != "http://127.0.0.1:8080/api/auth/callback" {
+		t.Fatal("trusted loopback development callback was not classified correctly")
+	}
+	for _, test := range []struct{ origin, environment string }{
+		{"http://app.example.test", "development"}, {"http://127.0.0.1:8080", "production"},
+		{"https://app.example.test/path", "production"},
+	} {
+		if _, err := newProviderSetup(test.origin, test.environment); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("unsafe setup origin accepted: %s", test.origin)
+		}
 	}
 }
 
