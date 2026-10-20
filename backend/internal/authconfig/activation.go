@@ -137,3 +137,24 @@ func (r *ActivationReader) ValidateRevision(ctx context.Context, id string, gene
 	}
 	return nil
 }
+
+// DatabaseHead is the narrow authoritative read used for admission-independent
+// reconciliation. Unlike Head's metadata view, it requires a consistent active
+// OIDC lifecycle/history pair and uses the database clock.
+func (r *ActivationReader) DatabaseHead(ctx context.Context) (ActivationHead, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	h := ActivationHead{Scope: r.scope}
+	err := r.pool.QueryRow(ctx, `SELECT h.generation,h.runtime_source,h.active_revision_id::text,h.activated_at
+ FROM framework.auth_activation_heads h
+ JOIN framework.auth_activation_history a ON a.deployment_id=h.deployment_id AND a.environment=h.environment AND a.generation=h.generation AND a.target_revision_id=h.active_revision_id AND a.activated_at=h.activated_at
+ JOIN framework.auth_config_revisions r ON r.id=h.active_revision_id AND r.deployment_id=h.deployment_id AND r.environment=h.environment AND r.provider='oidc'
+ JOIN framework.auth_config_lifecycle l ON l.revision_id=r.id AND l.deployment_id=h.deployment_id AND l.environment=h.environment AND l.status='active' AND l.generation=4
+ WHERE h.deployment_id=$1 AND h.environment=$2 AND h.runtime_source='database' AND h.generation>0
+ AND h.activated_at<=clock_timestamp() AND a.transition_deadline BETWEEN a.activated_at AND a.activated_at+interval '30 minutes'
+ AND h.generation=(SELECT max(generation) FROM framework.auth_activation_history WHERE deployment_id=$1 AND environment=$2)`, r.scope.DeploymentID, r.scope.Environment).Scan(&h.Generation, &h.RuntimeSource, &h.ActiveRevisionID, &h.ActivatedAt)
+	if err != nil {
+		return ActivationHead{}, ErrUnavailable
+	}
+	return h, nil
+}

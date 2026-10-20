@@ -23,6 +23,10 @@ const revisionTwo = "22222222-2222-4222-8222-222222222222"
 // Synthetic constraints-only fixture; never reads application environment/DB.
 func runtimeRevision(t *testing.T, pool *pgxpool.Pool, id string, generation int64, previous, issuer string) {
 	t.Helper()
+	runtimeRevisionWithTransition(t, pool, id, generation, previous, issuer, 30*time.Minute)
+}
+func runtimeRevisionWithTransition(t *testing.T, pool *pgxpool.Pool, id string, generation int64, previous, issuer string, transition time.Duration) {
+	t.Helper()
 	ctx := context.Background()
 	tx, err := pool.Begin(ctx)
 	if err != nil {
@@ -61,7 +65,7 @@ func runtimeRevision(t *testing.T, pool *pgxpool.Pool, id string, generation int
 		t.Fatal(err)
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO framework.auth_activation_history(deployment_id,environment,generation,previous_revision_id,target_revision_id,actor_user_id,activated_at,transition_deadline,reason)
- VALUES('test-deployment','development',$1,NULLIF($2,'')::uuid,$3,$4,$5,$5::timestamptz+interval '30 minutes','test fixture')`, generation, previous, id, actor, when)
+ VALUES('test-deployment','development',$1,NULLIF($2,'')::uuid,$3,$4,$5,$5::timestamptz+($6::double precision*interval '1 second'),'test fixture')`, generation, previous, id, actor, when, transition.Seconds())
 	if err != nil {
 		t.Fatal(err)
 	}

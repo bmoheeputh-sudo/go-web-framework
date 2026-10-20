@@ -290,6 +290,9 @@ func (s *ActivationService) Activate(ctx context.Context, p *PreparedActivation,
 		if !fresh {
 			return ErrDenied
 		}
+		if err := notifyActivation(ctx, tx, m.Scope, generation+1); err != nil {
+			return err
+		}
 		readyToCommit = true
 		return nil
 	})

@@ -26,10 +26,18 @@ type providerLease struct {
 	until                      time.Time
 	cleanup                    func()
 	timer                      *time.Timer
+	now                        func() time.Time
+}
+
+func (l *providerLease) clockNow() time.Time {
+	if l.now != nil {
+		return l.now()
+	}
+	return time.Now()
 }
 
 func (l *providerLease) allowedLocked(login bool) bool {
-	return !l.closed && (!l.retired || (!login && time.Now().Before(l.until)))
+	return !l.closed && (!l.retired || (!login && l.clockNow().Before(l.until)))
 }
 func (l *providerLease) deadline(login bool) (time.Time, bool) {
 	l.mu.Lock()
@@ -53,7 +61,7 @@ func (l *providerLease) retain() bool {
 }
 func (l *providerLease) release() { l.mu.Lock(); defer l.mu.Unlock(); l.refs--; l.closeLocked() }
 func (l *providerLease) closeLocked() {
-	if l.retired && !time.Now().Before(l.until) && l.refs == 0 && !l.closed {
+	if l.retired && !l.clockNow().Before(l.until) && l.refs == 0 && !l.closed {
 		l.closed = true
 		if l.timer != nil {
 			l.timer.Stop()

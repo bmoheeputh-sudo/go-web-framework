@@ -34,10 +34,10 @@ Do not rename deployments or change DB targets to evade a failure. Operators mus
 protect both configuration values: software cannot establish that an entirely
 different, empty database is the intended deployment's authoritative database.
 
-The startup gate does not monitor later policy changes. Internal activation and
-version-bound callback draining now exist, but multi-instance synchronization and
-reviewed offline recovery remain prerequisites before live activation. Keep heads in their
-current unenrolled state until those features are reviewed and delivered.
+The startup gate is complemented by the Phase 9.2.5F LISTEN/NOTIFY listener and
+authoritative per-operation admission checks. Internal activation and bounded
+callback draining exist; reviewed offline recovery and the operator rollout
+workflow remain prerequisites before live activation. No activation endpoint is exposed.
 
 ## Trusted evidence and enrollment
 

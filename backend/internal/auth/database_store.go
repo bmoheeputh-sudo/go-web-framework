@@ -42,8 +42,8 @@ func (s *databaseBoundStore) identity(ctx context.Context, token string) (Identi
 	defer cancel()
 	args := append(s.args(token, s.base.idle.Seconds()), deadline)
 	var identity Identity
-	err := s.base.db.QueryRow(ctx, `UPDATE framework.sessions SET last_activity_at=GREATEST(last_activity_at,clock_timestamp()),expires_at=LEAST(expires_at,$9)
- WHERE token_hash=$1 AND expires_at>clock_timestamp() AND last_activity_at>clock_timestamp()-($2::double precision*interval '1 second') AND $9>clock_timestamp() AND `+bindingPredicate+`
+	err := s.base.db.QueryRow(ctx, `WITH `+authoritySQL(3, 4, 5, 6)+` UPDATE framework.sessions SET last_activity_at=GREATEST(last_activity_at,clock_timestamp()),expires_at=LEAST(expires_at,$9,(SELECT deadline FROM policy))
+ WHERE token_hash=$1 AND expires_at>clock_timestamp() AND last_activity_at>clock_timestamp()-($2::double precision*interval '1 second') AND $9>clock_timestamp() AND EXISTS(SELECT 1 FROM policy) AND `+bindingPredicate+`
  RETURNING issuer,subject,email,email_verified,display_name,provider`, args...).Scan(&identity.Issuer, &identity.Subject, &identity.Email, &identity.EmailVerified, &identity.DisplayName, &identity.Provider)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Identity{}, ErrUnauthenticated
@@ -78,11 +78,15 @@ func (s *databaseBoundStore) addSession(ctx context.Context, identity Identity, 
 	token := oauth2.GenerateVerifier()
 	b := s.binding
 
+	flowExpiry := expires
+	if original, ok := ctx.Value(flowExpiryKey{}).(time.Time); ok {
+		flowExpiry = original
+	}
 	var stored []byte
-	err := s.base.db.QueryRow(ctx, `WITH created AS (
+	err := s.base.db.QueryRow(ctx, `WITH `+authoritySQL(9, 10, 11, 12)+`, created AS (
  INSERT INTO framework.sessions(token_hash,issuer,subject,email,email_verified,display_name,provider,expires_at,binding_source,deployment_id,environment,revision_id,activation_generation,client_id,flow_purpose)
- SELECT $2,$3,$4,$5,$6,$7,'oidc',$8,'database',$9,$10,$11,$12,$13,'login' WHERE $8>clock_timestamp() RETURNING token_hash
- ), revoked AS (DELETE FROM framework.sessions WHERE token_hash=$1 AND deployment_id=$9 AND environment=$10 AND EXISTS(SELECT 1 FROM created)) SELECT token_hash FROM created`, tokenHash(previous), tokenHash(token), identity.Issuer, identity.Subject, identity.Email, identity.EmailVerified, identity.DisplayName, expires, b.DeploymentID, b.Environment, b.RevisionID, b.ActivationGeneration, b.ClientID).Scan(&stored)
+ SELECT $2,$3,$4,$5,$6,$7,'oidc',LEAST($8,(SELECT deadline FROM policy)),'database',$9,$10,$11,$12,$13,'login' WHERE $8>clock_timestamp() AND $14::timestamptz>clock_timestamp() AND EXISTS(SELECT 1 FROM policy) RETURNING token_hash
+ ), revoked AS (DELETE FROM framework.sessions WHERE token_hash=$1 AND deployment_id=$9 AND environment=$10 AND EXISTS(SELECT 1 FROM created)) SELECT token_hash FROM created`, tokenHash(previous), tokenHash(token), identity.Issuer, identity.Subject, identity.Email, identity.EmailVerified, identity.DisplayName, expires, b.DeploymentID, b.Environment, b.RevisionID, b.ActivationGeneration, b.ClientID, flowExpiry).Scan(&stored)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", ErrUnauthenticated
 	}
@@ -112,8 +116,12 @@ func (s *databaseBoundStore) addFlow(ctx context.Context, flow loginFlow) (strin
 	}
 	token := oauth2.GenerateVerifier()
 	b := s.binding
-	_, err := s.base.db.Exec(ctx, `INSERT INTO framework.oidc_login_flows(token_hash,state_hash,nonce,pkce_verifier,expires_at,binding_source,deployment_id,environment,revision_id,activation_generation,issuer,client_id,flow_purpose)
- VALUES($1,$2,$3,$4,$5,'database',$6,$7,$8,$9,$10,$11,'login')`, tokenHash(token), tokenHash(flow.State), flow.Nonce, flow.Verifier, flow.Expires, b.DeploymentID, b.Environment, b.RevisionID, b.ActivationGeneration, b.Issuer, b.ClientID)
+	var stored []byte
+	err := s.base.db.QueryRow(ctx, `WITH `+authoritySQL(6, 7, 8, 9)+` INSERT INTO framework.oidc_login_flows(token_hash,state_hash,nonce,pkce_verifier,expires_at,binding_source,deployment_id,environment,revision_id,activation_generation,issuer,client_id,flow_purpose)
+ SELECT $1,$2,$3,$4,LEAST($5::timestamptz,clock_timestamp()+interval '5 minutes'),'database',$6,$7,$8,$9,$10,$11,'login' WHERE EXISTS(SELECT 1 FROM policy WHERE current) RETURNING token_hash`, tokenHash(token), tokenHash(flow.State), flow.Nonce, flow.Verifier, flow.Expires, b.DeploymentID, b.Environment, b.RevisionID, b.ActivationGeneration, b.Issuer, b.ClientID).Scan(&stored)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrUnauthenticated
+	}
 	if err != nil {
 		return "", ErrStoreUnavailable
 	}
@@ -133,7 +141,7 @@ func (s *databaseBoundStore) takeFlow(ctx context.Context, token, state string) 
 	var hash []byte
 	var fresh bool
 	args := append(s.args(token, true), deadline)
-	err := s.base.db.QueryRow(ctx, `DELETE FROM framework.oidc_login_flows WHERE token_hash=$1 AND $2::boolean AND `+bindingPredicate+` RETURNING state_hash,nonce,pkce_verifier,LEAST(expires_at,$9),expires_at>clock_timestamp() AND $9>clock_timestamp()`, args...).Scan(&hash, &flow.Nonce, &flow.Verifier, &flow.Expires, &fresh)
+	err := s.base.db.QueryRow(ctx, `WITH `+authoritySQL(3, 4, 5, 6)+` DELETE FROM framework.oidc_login_flows WHERE token_hash=$1 AND $2::boolean AND EXISTS(SELECT 1 FROM policy) AND `+bindingPredicate+` RETURNING state_hash,nonce,pkce_verifier,LEAST(expires_at,$9,(SELECT deadline FROM policy)),expires_at>clock_timestamp() AND $9>clock_timestamp()`, args...).Scan(&hash, &flow.Nonce, &flow.Verifier, &flow.Expires, &fresh)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return loginFlow{}, ErrUnauthenticated
 	}

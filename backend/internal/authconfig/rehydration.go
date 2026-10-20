@@ -38,6 +38,7 @@ type startupState struct {
 	head             ActivationHead
 	event            ActivationEvent
 	active, previous startupRevision
+	databaseTime     time.Time
 }
 
 func (l *StartupLoader) read(ctx context.Context) (startupState, error) {
@@ -52,14 +53,14 @@ func (l *StartupLoader) read(ctx context.Context) (startupState, error) {
 	s := startupState{head: ActivationHead{Scope: scope}, event: ActivationEvent{Scope: scope}}
 	h, e := &s.head, &s.event
 	err = tx.QueryRow(ctx, `SELECT h.generation,h.runtime_source,h.active_revision_id::text,h.activated_at,
- a.generation,COALESCE(a.previous_revision_id::text,''),a.target_revision_id::text,a.activated_at,a.transition_deadline
+ a.generation,COALESCE(a.previous_revision_id::text,''),a.target_revision_id::text,a.activated_at,a.transition_deadline,clock_timestamp()
  FROM framework.auth_activation_heads h JOIN framework.auth_activation_history a
  ON a.deployment_id=h.deployment_id AND a.environment=h.environment AND a.generation=h.generation
- WHERE h.deployment_id=$1 AND h.environment=$2`, scope.DeploymentID, scope.Environment).Scan(&h.Generation, &h.RuntimeSource, &h.ActiveRevisionID, &h.ActivatedAt, &e.Generation, &e.PreviousRevisionID, &e.TargetRevisionID, &e.ActivatedAt, &e.TransitionDeadline)
+ WHERE h.deployment_id=$1 AND h.environment=$2`, scope.DeploymentID, scope.Environment).Scan(&h.Generation, &h.RuntimeSource, &h.ActiveRevisionID, &h.ActivatedAt, &e.Generation, &e.PreviousRevisionID, &e.TargetRevisionID, &e.ActivatedAt, &e.TransitionDeadline, &s.databaseTime)
 	if err != nil {
 		return startupState{}, ErrUnavailable
 	}
-	if h.RuntimeSource != "database" || h.Generation < 1 || h.ActivatedAt == nil || !h.ActivatedAt.Equal(e.ActivatedAt) || h.ActiveRevisionID != e.TargetRevisionID || e.ActivatedAt.After(time.Now()) || e.TransitionDeadline.Before(e.ActivatedAt) || e.TransitionDeadline.After(e.ActivatedAt.Add(30*time.Minute)) || ((h.Generation == 1) != (e.PreviousRevisionID == "")) {
+	if h.RuntimeSource != "database" || h.Generation < 1 || h.ActivatedAt == nil || !h.ActivatedAt.Equal(e.ActivatedAt) || h.ActiveRevisionID != e.TargetRevisionID || e.ActivatedAt.After(s.databaseTime) || e.TransitionDeadline.Before(e.ActivatedAt) || e.TransitionDeadline.After(e.ActivatedAt.Add(30*time.Minute)) || ((h.Generation == 1) != (e.PreviousRevisionID == "")) {
 		return startupState{}, ErrInvalid
 	}
 	var consistent bool
@@ -97,7 +98,7 @@ func (l *StartupLoader) read(ctx context.Context) (startupState, error) {
 		}
 		// Expired revisions need no old keys or reachable old issuer. They can
 		// never be restored just because this process restarted.
-		if time.Now().Before(e.TransitionDeadline) {
+		if s.databaseTime.Before(e.TransitionDeadline) {
 			s.previous, err = load(previous, Superseded)
 			if err != nil {
 				return startupState{}, err

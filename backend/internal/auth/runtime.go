@@ -44,12 +44,14 @@ type Runtime struct {
 	readiness         map[string]*readinessEntry
 	drainTimer        *time.Timer
 	pending           *Publication
+	guard             AdmissionGuard
 }
 
 type runtimeRequestKey struct{}
 type runtimeRequest struct {
 	owner    *Runtime
 	snapshot *runtimeSnapshot
+	guard    AdmissionGuard
 }
 
 // NewEnvironmentRuntime accepts only the framework's prepared providers. Scope
@@ -156,13 +158,14 @@ func (m *Runtime) Capture(next http.Handler) http.Handler {
 				leases = append(leases, p.lease)
 			}
 		}
+		guard := m.guard
 		m.mu.Unlock()
 		defer func() {
 			for _, l := range leases {
 				l.release()
 			}
 		}()
-		ctx := context.WithValue(r.Context(), runtimeRequestKey{}, runtimeRequest{m, snapshot})
+		ctx := context.WithValue(r.Context(), runtimeRequestKey{}, runtimeRequest{m, snapshot, guard})
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -185,6 +188,9 @@ func (m *Runtime) Authenticate(r *http.Request) (Identity, error) {
 	s, ok := m.snapshot(r.Context())
 	if !ok {
 		return Identity{}, ErrStoreUnavailable
+	}
+	if err := m.checkAdmission(r.Context(), s); err != nil {
+		return Identity{}, err
 	}
 	if s.auth == nil {
 		return Identity{}, ErrUnauthenticated
@@ -216,6 +222,10 @@ func (m *Runtime) RegisterRoutes(mux *http.ServeMux) {
 			w.Header().Set("Cache-Control", "no-store")
 			s, ok := m.snapshot(r.Context())
 			if !ok {
+				runtimeUnavailable(w)
+				return
+			}
+			if err := m.checkAdmission(r.Context(), s); err != nil {
 				runtimeUnavailable(w)
 				return
 			}

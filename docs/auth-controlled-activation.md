@@ -231,7 +231,8 @@ fail startup. If its deadline passes during preparation, it is discarded. The he
 and lifecycle are checked again after network preparation; a changed head fails
 startup, without retry or fallback. There remains a window after that final read:
 this does not synchronize an instance with later activations on another instance.
-Keep live activation disabled until multi-instance coordination is delivered.
+The listener described below reconciles subsequent committed changes. Keep live
+activation disabled pending the remaining operational recovery and rollout review.
 
 Preparation is bounded to twenty seconds per provider and fifty seconds for the
 whole startup load; SQL reads are bounded to five seconds. Callback exchange and
@@ -251,18 +252,113 @@ cancellation and release database connections; bounded network/SQL operations do
 not impose a hard lifetime on arbitrary application code. Process termination is
 the final memory/resource boundary, not a new authentication fallback.
 
+## Event-driven multi-instance synchronization (Phase 9.2.5F)
+
+Each process owns a dedicated `pgx.Conn` using the validated application pool's
+connection/TLS settings and the same `go_web_app` user. It does not check out a pool
+connection indefinitely. Allow one additional PostgreSQL connection per instance.
+A direct or session-affine connection is required; transaction-pooling proxies
+cannot preserve a session's LISTEN subscription.
+
+The code-owned channel is `framework_auth_activation`. The existing activation
+transaction calls `pg_notify` with deployment, environment and a generation hint,
+after its authorization/evidence/history/audit work. PostgreSQL delivers that event
+only on successful commit. Rollback, including deferred commit failure, delivers
+nothing. No credentials, identity claims or provider settings enter the payload.
+The single database owner remains trusted; no new SQL grants or migrations are
+introduced. Hardened installations must permit this role to execute `pg_notify`.
+
+`Synchronizer.Start` connects, successfully executes LISTEN, then reconciles before
+HTTP admission begins. On reconnect it repeats that order, covering notifications
+missed while disconnected and events racing subscription. The healthy loop blocks
+in `WaitForNotification`; there is no periodic configuration poll or heartbeat read.
+Relevant scope hints trigger reconciliation regardless of their generation value.
+Malformed or other-deployment hints are ignored. Hints are never authoritative.
+
+A mutex serializes reconciliation within each instance. It reads a scoped,
+consistent active OIDC head, compares it with locally applied state, and reuses the
+read-only startup loader for hardened preparation. After network work it reads the
+authoritative head again. Publication requires that exact revision/generation and
+the expected locally applied generation. Slow candidates and backward generations
+are rejected; duplicate notifications need no preparation. A newer verified runtime
+can skip missed generations, but accepts only the current generation and its
+explicitly recorded immediate predecessor within the original deadline.
+
+Publication transfers ownership of immutable snapshots and leases. Captured
+requests keep their original snapshot; replaced authenticators retire immediately
+unless they are precisely the permitted draining binding. Transport cleanup waits
+for their final retained reference. Initial environment-to-database publication
+never retains Local DEV or environment credentials as a grace provider. IAP-pinned
+instances refuse OIDC reconciliation and do not alter upstream IAP infrastructure.
+The background service reads/decrypts trusted state without an administrator identity
+and never invokes `AdminTransaction` or changes activation records.
+
+### Failure and admission policy
+
+Disconnection or preparation failure marks synchronization degraded but retains the
+last verified snapshot. Reconnection/preparation is retried with exponential jitter
+from 250–500 milliseconds up to 15–30 seconds between attempts. These are failure
+retries, not healthy periodic configuration reads. Network/SQL work remains bounded
+and shutdown cancels the listener and joins its goroutine before runtime/pool cleanup.
+Silent network failure detection depends on PostgreSQL/TCP error detection; a cached
+`Connected` flag is not an authentication trust signal.
+
+Every environment authentication/login/callback/logout operation checks scoped
+policy. Missing database authority or a database-required cutover denies the affected
+operation; Local DEV cannot continue after a missed notification. Database session
+lookup/activity updates, new-flow insertion, one-time flow consumption and session
+creation check authoritative head/revision/generation inside their parameterized
+SQL statement. A stale instance cannot start a new old-generation login. It can
+finish an old callback or use an old session only while PostgreSQL authorizes that
+exact predecessor. Unknown, expired and retired credentials are denied without
+activity updates. Session creation also checks the original consumed flow expiry
+against database time after token exchange.
+
+Thus a listener-only outage does not invalidate every existing session. If the head
+is unchanged, or an explicitly permitted drain remains valid, requests can continue.
+If PostgreSQL cannot establish the required decision, that authentication operation
+fails closed. Public health remains public. No listener failure selects an alternate
+provider, resets activation state, or grants another thirty minutes. A notification
+can be missed without extending credential trust; reconciliation later restores
+availability. All supported activation writes must emit the transactional hint;
+unsupported manual SQL changes may require reconnection to load the new provider.
+
+### Clock and status boundaries
+
+The authoritative head check and startup lineage check use PostgreSQL time. SQL uses
+`clock_timestamp()` for session/flow expiry, idle checks, generation admission and
+persisted draining deadlines. New database flows are additionally capped at five
+minutes of database time. Positive/negative node-clock skew tests verify that local
+lease state cannot extend database authority, even on a node unaware of retirement.
+
+Host clocks must still be synchronized: ID-token validation, browser cookie dates,
+local conservative lease rejection and resource timers use host time. A fast host
+may reject early; a slow host may retain an unusable verifier in memory longer.
+Neither grants credentials past the PostgreSQL deadline. PostgreSQL's own clock and
+consistent primary database routing are trusted; no cross-database or replica-lag
+consistency is claimed. An operation already admitted against a statement snapshot
+may complete while a concurrent activation commits; this is not globally atomic
+cluster publication and cannot retroactively cancel prior application work.
+
+`Synchronizer.Status()` and the application's internal status callback expose only
+latest **observed** desired generation, applied generation, provider, connection
+state, last successful reconciliation, degraded/mismatched state and transition
+deadline. This is per-instance status, not a claim that every instance has activated.
+Existing management endpoints remain compatible; no new public endpoint or UI is
+added. Configuration keys and callback/listener settings are captured at process
+startup. Provision historical keys on every instance before a new revision needs
+them; changing process secrets requires restarting that instance.
+
 ## Deployment blockers
 
 Do **not** wire these methods to the live deployment yet:
 
-- Startup now rehydrates a committed OIDC policy, but ongoing reconciliation and
-  operational desired/applied recovery are not implemented.
-- LISTEN/NOTIFY, listener reconnect reconciliation and other-instance fencing are
-  not implemented. Use of this foundation is limited to isolated single-process
-  tests until multi-instance policy is delivered.
+- Startup and LISTEN/NOTIFY reconciliation now load committed OIDC policy. This
+  does not make publication simultaneous across instances; inspect each instance's
+  desired/applied status and retain a reviewed rollout/recovery procedure.
 - There is no public normal-readiness start/result workflow or activation/recovery
   UI. The current portal's isolated test cannot activate a configuration by itself.
-- Offline emergency recovery and operational desired/applied reconciliation still
+- Offline emergency recovery and operator-facing synchronization diagnostics still
   require implementation and review. Never reset a head to environment mode as a
   workaround, disable verification, or use Local DEV after activation.
 - The application/migration role remains the single schema owner `go_web_app`.

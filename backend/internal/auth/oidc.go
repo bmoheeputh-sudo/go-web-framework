@@ -277,7 +277,7 @@ func (p *OIDCAuthenticator) Callback(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie(p.sessionCookie); err == nil {
 		previous = cookie.Value
 	}
-	id, err := p.store.addSession(r.Context(), identity, expires, previous)
+	id, err := p.store.addSession(context.WithValue(r.Context(), flowExpiryKey{}, flow.Expires), identity, expires, previous)
 	if err != nil {
 		fail()
 		return

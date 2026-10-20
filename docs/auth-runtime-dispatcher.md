@@ -5,7 +5,8 @@ The historical environment-only description below is superseded at startup by
 [read-only rehydration](auth-controlled-activation.md#read-only-startup-rehydration-and-lifecycle-hardening).
 An authoritative database head loads its committed runtime or fails closed. No
 activation service or public activation endpoint is wired into the HTTP composition
-root. Multi-instance reconciliation remains blocked.
+root. Phase 9.2.5F adds [event-driven reconciliation](auth-controlled-activation.md#event-driven-multi-instance-synchronization-phase-925f)
+with authoritative SQL admission checks; offline recovery remains outstanding.
 
 See the [focused security review](auth-runtime-security-review.md) for the
 startup-policy history, revision-bound callback requirements and
@@ -97,10 +98,11 @@ an issuer/email match. The current dispatcher does not provide that transition.
   Upstream IAP enforcement and origin restrictions remain infrastructure duties.
 - The isolated OIDC connection-test callback remains separate and does not
   create normal sessions. Its existing admin authorization/audit logic is intact.
-- Database activation, rollback, coexistence, old-flow routing, listener
-  synchronization and multi-instance reconciliation remain future work. Snapshot
-  consistency within one process does not establish atomic activation across
-  processes.
+- Database activation, rollback, coexistence and old-flow routing are internal
+  foundations without public activation endpoints. Phase 9.2.5F adds
+  deployment-scoped LISTEN/NOTIFY reconciliation, but this remains convergent:
+  snapshot consistency within one process does not establish simultaneous
+  activation across processes.
 
 Validation uses synthetic HTTPS OIDC/IAP fixtures and disposable PostgreSQL
 clusters, not the development database or live Auth0 credentials:

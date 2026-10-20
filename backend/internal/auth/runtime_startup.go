@@ -6,7 +6,7 @@ import "time"
 // a running runtime and performs no writes. The caller must verify DB authority,
 // scope, lifecycle and history; only trusted startup code owns this capability.
 func NewDatabaseRuntime(active, draining *PreparedOIDC, activatedAt, deadline time.Time) (*Runtime, error) {
-	if active == nil || !active.binding.MatchesDatabase(active.binding) || activatedAt.IsZero() || activatedAt.After(time.Now()) || deadline.Before(activatedAt) || deadline.After(activatedAt.Add(30*time.Minute)) {
+	if active == nil || !active.binding.MatchesDatabase(active.binding) || activatedAt.IsZero() || deadline.Before(activatedAt) || deadline.After(activatedAt.Add(30*time.Minute)) {
 		return nil, ErrRuntimeConflict
 	}
 	if draining != nil {

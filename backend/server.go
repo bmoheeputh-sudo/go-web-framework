@@ -22,8 +22,9 @@ import (
 
 type application struct {
 	*http.Server
-	closeResources func()
-	authProvider   auth.Provider
+	closeResources        func()
+	authProvider          auth.Provider
+	synchronizationStatus func() authconfig.SynchronizationStatus
 }
 
 // newServer validates configuration before opening a listener. Unset authentication
@@ -62,7 +63,11 @@ func newServerWithPolicy(getenv func(string) string, policy func(func(string) st
 		return nil, err
 	}
 	var runtime *auth.Runtime
+	var synchronization *authconfig.Synchronizer
 	defer func() {
+		if result == nil && synchronization != nil {
+			synchronization.Close()
+		}
 		if result == nil && runtime != nil {
 			runtime.Close()
 		}
@@ -225,6 +230,24 @@ func newServerWithPolicy(getenv func(string) string, policy func(func(string) st
 			return nil, err
 		}
 	}
+	if pool != nil {
+		scope, err := authconfig.ScopeFromEnv(getenv)
+		if err != nil {
+			return nil, err
+		}
+		reader, err := authconfig.NewActivationReader(pool, scope)
+		if err != nil {
+			return nil, err
+		}
+		synchronization, err = authconfig.NewSynchronizerFromEnv(reader, runtime, getenv)
+		if err != nil {
+			return nil, err
+		}
+		if err = synchronization.Start(context.Background()); err != nil {
+			return nil, errors.New("authentication synchronization startup failed")
+		}
+		status, _, _ = runtime.ControlStatus()
+	}
 	handler, err := newHandlerWithModules(runtime, authorization, origin, registry)
 	if err != nil {
 		closeResources()
@@ -235,7 +258,17 @@ func newServerWithPolicy(getenv func(string) string, policy func(func(string) st
 	// it must not disable the existing environment-configured login provider.
 	configRepository, _ := authconfig.RepositoryFromEnv(authorization, getenv)
 	authconfig.Register(handler.ServeMux, runtime, authorization, origin, configRepository, runtime.Status)
-	return &application{authProvider: status.Provider, closeResources: func() { runtime.Close(); closeResources() }, Server: &http.Server{
+	var syncStatus func() authconfig.SynchronizationStatus
+	if synchronization != nil {
+		syncStatus = synchronization.Status
+	}
+	return &application{synchronizationStatus: syncStatus, authProvider: status.Provider, closeResources: func() {
+		if synchronization != nil {
+			synchronization.Close()
+		}
+		runtime.Close()
+		closeResources()
+	}, Server: &http.Server{
 		Addr: address, Handler: handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second, WriteTimeout: 30 * time.Second,

@@ -1,8 +1,9 @@
 > Startup follow-up: read-only database rehydration now implements committed-head
 > loading, historical-key selection and recorded-deadline restoration. See the
 > [current startup and lifecycle design](auth-controlled-activation.md#read-only-startup-rehydration-and-lifecycle-hardening).
-> The dated findings below describe earlier phases; multi-instance synchronization
-> and emergency recovery remain outstanding.
+> Phase 9.2.5F now adds LISTEN/NOTIFY reconciliation and database-time admission
+> checks. The dated findings below describe earlier phases; emergency recovery
+> and the operator activation workflow remain outstanding.
 
 # Phase 9.2.5C focused review — commit 52d81ff
 

@@ -2035,8 +2035,9 @@ forward-only version-5 history is never discarded.
 ## Authentication activation persistence (Phase 9.2.5B)
 
 Phase 9.2.5C adds a [request-consistent runtime dispatcher](docs/auth-runtime-dispatcher.md).
-Runtime authentication remains environment-driven; no provider activation,
-switching or multi-instance synchronization is enabled.
+Later Phase 9.2.5 work adds internal controlled OIDC activation, startup
+rehydration and multi-instance reconciliation. No public activation or rollback
+endpoint is enabled, so operators cannot switch providers through the application.
 
 Migration 000006 adds deployment activation heads, immutable transition history,
 durable test evidence and explicit session/flow bindings. It creates no active
@@ -2077,9 +2078,26 @@ readiness tests, transactional activation, bounded draining, transport cleanup a
 recovery through a fresh immutable revision. There are no activation or rollback
 HTTP endpoints, and the existing portal cannot switch providers. No new migration
 is needed. Startup restores the committed generation and any still-permitted
-draining provider without extending deadlines or modifying history. Multi-instance
-reconciliation and offline recovery remain blockers before any live activation.
+draining provider without extending deadlines or modifying history. PostgreSQL
+LISTEN/NOTIFY now reconciles committed changes across instances, with authoritative
+SQL admission checks during synchronization failures. Offline recovery and the
+operator rollout workflow remain blockers before live activation.
 See the guide for startup limits and the optional `AUTH_ENCRYPTION_KEYS_JSON` keyring.
+
+## Authentication synchronization (Phase 9.2.5F)
+
+Each instance subscribes on a dedicated PostgreSQL connection before reconciliation,
+then waits for transaction-scoped activation notifications. Reconnects reconcile
+again; there is no continuous configuration polling. Notifications contain only
+scope and a generation hint. Verified database state remains authoritative.
+
+The listener preserves the last verified snapshot on temporary failure, while
+session/flow SQL and environment admission checks prevent stale-provider bypasses.
+Initial cutover still requires reauthentication; later drains retain their recorded
+maximum thirty-minute deadline. IAP remains infrastructure-controlled. See the
+[listener, failure policy, internal status and clock requirements](docs/auth-controlled-activation.md#event-driven-multi-instance-synchronization-phase-925f).
+Allow one additional session-affine PostgreSQL connection per instance. There are
+still no public activation or rollback endpoints, and no migration is needed.
 
 ## Backup to GitHub and Google Drive
 
