@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/access"
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/auth"
 	"github.com/jackc/pgx/v5"
 )
@@ -102,6 +103,9 @@ func (l *StartupLoader) read(ctx context.Context) (startupState, error) {
 			}
 		}
 	}
+	if err := access.CheckOIDCAdministrator(ctx, tx, scope.DeploymentID, scope.Environment, s.active.metadata.IssuerURL); err != nil {
+		return startupState{}, err
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return startupState{}, ErrUnavailable
 	}
@@ -119,6 +123,7 @@ func (l *StartupLoader) Load(ctx context.Context) (*auth.Runtime, error) {
 	if err != nil {
 		return nil, ErrInvalid
 	}
+	store = store.WithAccessPolicy(access.New(l.reader.pool).OIDCAdmission(l.reader.scope.DeploymentID, l.reader.scope.Environment))
 	prepare := func(r startupRevision, generation int64) (*auth.PreparedOIDC, error) {
 		secret, err := l.cipher.open(r.metadata, r.encrypted)
 		if err != nil {

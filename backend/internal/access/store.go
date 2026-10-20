@@ -116,7 +116,8 @@ func (s *Store) lookup(ctx context.Context, identity auth.Identity) (User, error
 	return u, nil
 }
 
-// Resolve registers/refreshes only through the authenticated self endpoint.
+// Resolve is a trusted identity registration helper; the HTTP self endpoint
+// uses it only for environment Local DEV. Normal OIDC uses OIDCAdmission.
 // It never updates an inactive user, roles, or account links. The identity comes
 // from auth.Require, never a request body.
 func (s *Store) Resolve(ctx context.Context, identity auth.Identity) (User, error) {
@@ -165,7 +166,7 @@ func (s *Store) allowed(ctx context.Context, q querier, userID, permission, acco
 	if !ok {
 		return ErrDenied
 	}
-	return nil
+	return policyPrincipal(ctx, q, userID)
 }
 func (s *Store) Allowed(ctx context.Context, id, permission, accountID string) error {
 	return s.allowed(ctx, s.pool, id, permission, accountID)
@@ -302,7 +303,7 @@ func lastAdminGuard(ctx context.Context, tx pgx.Tx) error {
 	if !exists {
 		return ErrConflict
 	}
-	return nil
+	return guardActiveOIDCPolicies(ctx, tx)
 }
 func (s *Store) SetRoles(ctx context.Context, actor, target string, roles []string) error {
 	if !validID(target) || len(roles) > 3 {
@@ -364,6 +365,11 @@ func (s *Store) SetActive(ctx context.Context, actor, target string, active bool
 		}
 		if err := lastAdminGuard(ctx, tx); err != nil {
 			return err
+		}
+		if !active {
+			if _, err := tx.Exec(ctx, `DELETE FROM framework.sessions s USING framework.users u WHERE u.id=$1 AND s.issuer=u.issuer AND s.subject=u.subject`, target); err != nil {
+				return ErrUnavailable
+			}
 		}
 		return audit(ctx, tx, actor, "user.active", target, map[string]bool{"before": before, "after": active})
 	})

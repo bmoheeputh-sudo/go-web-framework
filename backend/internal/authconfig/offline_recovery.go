@@ -215,6 +215,9 @@ func (s *RecoveryService) Recover(ctx context.Context, operator *OfflineOperator
 		if c.target.Generation != p.metadata.Generation || c.target.Settings != p.metadata.Settings || c.source.ID != p.source.ID || c.head.ActiveRevisionID != p.previous {
 			return ErrConflict
 		}
+		if err := access.CheckOIDCAdministrator(ctx, tx, c.target.DeploymentID, c.target.Environment, c.target.IssuerURL); err != nil {
+			return ErrLastOIDCAdministrator
+		}
 		_, err = tx.Exec(ctx, `INSERT INTO framework.auth_recovery_audit(id,deployment_id,environment,generation,target_revision_id,recovery_revision_id,operator_id,authorization_key_id,authorization_format,authorization_key_fingerprint,authorization_nonce,authorization_tag,reason)
  VALUES($1,$2,$3,$4,$5,$6,$7,$8,1,$9,$10,$11,$12)`, eventID, c.target.DeploymentID, c.target.Environment, p.expected+1, c.target.ID, c.source.ID, operator.id, operator.keyID, operator.fingerprint[:], authorization.nonce, authorization.tag, p.reason)
 		if err != nil {
@@ -255,7 +258,7 @@ func (s *RecoveryService) Recover(ctx context.Context, operator *OfflineOperator
 }
 
 func mapRecoveryError(err error) error {
-	for _, known := range []error{ErrInvalid, ErrDenied, ErrConflict, ErrNotFound, ErrSecret, ErrCrypto, ErrAudit, ErrTimeout, ErrCanceled} {
+	for _, known := range []error{ErrInvalid, ErrDenied, ErrConflict, ErrNotFound, ErrSecret, ErrCrypto, ErrAudit, ErrTimeout, ErrCanceled, ErrLastOIDCAdministrator} {
 		if errors.Is(err, known) {
 			return known
 		}

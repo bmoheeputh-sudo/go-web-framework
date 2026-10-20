@@ -46,6 +46,10 @@ func newSecurityFixture(t *testing.T) *securityFixture {
 	f := &securityFixture{store: New(runtime), owner: owner, identities: map[string]auth.Identity{}, users: map[string]User{}, accounts: map[string]Account{}}
 	for _, role := range []string{"Admin", "User", "Viewer", "None"} {
 		f.identities[role] = identity("security-" + role)
+		// RBAC fixtures are explicitly provisioned; /api/access/me is now read-only for OIDC.
+		if _, err := f.store.Resolve(context.Background(), f.identities[role]); err != nil {
+			t.Fatal(err)
+		}
 		response := f.request(role, "GET", "/api/access/me", nil)
 		requireStatus(t, response, 200)
 		var u User
@@ -174,6 +178,7 @@ func TestRBACDeniedRequestsAreReadOnly(t *testing.T) {
 	t.Run("unregistered identity cannot create records through a denied route", func(t *testing.T) {
 		before := f.snapshot(t)
 		requireStatus(t, call(f.store, identity("not-registered"), "GET", "/api/admin/users", "", origin), 403)
+		requireStatus(t, call(f.store, identity("not-registered"), "GET", "/api/access/me", "", origin), 403)
 		f.assertUnchanged(t, before)
 	})
 	t.Run("inactive user cannot refresh profile through self endpoint", func(t *testing.T) {

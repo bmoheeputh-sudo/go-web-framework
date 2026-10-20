@@ -163,7 +163,10 @@ func (r *Repository) transaction(ctx context.Context, fn func(context.Context, p
 func adminTransaction(ctx context.Context, store *access.Store, fn func(context.Context, pgx.Tx, access.User) error) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	err := store.AdminTransaction(ctx, fn)
+	return repositoryError(ctx, store.AdminTransaction(ctx, fn))
+}
+
+func repositoryError(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
 	}

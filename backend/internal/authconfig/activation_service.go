@@ -64,6 +64,7 @@ func NewActivationService(repo *Repository, runtime *auth.Runtime, store *auth.P
 	if mismatch || (status.Provider != auth.OIDC && status.Provider != auth.LocalDev) || status.DeploymentID != repo.scope.DeploymentID || status.Environment != repo.scope.Environment {
 		return nil, ErrDenied
 	}
+	store = store.WithAccessPolicy(repo.access.OIDCAdmission(repo.scope.DeploymentID, repo.scope.Environment))
 	return &ActivationService{repo: repo, runtime: runtime, store: store, sessions: sessions, callback: callback,
 		client: newTestClient, transaction: repo.transaction}, nil
 }
@@ -265,6 +266,9 @@ func (s *ActivationService) Activate(ctx context.Context, p *PreparedActivation,
 		}
 		if !evidenceOK {
 			return ErrDenied
+		}
+		if err := access.CheckOIDCAdministratorIdentity(ctx, tx, m.DeploymentID, m.Environment, m.IssuerURL, request.EnrolledUserID); err != nil {
+			return ErrLastOIDCAdministrator
 		}
 		var recovery string
 		// Recovery provenance is created atomically with the immutable recovery draft.

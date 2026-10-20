@@ -26,6 +26,9 @@ func (s *databaseBoundStore) args(token string, second any) []any {
 	return []any{tokenHash(token), second, b.DeploymentID, b.Environment, b.RevisionID, b.ActivationGeneration, b.Issuer, b.ClientID}
 }
 func (s *databaseBoundStore) identity(ctx context.Context, token string) (Identity, error) {
+	if s.base.policy != nil {
+		return s.base.policySession(ctx, token, s)
+	}
 	if !validToken(token) {
 		return Identity{}, ErrUnauthenticated
 	}
@@ -54,6 +57,9 @@ func (s *databaseBoundStore) identity(ctx context.Context, token string) (Identi
 	return identity, nil
 }
 func (s *databaseBoundStore) addSession(ctx context.Context, identity Identity, expires time.Time, previous string) (string, error) {
+	if s.base.policy != nil {
+		return s.base.policyLogin(ctx, identity, expires, previous, s)
+	}
 	deadline, ok := s.lease.deadline(false)
 	if !ok || identity.Validate() != nil || identity.Provider != OIDC || identity.Issuer != s.binding.Issuer {
 		return "", ErrUnauthenticated

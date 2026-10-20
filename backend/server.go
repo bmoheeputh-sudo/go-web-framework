@@ -100,7 +100,7 @@ func newServerWithPolicy(getenv func(string) string, policy func(func(string) st
 		}
 		runtime, err = authconfig.StartupRuntimeFromEnv(context.Background(), reader, getenv)
 		if err != nil {
-			return nil, errors.New("authentication runtime startup failed; verify authoritative policy, credentials and provider availability")
+			return nil, errors.New("authentication runtime startup failed; verify access-policy bootstrap, authoritative activation policy, credentials and provider availability")
 		}
 		if runtime != nil {
 			if err := access.ValidateOrigin(origin, getenv("APP_ENV")); err != nil {
@@ -172,6 +172,15 @@ func newServerWithPolicy(getenv func(string) string, policy func(func(string) st
 				pool.Close()
 				return nil, err
 			}
+			scope, scopeErr := authconfig.ScopeFromEnv(getenv)
+			if scopeErr != nil {
+				return nil, scopeErr
+			}
+			admission := access.New(pool).OIDCAdmission(scope.DeploymentID, scope.Environment)
+			if err := admission.CheckStartup(context.Background(), config.Issuer); err != nil {
+				return nil, errors.New("OIDC access policy unavailable or not bootstrapped; initialize policy with a verified existing administrator before enforcement")
+			}
+			store = store.WithAccessPolicy(admission)
 			oidcProvider, err := auth.NewOIDC(context.Background(), config, store)
 			if err != nil {
 				pool.Close()

@@ -75,6 +75,7 @@ func activationReadiness(t *testing.T, f *fixture, m Metadata, existingUser stri
 			t.Fatal(err)
 		}
 	})
+	seedAdmissionPolicy(t, f, m.IssuerURL, "enrolled-admin", userID)
 	return ActivationRequest{IsolatedEvidenceID: isolated.ID, NormalEvidenceID: normal.ID, EnrolledUserID: userID, Reason: "synthetic approved activation", AcknowledgeReauthentication: true, AcknowledgeEmergencyRecovery: true}, userID
 }
 func prepareActivation(t *testing.T, f *fixture, s *ActivationService, m Metadata, expected int64) *PreparedActivation {
@@ -724,5 +725,19 @@ func TestEnvironmentOIDCReadinessRequiresReauthentication(t *testing.T) {
 	info := p.Readiness()
 	if info.CurrentProvider != auth.OIDC || info.CurrentSource != "environment" || !info.RequiresReauthentication || info.MaximumSessionGrace != 0 {
 		t.Fatal("matching environment OIDC hides first-cutover reauthentication", info)
+	}
+}
+
+// Tests predating access-policy enforcement explicitly install policy in their
+// disposable cluster; production must use the audited bootstrap command.
+func seedAdmissionPolicy(t *testing.T, f *fixture, issuer, subject, actor string) {
+	t.Helper()
+	if _, err := f.owner.Exec(context.Background(), `INSERT INTO framework.oidc_access_policies(deployment_id,environment,mode,default_role,created_by,updated_by,reason)
+ VALUES($1,$2,'allow_all','Viewer',$3,$3,'synthetic fixture policy') ON CONFLICT DO NOTHING`, f.repo.scope.DeploymentID, f.repo.scope.Environment, actor); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.owner.Exec(context.Background(), `INSERT INTO framework.oidc_identity_approvals(deployment_id,environment,issuer,subject,status,source,created_by,updated_by,reason)
+ VALUES($1,$2,$3,$4,'approved','administrator',$5,$5,'synthetic fixture approval') ON CONFLICT DO NOTHING`, f.repo.scope.DeploymentID, f.repo.scope.Environment, issuer, subject, actor); err != nil {
+		t.Fatal(err)
 	}
 }

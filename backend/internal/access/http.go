@@ -92,7 +92,7 @@ func (s *Store) identify(register bool, next http.Handler) http.Handler {
 		defer cancel()
 		var u User
 		var err error
-		if register {
+		if register && identity.Provider == auth.LocalDev {
 			u, err = s.Resolve(ctx, identity)
 		} else {
 			u, err = s.lookup(ctx, identity)

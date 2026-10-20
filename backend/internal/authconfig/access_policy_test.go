@@ -279,7 +279,7 @@ func TestAccessPolicyAuthorizationAndAuditRollback(t *testing.T) {
 		if _, err = f.owner.Exec(ctx, `INSERT INTO framework.role_permissions VALUES('Viewer','admin.manage')`); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := r.Update(ctx, PolicyExpectation{1, 1}, policySettings(), "unsafe default role selection"); !errors.Is(err, ErrInvalid) {
+		if _, err := r.Update(ctx, PolicyExpectation{1, 1}, policySettings(), "unsafe default role selection"); !errors.Is(err, ErrUnavailable) {
 			t.Fatal("effective admin default role allowed", err)
 		}
 		if _, err = f.owner.Exec(ctx, `DELETE FROM framework.role_permissions WHERE role='Viewer' AND permission='admin.manage'`); err != nil {
@@ -539,6 +539,11 @@ func TestAccessPolicyNonAdministratorDenied(t *testing.T) {
 			if _, err := f.owner.Exec(context.Background(), `INSERT INTO framework.user_roles VALUES($1,$2)`, u.ID, role); err != nil {
 				t.Fatal(err)
 			}
+			f.run(t, func(ctx context.Context) {
+				if _, err := repo.SetApproval(ctx, PolicyExpectation{1, 1}, OIDCIdentityKey{identity.Issuer, identity.Subject}, 0, "approved", "approve synthetic non-admin"); err != nil {
+					t.Fatal(err)
+				}
+			})
 			called := false
 			h := auth.Require(fixedAuth{identity}, f.store.Require(access.AccountRead, "", http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 				called = true

@@ -19,8 +19,9 @@ type sessionDB interface {
 }
 
 type PostgresStore struct {
-	db   sessionDB
-	idle time.Duration
+	db     sessionDB
+	idle   time.Duration
+	policy OIDCAccessPolicy
 }
 
 func NewPostgresStore(db sessionDB, config SessionConfig) (*PostgresStore, error) {
@@ -46,6 +47,9 @@ func validToken(token string) bool {
 // Rotation is atomic: an insert failure rolls back deletion of the old session.
 // Only hashes, never raw cookie values, reach PostgreSQL.
 func (s *PostgresStore) addSession(ctx context.Context, identity Identity, expires time.Time, previous string) (string, error) {
+	if s.policy != nil {
+		return s.policyLogin(ctx, identity, expires, previous, nil)
+	}
 	if identity.Validate() != nil || identity.Provider != OIDC || !time.Now().Before(expires) {
 		return "", errors.New("invalid session")
 	}
@@ -68,6 +72,9 @@ func (s *PostgresStore) addSession(ctx context.Context, identity Identity, expir
 // Check expiration and touch activity atomically. A deleted row cannot be
 // resurrected by a concurrent lookup. PostgreSQL supplies the activity clock.
 func (s *PostgresStore) identity(ctx context.Context, token string) (Identity, error) {
+	if s.policy != nil {
+		return s.policySession(ctx, token, nil)
+	}
 	if !validToken(token) {
 		return Identity{}, ErrUnauthenticated
 	}

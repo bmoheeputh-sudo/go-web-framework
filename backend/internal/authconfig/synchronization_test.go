@@ -357,6 +357,7 @@ func TestSlowPreparationCannotPublishStaleGeneration(t *testing.T) {
 
 func TestSynchronizationFailureDoesNotFallback(t *testing.T) {
 	f, service, provider, m := activationServiceFixture(t)
+	activationReadiness(t, f, m, "") // Explicit policy/eligible administrator in this synthetic deployment.
 	syncer, runtime := subscriberFixture(t, f, service, provider)
 	if err := syncer.Start(context.Background()); err != nil {
 		t.Fatal(err)

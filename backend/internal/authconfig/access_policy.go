@@ -3,7 +3,6 @@ package authconfig
 import (
 	"context"
 	"errors"
-	"net/mail"
 	"net/url"
 	"regexp"
 	"slices"
@@ -60,7 +59,7 @@ type PolicyExpectation struct {
 }
 
 // AccessPolicyRepository is an internal, administrator-authorized storage
-// capability. It is deliberately NOT used by authentication or session issuance.
+// capability. Runtime admission uses the same persisted policy through access.
 // Scope is supplied by trusted server configuration, never request JSON.
 type AccessPolicyRepository struct {
 	store *access.Store
@@ -114,21 +113,9 @@ func (key OIDCIdentityKey) valid() bool {
 	return err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && u.RawQuery == "" && !u.ForceQuery && u.Fragment == ""
 }
 
-// This only protects administrative policy writes using last verified claims.
-// Future login admission must evaluate the freshly verified ID-token claims.
+// Shared exact-domain semantics for administration and runtime admission.
 func policyEmailAllowed(domains []string, email string, verified bool) bool {
-	if len(domains) == 0 {
-		return true
-	}
-	if !verified {
-		return false
-	}
-	a, err := mail.ParseAddress(email)
-	if err != nil || a.Address != email || a.Name != "" {
-		return false
-	}
-	_, domain, ok := strings.Cut(email, "@")
-	return ok && slices.Contains(domains, strings.ToLower(domain))
+	return access.EmailDomainAllowed(domains, email, verified)
 }
 
 const policySelect = `SELECT mode,allowed_email_domains,default_role,generation,created_by::text,created_at,updated_by::text,updated_at,reason
@@ -184,36 +171,12 @@ func policyRoleAllowed(ctx context.Context, tx pgx.Tx, role string) error {
 	return nil
 }
 
-func (r *AccessPolicyRepository) guardAdministrator(ctx context.Context, tx pgx.Tx, p AccessPolicy, issuer string) error {
-	rows, err := tx.Query(ctx, `SELECT u.email,u.email_verified FROM framework.users u
- WHERE u.active AND u.provider='oidc' AND u.issuer COLLATE "C"=$3 COLLATE "C"
- AND EXISTS(SELECT 1 FROM framework.user_roles ur JOIN framework.role_permissions rp ON rp.role=ur.role
-            WHERE ur.user_id=u.id AND rp.permission='admin.manage')
- AND NOT EXISTS(SELECT 1 FROM framework.oidc_identity_approvals a
-   WHERE a.deployment_id=$1 AND a.environment=$2 AND a.issuer=u.issuer COLLATE "C"
-     AND a.subject=u.subject COLLATE "C" AND a.status='revoked')
- AND ($4='allow_all' OR EXISTS(SELECT 1 FROM framework.oidc_identity_approvals a
-   WHERE a.deployment_id=$1 AND a.environment=$2 AND a.issuer=u.issuer COLLATE "C"
-     AND a.subject=u.subject COLLATE "C" AND a.status='approved'))`,
-		r.scope.DeploymentID, r.scope.Environment, issuer, p.Mode)
-	if err != nil {
-		return err
+func (r *AccessPolicyRepository) guardAdministrator(ctx context.Context, tx pgx.Tx, _ AccessPolicy, issuer string) error {
+	err := access.CheckOIDCAdministrator(ctx, tx, r.scope.DeploymentID, r.scope.Environment, issuer)
+	if errors.Is(err, access.ErrPolicyNotReady) {
+		return ErrLastOIDCAdministrator
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var email string
-		var verified bool
-		if err := rows.Scan(&email, &verified); err != nil {
-			return err
-		}
-		if policyEmailAllowed(p.AllowedEmailDomains, email, verified) {
-			return nil
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	return ErrLastOIDCAdministrator
+	return err
 }
 
 func policyAudit(ctx context.Context, tx pgx.Tx, actor access.User, scope Scope, action string, details any) error {
@@ -231,47 +194,72 @@ func (r *AccessPolicyRepository) Bootstrap(ctx context.Context, activationGenera
 	if err != nil || !validPolicyReason(reason) {
 		return AccessPolicy{}, ErrInvalid
 	}
+	identity, ok := auth.IdentityFromContext(ctx)
+	if !ok {
+		return AccessPolicy{}, ErrDenied
+	}
 	var result AccessPolicy
 	err = adminTransaction(ctx, r.store, func(ctx context.Context, tx pgx.Tx, actor access.User) error {
-		issuer, err := r.activeIssuer(ctx, tx, activationGeneration)
-		if err != nil {
-			return err
-		}
-		identity, ok := auth.IdentityFromContext(ctx)
-		if !ok || identity.Provider != auth.OIDC || actor.Provider != string(auth.OIDC) || actor.Issuer != issuer ||
-			!(OIDCIdentityKey{issuer, actor.Subject}).valid() {
-			return ErrDenied
-		}
-		if err = policyRoleAllowed(ctx, tx, settings.DefaultRole); err != nil {
-			return err
-		}
-		_, err = tx.Exec(ctx, `INSERT INTO framework.oidc_access_policies
- (deployment_id,environment,mode,allowed_email_domains,default_role,created_by,updated_by,reason)
- VALUES($1,$2,$3,$4,$5,$6,$6,$7)`, r.scope.DeploymentID, r.scope.Environment, settings.Mode, settings.AllowedEmailDomains, settings.DefaultRole, actor.ID, reason)
-		if err != nil {
-			return err
-		}
-		key := OIDCIdentityKey{issuer, actor.Subject}
-		approval, err := r.writeApproval(ctx, tx, actor, key, 0, "approved", "bootstrap", reason)
-		if err != nil {
-			return err
-		}
-		result, err = r.read(ctx, tx)
-		if err != nil {
-			return err
-		}
-		if err = r.guardAdministrator(ctx, tx, result, issuer); err != nil {
-			return err
-		}
-		if err = policyAudit(ctx, tx, actor, r.scope, "oidc_access.identity_bootstrapped", approval); err != nil {
-			return err
-		}
-		return policyAudit(ctx, tx, actor, r.scope, "oidc_access.policy_bootstrapped", result)
+		return r.bootstrap(ctx, tx, actor, identity, activationGeneration, settings, reason, &result)
 	})
 	if err != nil {
 		return AccessPolicy{}, err
 	}
 	return result, nil
+}
+
+// BootstrapSession is offline-only. It verifies an existing current bound OIDC
+// session under the same lock as bootstrap; callers cannot supply an actor ID.
+func (r *AccessPolicyRepository) BootstrapSession(ctx context.Context, token string, activationGeneration int64, idle time.Duration, settings AccessPolicySettings, reason string) (AccessPolicy, error) {
+	settings, err := normalizePolicy(settings)
+	if err != nil || !validPolicyReason(reason) {
+		return AccessPolicy{}, ErrInvalid
+	}
+	var result AccessPolicy
+	err = r.store.PolicyBootstrapTransaction(ctx, token, r.scope.DeploymentID, r.scope.Environment, activationGeneration, idle,
+		func(ctx context.Context, tx pgx.Tx, actor access.User, identity auth.Identity) error {
+			return r.bootstrap(ctx, tx, actor, identity, activationGeneration, settings, reason, &result)
+		})
+	if err != nil {
+		return AccessPolicy{}, repositoryError(ctx, err)
+	}
+	return result, nil
+}
+
+func (r *AccessPolicyRepository) bootstrap(ctx context.Context, tx pgx.Tx, actor access.User, identity auth.Identity, activationGeneration int64, settings AccessPolicySettings, reason string, result *AccessPolicy) error {
+	issuer, err := r.activeIssuer(ctx, tx, activationGeneration)
+	if err != nil {
+		return err
+	}
+	if identity.Provider != auth.OIDC || actor.Provider != string(auth.OIDC) || actor.Issuer != issuer ||
+		!(OIDCIdentityKey{issuer, actor.Subject}).valid() {
+		return ErrDenied
+	}
+	if err = policyRoleAllowed(ctx, tx, settings.DefaultRole); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO framework.oidc_access_policies
+ (deployment_id,environment,mode,allowed_email_domains,default_role,created_by,updated_by,reason)
+ VALUES($1,$2,$3,$4,$5,$6,$6,$7)`, r.scope.DeploymentID, r.scope.Environment, settings.Mode, settings.AllowedEmailDomains, settings.DefaultRole, actor.ID, reason)
+	if err != nil {
+		return err
+	}
+	key := OIDCIdentityKey{issuer, actor.Subject}
+	approval, err := r.writeApproval(ctx, tx, actor, key, 0, "approved", "bootstrap", reason)
+	if err != nil {
+		return err
+	}
+	*result, err = r.read(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if err = r.guardAdministrator(ctx, tx, *result, issuer); err != nil {
+		return err
+	}
+	if err = policyAudit(ctx, tx, actor, r.scope, "oidc_access.identity_bootstrapped", approval); err != nil {
+		return err
+	}
+	return policyAudit(ctx, tx, actor, r.scope, "oidc_access.policy_bootstrapped", *result)
 }
 
 func (r *AccessPolicyRepository) Update(ctx context.Context, expected PolicyExpectation, settings AccessPolicySettings, reason string) (AccessPolicy, error) {
@@ -310,6 +298,9 @@ func (r *AccessPolicyRepository) Update(ctx context.Context, expected PolicyExpe
 			return err
 		}
 		if err = r.guardAdministrator(ctx, tx, result, issuer); err != nil {
+			return err
+		}
+		if err = access.RevokeIneligibleOIDCSessions(ctx, tx, r.scope.DeploymentID, r.scope.Environment); err != nil {
 			return err
 		}
 		return policyAudit(ctx, tx, actor, r.scope, "oidc_access.policy_updated", struct {
@@ -434,6 +425,11 @@ func (r *AccessPolicyRepository) SetApproval(ctx context.Context, expected Polic
 		}
 		if err = r.guardAdministrator(ctx, tx, p, issuer); err != nil {
 			return err
+		}
+		if status == "revoked" {
+			if _, err := tx.Exec(ctx, `DELETE FROM framework.sessions WHERE issuer=$1 AND subject=$2 AND provider='oidc'`, key.Issuer, key.Subject); err != nil {
+				return err
+			}
 		}
 		return policyAudit(ctx, tx, actor, r.scope, "oidc_access.approval_changed", struct {
 			Before *OIDCIdentityApproval `json:"before"`

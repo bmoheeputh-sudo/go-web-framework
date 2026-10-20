@@ -273,11 +273,13 @@ subsequent sign-in may reuse the provider's existing session.
 
 ### Database setup and manual migrations
 
-Migration 000008 adds the [OIDC access policy storage foundation](docs/oidc-access-policy.md).
-It creates no policy or approval automatically and does not change login, session
-issuance, RBAC grants or active authentication. Existing authentication remains
-compatible with schema 7; only the new internal policy repository requires 8.
-Initialization is an explicit, audited action by an existing OIDC administrator.
+Migration 000008 supplies [OIDC access policy enforcement](docs/oidc-access-policy.md).
+It creates no policy or approval automatically. This release requires migration 8
+and explicit policy bootstrap before OIDC startup: follow the documented
+offline `bootstrap-access-policy` rollout using an existing database-bound OIDC
+administrator session **before restarting with enforcement**. Login provisioning
+and all OIDC session use now enforce that policy; no roles or provider are
+changed automatically during rollout. Missing policy fails closed.
 The database still supports one security deployment, not multi-tenant RBAC.
 
 The pool defaults to 10 maximum connections, no minimum, a 30-minute connection
@@ -429,10 +431,10 @@ Do not add permissive CORS middleware. React sends same-origin requests.
 authenticated requests, granting no access. PostgreSQL is always required for
 the startup policy check. When RBAC is enabled, missing RBAC tables also stop
 startup. Policy checks, OIDC sessions and authorization reuse the same pool.
-`/api/health`, `/api/auth/me`, and OIDC callbacks and sessions retain their
-existing behavior. Disabling a framework
-user denies RBAC access immediately, but does not revoke their external identity
-or invalidate `/api/auth/me` authentication responses.
+`/api/health` remains public. OIDC callbacks and all session-authenticated
+requests, including `/api/auth/me`, now enforce the scoped access policy.
+Disabling a framework user revokes their application sessions and denies
+subsequent login; it does not revoke the external identity provider's session.
 
 ### Model and permission policy
 
@@ -441,13 +443,14 @@ Migration `000004_rbac_accounts.up.sql` adds `framework.users`, `roles`,
 `audit_log`, and the one-time `admin_bootstrap` marker. Existing migrations
 000001–000003, authentication tables, and `public.schema_migrations` are unchanged.
 
-A user is registered or their profile refreshed only when a verified, active
-identity accesses `GET /api/access/me` from the dashboard. Permission checks on
-other RBAC endpoints are read-only; denied requests do not create users or refresh
-profiles/timestamps, and inactive users cannot refresh through the self endpoint.
+A new OIDC user is provisioned only after verified normal login and policy
+authorization, atomically with a configured non-admin Viewer/User role, audit
+event and session. Existing users retain their roles. `/api/access/me` is
+read-only for OIDC; trusted development Local DEV still registers a role-free
+user there. Denied login never provisions or reactivates a user.
 The unique key is **issuer + subject**;
-email is profile data and never links identities. Registration and profile refresh
-assign no roles or accounts. Administrators cannot create a claimed identity by
+email is an eligibility attribute and profile data, never an identity link.
+Profile refresh assigns no roles or accounts. Administrators cannot create a claimed identity by
 email, edit issuer/subject, or merge identities through the API. Accounts are plain
 named records with stable UUIDs and an active flag, without provider credentials,
 delegation, ingestion, or login functionality. One user can link to multiple
@@ -510,9 +513,13 @@ routine administrator reset mechanism. Never use unbounded `down` on a live DB.
 
 ### Secure one-time administrator bootstrap
 
-There is no default administrator and no HTTP bootstrap endpoint. First enable
-RBAC, authenticate as the intended administrator through the selected provider,
-and open the dashboard so `/api/access/me` registers the verified identity.
+There is no default administrator and no HTTP bootstrap endpoint. The following
+one-time role bootstrap remains available for a fresh Local DEV development
+installation. First enable RBAC and open the dashboard so `/api/access/me`
+registers the trusted Local DEV identity. OIDC self-registration no longer occurs
+through that endpoint: an existing active OIDC deployment must first follow
+the [access-policy rollout](docs/oidc-access-policy.md). Fresh first-cutover OIDC
+policy bootstrap remains a documented blocker; this command does not bypass it.
 Inspect that authenticated `/api/auth/me` response and independently confirm its
 exact issuer and stable subject belong to the intended administrator. Do not
 substitute an email address or copy identity headers from an untrusted request.
@@ -551,7 +558,7 @@ status, and API changes cannot eliminate the last active administrator.
 
 | Endpoint | Access / operation |
 | --- | --- |
-| `GET /api/access/me` | Authenticated active user; own framework ID, roles, permissions and account IDs. Registers a role-free user if new. |
+| `GET /api/access/me` | Authenticated active user; own framework ID, roles, permissions and account IDs. Read-only for OIDC; registers a new role-free Local DEV user only. |
 | `GET /api/accounts` | `accounts.read`; linked active accounts only. |
 | `GET /api/accounts/{account}` | `accounts.read` plus explicit account link. |
 | `PATCH /api/accounts/{account}` | `accounts.write` plus explicit account link; JSON `{ "name": "New name" }`. |

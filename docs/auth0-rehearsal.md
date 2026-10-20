@@ -1,5 +1,13 @@
 # Isolated Local DEV to Auth0 rehearsal
 
+**Phase 10.2C compatibility:** this historical schema-7 rehearsal cannot complete
+first activation with the new policy-enforcing backend. OIDC now requires
+migration 000008, an initialized policy and an eligible approved administrator.
+The current policy bootstrap proves an already active database-bound OIDC
+administrator session; candidate-bound bootstrap for a fresh first cutover is
+still required. Do not bypass that guard or fabricate approval to continue this
+procedure. See [OIDC access policy rollout](oidc-access-policy.md).
+
 This procedure is for **development testing only**. It creates a new PostgreSQL
 database and a separate activation deployment. It neither copies the existing
 development authentication history nor changes its approved Auth0 Revision 2.

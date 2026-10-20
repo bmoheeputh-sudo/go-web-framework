@@ -1,158 +1,184 @@
-# OIDC access policy storage (Phase 10.2B)
+# OIDC access policy enforcement (Phase 10.2C)
 
-This phase adds **storage and internal administrator operations only**. It does
-not enforce a login policy, change callbacks, issue different sessions, grant
-roles, activate a provider, or add HTTP/UI controls. Current Auth0 OIDC, Local DEV,
-RBAC, sessions, enrollment and recovery continue using their existing behavior.
-An absent policy is not interpreted as either login mode by runtime code.
+Normal OIDC login now requires an explicitly initialized access policy. There is
+no default allow mode, startup bootstrap, automatic approval, or Local DEV
+fallback. This release adds no administrator UI or policy HTTP endpoints.
 
-## Deployment boundary
+## Deployment boundary and prerequisites
 
-**One security deployment per database is required.** Policy and approval rows
-carry the trusted deployment/environment scope, but users, roles, permissions and
-account associations are still global database records. Separate development,
-test and production databases; scoped policy rows do not provide multi-tenant
-RBAC isolation. Never take repository scope from HTTP request data.
+**One security deployment per PostgreSQL database is required.** Users, roles,
+permissions and account associations remain database-global. Policy and approval
+rows are deployment/environment-scoped; they are not multi-tenant isolation.
+Runtime admission rejects multiple policy scopes or another database-managed
+activation scope. Use separate databases for development, test and production.
+Scope comes only from `AUTH_CONFIG_DEPLOYMENT` and trusted `APP_ENV`.
 
-## Migration 000008
+Migration 000008 is required for OIDC enforcement. Migrations 000001–000008 are
+unchanged, and neither startup nor the new command applies migrations. Local DEV
+remains development-only and environment-controlled. Missing or unreadable policy,
+invalid default-role permissions, or absence of an eligible explicitly approved
+OIDC administrator prevents database OIDC startup/rehydration. It never selects
+an alternative provider. Already running instances fail closed on affected
+credential operations if policy cannot be read.
 
-`framework.oidc_access_policies` stores mode (`allow_all` or
-`approved_users_only`), canonical allowed email domains, default role (`Viewer`
-or `User`), optimistic generation, creator/modifier UUIDs, timestamps and reason.
-Its primary key is deployment/environment.
+## Safe rollout for an already active Auth0 deployment
 
-`framework.oidc_identity_approvals` stores exact, case-sensitive issuer/subject
-keys within that scope, status (`approved` or `revoked`), generation and
-administrator provenance. It references the scoped policy. An approval does not
-create a user, link by email, activate a disabled user, grant a role or constitute
-proof that an identity has authenticated. Pending invitations are **not**
-approvals; a future trusted invitation/CSV/SCIM adapter must resolve the verified
-issuer/subject and call an authorized write path. There is no parallel user
-database or email-merge capability. Future machine provisioning needs a separate
-authorization/attribution review; it must not fabricate an administrator context.
+Do not restart all instances with enforcement before bootstrap. Perform this
+sequence under an approved maintenance/change procedure; none is automatic:
 
-The migration creates no rows and changes no existing tables or grants. Primary
-keys serve scoped policy lookup, exact approval lookup and paginated
-issuer/subject listing. Foreign keys preserve administrator references. Triggers
-require generation 1 on insert and exactly +1 on updates, preserve identity and
-creation provenance, and refuse deletion/truncation. Revocation is retained;
-before/after audit records preserve change history. Migration files 000001–000007
-remain unchanged.
+1. Keep the previous release running with the existing database-managed OIDC
+   configuration. Confirm an independent login by an active, enrolled OIDC
+   administrator with effective `admin.manage`. Obtain a fresh **application
+   session cookie**, not an Auth0 access token or ID token, from that login.
+2. If necessary, separately review and apply the existing migration 000008 using
+   `scripts/migrate-framework.sh up`. Confirm the migration journal is clean.
+   No new migration is introduced here. For the optional separated production
+   roles, review the migration-8 grants in `database/scripts/production-roles.sql`
+   before rollout. The current single `go_web_app` owner is not least privilege.
+3. Read the authoritative activation generation through the existing protected
+   activation-status endpoint. Choose the mode, default Viewer/User role, and
+   optional exact domains explicitly. Check the administrator's verified email
+   against those domains; an Admin role never bypasses domain eligibility.
+4. Build the offline bootstrap command from this release. Run it with the same
+   trusted deployment, environment, DB and session-timeout settings as the
+   running server. It does not load or change `.env`, provider settings, keys,
+   revisions, roles or session expiry. Do not use `bootstrap-admin` for this.
 
-The current application's runtime still works at schema version 7: it does not
-query these tables. Calling the new repository before migration 8 returns a safe
-unavailable error. No bootstrap is required to keep existing Auth0 access.
+   ```bash
+   cd ~/project/go-web-framework/backend
+   go build -o /tmp/bootstrap-access-policy ./cmd/bootstrap-access-policy
+   # Load trusted server configuration through your existing operator process.
+   # Enter the CURRENT opaque application session cookie at the hidden prompt.
+   # Never paste it into a command argument, source file, ticket or log.
+   read -r -s -p 'Existing OIDC administrator session cookie: ' policy_session
+   printf '\n'
+   printf '%s' "$policy_session" | /tmp/bootstrap-access-policy \
+     --expected-activation-generation <CURRENT_GENERATION> \
+     --mode approved_users_only --default-role Viewer \
+     --allowed-domains vopak.com \
+     --reason 'Approved OIDC access-policy rollout' --confirm
+   unset policy_session
+   ```
 
-After review, an operator with the approved migration connection may apply:
+   Replace the generation placeholder; choose actual policy settings deliberately.
+   Omit `--allowed-domains` for no domain restriction. Disable shell tracing and
+   terminal/session recording while handling the cookie. The command never prints
+   it and reads it only from stdin. It requires operator database access **and**
+   a valid, unexpired, current-revision/generation/client-bound OIDC session of an
+   already active administrator. A supplied issuer, email or actor UUID is not
+   accepted. Legacy/unbound and draining sessions are refused.
 
-```bash
-# Use the established PG* migration connection, checking the database first.
-scripts/migrate-framework.sh version
-# Only when the clean current version is 7:
-scripts/migrate-framework.sh up 1
-scripts/migrate-framework.sh version
-```
+5. Bootstrap atomically inserts the policy, the exact administrator approval and
+   two audit events. It refreshes that user's claims only from the already
+   verified session. It creates no users and grants no roles. A duplicate attempt
+   conflicts. On an uncertain commit, inspect policy and audit records before any
+   retry. If the policy already exists from Phase 10.2B, inspect its eligibility
+   instead of bootstrapping again.
+6. For `approved_users_only`, explicitly approve every other intended OIDC
+   identity using the trusted `AccessPolicyRepository.SetApproval` adapter before
+   expecting it to log in. The policy UI is deferred to Phase 10.2D; there is no
+   new bulk-approval tool. Bootstrap approves only the proven administrator.
+   Do not manually grant Admin to solve missing login approval.
+7. Deploy/restart all instances with this release, verify startup and an
+   administrator login, then test an eligible non-admin and a denied identity.
+   Until all instances are updated, old instances do not enforce the new policy;
+   use a controlled maintenance cutover rather than claiming mixed-version
+   enforcement. Later policy changes need no restart or cache invalidation.
 
-These commands have not been run against development. The wrapper forbids down,
-goto, force and drop before changing the journal. As with migrations 5–7, direct
-golang-migrate `down` is unsupported: the refusing down SQL preserves data but
-can leave its journal dirty. Production rollback uses a compatible application
-version or a reviewed forward corrective migration, not deletion of policy
-history or a no-op down migration.
+If bootstrap cannot be completed, keep the prior release running and resolve
+prerequisites before deployment. Do not clear activation history or change
+`AUTH_PROVIDER` to work around enforcement. This command needs an existing valid
+session; it is **not emergency recovery** and cannot rescue a deployment whose
+administrators cannot authenticate.
 
-The optional production role proposal recognizes these two tables when present:
-SELECT/INSERT/UPDATE only, plus EXECUTE on the domain constraint helper. After
-applying migration 8 in a deployment already using separated roles, the operator
-must review/reapply the corresponding ownership and grants; the historical
-`go_web_app` grant alone is not a runtime privilege rollout. Nothing applies that
-proposal automatically.
+## Admission, provisioning and sessions
 
-## Internal repository API
+`auth.PostgresStore.WithAccessPolicy` installs the deployment-bound
+`access.OIDCAdmission`. The server's environment OIDC store, activation service
+and startup/synchronization loader all install it. Database-bound stores retain
+all existing revision, generation, issuer, client, flow-purpose and draining
+predicates. The low-level storage constructor remains usable without admission
+for isolated storage tests; production construction must install admission.
 
-`authconfig.NewAccessPolicyRepository(store, trustedScope)` needs the existing
-access store, not encryption keys. Every method uses `AdminTransaction`, verified
-identity/principal correlation, active-user and effective `admin.manage`
-revalidation, the shared advisory transaction lock and a five-second deadline.
+After signature, issuer/audience, nonce, PKCE and one-time callback verification,
+normal session creation runs inside the existing five-second administrative
+advisory-lock transaction:
 
-| Method | Behavior |
-| --- | --- |
-| `Read(ctx)` | Read current scoped settings; missing policy is `ErrNotFound`. |
-| `Bootstrap(ctx, activationGeneration, settings, reason)` | Explicit first policy and approval of the already authenticated OIDC administrator. |
-| `Update(ctx, PolicyExpectation, settings, reason)` | Replace settings only at the expected policy and activation generations. |
-| `ReadApproval(ctx, identityKey)` | Exact scoped issuer/subject lookup. |
-| `ListApprovals(ctx, offset, limit)` | Bounded, stable-order listing (maximum 100 per page). |
-| `SetApproval(ctx, PolicyExpectation, key, approvalGeneration, status, reason)` | Explicit creation (generation 0) or versioned approval/revocation; no silent upsert. |
+- Read the current policy and exact issuer/subject approval. Explicit revocation
+  denies either mode. Approved-only requires `approved`; domain membership is
+  never an approval.
+- When domains are configured, require verified email and an exact lowercase
+  domain match. No wildcard, subdomain, suffix, display-name or email identity
+  merging. Issuer and subject remain byte-exact, including trailing slashes.
+- Refuse inactive users and provider collisions. Create an unknown eligible user
+  and assign Viewer/User exactly once; existing users retain their explicit
+  roles, including an empty role set. Reject a default role with `admin.manage`.
+- Audit new provisioning as the verified newly created user, including only the
+  default role and deployment scope. Insert/rotate the session in the same
+  transaction. Any audit, credential-write or commit failure rolls back user,
+  role and audit changes. No session cookie is issued on failure.
 
-No actor UUID, email identity match, provider selection or authorization claim is
-accepted as proof of authority. The actor comes from verified request context.
-Writes use parameterized SQL and atomically insert typed, bounded audit details
-with `oidc_access.*` actions. Audit failure rolls back the business write.
-Conflicts return `ErrConflict`; lockout attempts return
-`ErrLastOIDCAdministrator`. Errors do not disclose SQL or connection data.
-An uncertain commit retains the existing `ErrCommitUncertain` behavior: inspect
-the authoritative policy/approval generations and audit before any manual retry.
+Every session use repeats policy/user checks against PostgreSQL with no
+per-instance cache, including `/api/auth/me` and other authenticated routes.
+Both stored verified session claims and the user's latest verified login claims
+must satisfy domains. Policy checks share the mutation lock with revocations;
+activity updates are not committed on infrastructure/policy errors. Denied
+credentials are deleted; approval revocation, user deactivation and policy
+restriction updates also revoke affected sessions atomically. Reapproval cannot
+resurrect deleted sessions. Existing idle/absolute expiry and 30-minute maximum
+draining deadlines remain in force.
 
-## Explicit bootstrap for an existing OIDC administrator
+`/api/access/me` is read-only for OIDC and cannot provision unknown users. Trusted
+environment Local DEV retains its development self-registration. Isolated and
+normal-callback readiness tests remain sessionless: they do not enter session
+creation/admission, provision users, consume approvals, grant roles or activate
+providers.
 
-The future protected administration adapter must:
+## Administrator safety and repository interfaces
 
-1. Use trusted server scope and read the authoritative database activation
-   generation. This initial bootstrap supports an already database-managed OIDC
-   deployment, not environment-only authentication.
-2. Obtain explicit settings and a meaningful reason (8–512 bytes, no controls).
-3. Call `Bootstrap` under the existing verified administrator context.
+`AccessPolicyRepository` retains `Read`, `Bootstrap`, `Update`, `ReadApproval`,
+`ListApprovals`, and `SetApproval`. `BootstrapSession` is the new offline rollout
+adapter; it reuses the bootstrap transaction body and error mapping. The normal
+repository uses `AdminTransaction`; session bootstrap verifies a hashed existing
+credential inside the same advisory-lock protocol without manufacturing a
+request principal. Reasons, optimistic policy/approval/activation generations and
+atomic audits remain mandatory.
 
-Inside the shared lock, bootstrap requires the expected active OIDC head and
-active configuration lifecycle, the caller's exact issuer matching that active
-revision, an OIDC principal, and effective `admin.manage`. It inserts one policy
-and one approval for that **existing administrator** with two atomic audit events.
-Duplicates conflict. It never creates users or assigns Admin or any other role.
-Other existing administrators must receive explicit identity approvals before
-future enforcement of `approved_users_only`; do not bulk-approve all users merely
-because they already have a database record.
+Startup and mutation guards require an active OIDC administrator from the active
+issuer, effective `admin.manage`, an **explicit approval even in allow-all mode**,
+and domain eligibility. User deactivation, role removal, permission changes,
+policy/approval updates and activation/recovery share this guard. Authorization
+also rechecks policy after acquiring the mutation lock, preventing a request
+started before approval revocation from retaining administrator write authority.
+Activation additionally checks that the specific tested/enrolled administrator is
+eligible; offline recovery requires an eligible administrator of its target
+issuer and cannot grant access as a side effect.
 
-There is intentionally no CLI, HTTP bootstrap route or runtime startup bootstrap
-in this phase. A future protected management interface will call this method.
+## Boundaries and outstanding work
 
-## Validation and lockout protection
+- Fresh Local DEV-to-OIDC deployments and environment-only OIDC deployments have
+  no currently supported bootstrap proof for this policy. The existing 10.2B
+  bootstrap requires an already active database OIDC issuer. Initial activation
+  now refuses missing policy rather than creating approval from test success.
+  A separate reviewed candidate/evidence-bound bootstrap is needed for those
+  deployments. This is an explicit rollout blocker, not a fallback option.
+- Preparing a different recovery/activation issuer requires an explicitly
+  approved eligible administrator for that issuer before transition. The offline
+  recovery authorization model cannot override login policy.
+- No external provider deprovisioning feed exists. Domain/claims are the latest
+  server-stored verified information; detecting IdP-only changes requires a fresh
+  login, expiry or a future reviewed SCIM mechanism. Local user deactivation and
+  approval/policy changes take effect through PostgreSQL immediately.
+- Every authenticated OIDC request takes the shared advisory lock and reads the
+  policy. This favors simple, strict revocation semantics over maximum throughput;
+  measure contention before scaling. There are no uncontrolled retries.
+- Requests already admitted can finish; the framework rechecks permissions and
+  policy for protected mutations. DB superusers/schema owners remain trusted.
+- Phase 10.2D still needs protected policy management UI/API adapters, explicit
+  additional approvals, and user-facing policy-denial translations. Login denial
+  currently preserves the existing generic safe `login_failed` response.
 
-- Domain lists contain at most 20 exact ASCII DNS domains (IDNs as A-labels),
-  each at most 253 bytes. Case is normalized to lowercase and lists sorted.
-  Reject duplicates, whitespace, URLs, email addresses, wildcards, IP literals
-  and trailing dots. Subdomains are not implicitly allowed.
-- Domain eligibility requires a plain mailbox and `email_verified=true`.
-  Email is used only as an eligibility attribute, never an identity key.
-- Default roles are Viewer/User only. A write additionally rejects a default role
-  that currently grants `admin.manage`; role names alone do not prove this.
-- Policy and approval changes must leave an active OIDC user from the **current
-  active issuer** with effective `admin.manage`, matching verified email domain
-  if restricted, and an approval in approved-only mode. Explicit revocation
-  excludes an identity in either mode. Local DEV and historical/other issuers
-  cannot satisfy this guard.
-- Policy/approval generations prevent lost updates, and expected activation
-  generation prevents a write prepared for a previous provider. All operations
-  share the existing RBAC/activation advisory lock.
-
-These are guards on **these repository writes**, not complete future login
-enforcement. Stored email claims can become stale; the future callback must
-evaluate fresh verified claims. Later role changes, user deactivation or provider
-activation must revalidate policy eligibility before login policy enforcement is
-enabled. A future change granting `admin.manage` to the default role must also be
-blocked or make automatic onboarding fail closed. Those existing operations and
-their current security rules are deliberately unchanged here.
-
-## Next phase and tests
-
-Before enforcement, integrate one transactional admission check after verified
-OIDC token claims and before session creation; cover existing sessions and
-deprovisioning explicitly. Reuse `framework.users`, exact issuer/subject keys and
-RBAC. Never assign Admin from authentication, domain membership, approval or
-import. Multi-instance policy reads must use authoritative generation-aware
-storage without stale permissive fallback. No new polling/listener is added here.
-
-Disposable-cluster tests cover empty migration and schema-7 compatibility,
-attributed bootstrap, exact identity isolation, scoped reads, domain validation,
-effective default role checks, policy/approval conflicts, concurrent writes,
-authorization rechecks, lockout protection, audit rollback, database failures,
-database constraints, unchanged runtime data and the forward-only migration
-policy. They never use the application's DB_* configuration.
+Tests use synthetic signed tokens and disposable PostgreSQL clusters only. They
+cover actual normal callbacks, two runtime instances, domain/approval/user checks,
+concurrent provisioning, transactional rollback, bootstrap proof, last-admin
+protection and unchanged sessionless readiness/activation/recovery behavior.

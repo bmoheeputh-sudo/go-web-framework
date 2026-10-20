@@ -35,15 +35,19 @@ Runtime `UPDATE`, `DELETE`, `TRUNCATE`, and DDL are absent on append-only audit/
 
 ## Verification and operational procedures
 
-Migration 000008 adds optional `oidc_access_policies` and
+Migration 000008 adds `oidc_access_policies` and
 `oidc_identity_approvals` storage, with SELECT/INSERT/UPDATE runtime grants and no
 DELETE/TRUNCATE. `valid_access_domains(text[])` needs runtime EXECUTE for CHECK
 constraints; `guard_access_policy_record()` is an invoker trigger function with
 no direct runtime EXECUTE grant. Four additional triggers guard generation,
 identity/provenance and retention, bringing the function/trigger counts to 9/23.
-The proposal grants these only when installed, so version-7 installations remain
-supported. After a later migration, review ownership and explicit grants before
-using the new repository. See [OIDC access policy storage](oidc-access-policy.md).
+The proposal grants these only when installed, so it can still be applied to
+version-7 installations; the Phase 10.2C OIDC runtime itself requires version 8
+and explicit bootstrap. Review ownership and explicit grants before enforcement.
+See [OIDC access policy rollout](oidc-access-policy.md). The offline policy
+bootstrap command needs the normal runtime DML grants plus a currently valid
+OIDC administrator session; it does not need schema ownership or role-creation
+privileges.
 
 `go test ./internal/database -run TestProposedProductionRolesInDisposableCluster -count=1 -v` creates a disposable PostgreSQL 14 cluster, applies migrations there, applies the proposed SQL, connects as the runtime role, checks normal user/audit writes, and rejects audit/history modification, migration-journal writes, bootstrap writes, and DDL. It never reads `DB_*` or contacts the development database.
 
