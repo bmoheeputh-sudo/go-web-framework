@@ -3,6 +3,7 @@ import { Alert, Button, Stack, Typography } from '@mui/material'
 import { useTranslation } from 'react-i18next'
 import { api, APIError } from '../api/client'
 import type { AuthRevision, ConnectionTest, StartedConnectionTest } from '../api/authConfiguration'
+import type { User } from '../api/client'
 import { authSettingsPath } from '../api/authConfiguration'
 import { useQueryCache } from '../api/queries'
 import { useSession } from '../auth/session'
@@ -21,7 +22,11 @@ function stop(run: Run) {
   run.popup.close()
 }
 
-export default function OIDCConnectionTest({ revision, disabled }: { revision: AuthRevision; disabled: boolean }) {
+export default function OIDCConnectionTest({ revision, disabled, onResult, onEnrolled }: {
+  revision: AuthRevision; disabled: boolean
+  onResult?: (result: ConnectionTest | null) => void
+  onEnrolled?: (user: User) => void
+}) {
   const { t, i18n } = useTranslation('auth')
   const notify = useNotifications(), cache = useQueryCache(), { expire } = useSession()
   const active = useRef<Run | null>(null)
@@ -43,7 +48,7 @@ export default function OIDCConnectionTest({ revision, disabled }: { revision: A
     } else notify({ severity: 'error', messageKey: 'auth:testUnavailable' })
   }
   function accept(run: Run, value: ConnectionTest) {
-    setResult(value)
+    setResult(value); onResult?.(value)
     if (pending(value)) return false
     stop(run); setBusy(false)
     notify({ severity: value.status === 'succeeded' ? 'success' : value.status === 'failed' ? 'error' : 'warning', messageKey: `auth:test_${value.status}` })
@@ -75,7 +80,7 @@ export default function OIDCConnectionTest({ revision, disabled }: { revision: A
     if (!popup) { notify({ severity: 'warning', messageKey: 'auth:testPopupBlocked' }); return }
     popup.opener = null // Provider pages cannot navigate the administrator's window.
     const run: Run = { popup, stopped: false, controller: new AbortController() }
-    active.current = run; setBusy(true); setError(false); setResult(null)
+    active.current = run; setBusy(true); setError(false); setResult(null); onResult?.(null)
     run.timer = setTimeout(() => fail(run, new Error('start deadline')), 25_000)
     try {
       const started = await api<StartedConnectionTest>(`${authSettingsPath}/${encodeURIComponent(revision.id)}/test`, 'POST', { expected_generation: revision.generation }, run.controller.signal)
@@ -106,7 +111,7 @@ export default function OIDCConnectionTest({ revision, disabled }: { revision: A
         <Typography>{t('testIdentity')}</Typography>
         <Typography><bdi>{result.tested_identity.issuer}</bdi> · <bdi>{result.tested_identity.subject}</bdi></Typography>
       </>}
-      {result.evidence_id && <IdentityEnrollment key={result.evidence_id} revision={revision} result={result} disabled={disabled || busy} />}
+      {result.evidence_id && <IdentityEnrollment key={result.evidence_id} revision={revision} result={result} disabled={disabled || busy} onEnrolled={onEnrolled} />}
     </Stack>}
   </Stack>
 }

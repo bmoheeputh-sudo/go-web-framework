@@ -7,7 +7,7 @@ import App from '../App'
 import LanguageProvider from '../LanguageProvider'
 import { createI18n, resources } from '../i18n'
 import { bob, mockAPI, mockMedia } from '../test/fixtures'
-import { authProviderSetupPath as setupPath, authSettingsPath as settings, authStatusPath as statusPath } from '../api/authConfiguration'
+import { activationStatusPath, authProviderSetupPath as setupPath, authSettingsPath as settings, authStatusPath as statusPath } from '../api/authConfiguration'
 import type { AuthProvider, AuthRevision, OIDCProviderSetupMetadata } from '../api/authConfiguration'
 
 beforeEach(() => {
@@ -35,8 +35,14 @@ function authAPI(initial: AuthRevision[] = [], runtime: AuthProvider = 'local_de
     if (!path.startsWith('/api/admin/auth/')) return original(path, init)
     const failure = failures.get(`${method} ${path}`)
     if (failure) return Response.json({ error: 'UNTRUSTED SERVER DETAILS' }, { status: failure })
-    if (path === statusPath) return Response.json({ runtime_provider: runtime, runtime_source: 'environment', management_only: true,
+    if (path === statusPath) return Response.json({ runtime_provider: runtime, runtime_source: 'environment', management_only: true, activation_api_available: true,
       validation_mode: 'offline_static', latest_revision: records[0] || null, database_active_revision: records.find((r) => r.status === 'active') || null })
+    if (path === activationStatusPath) return Response.json({
+      authoritative_source: 'environment', authoritative_generation: 0, local_source: 'environment', local_provider: runtime,
+      local_applied_generation: 0, local_desired_generation: 0, listener_connected: true, synchronization_degraded: false,
+      reconciled: true, reconciliation_required: false, preparation_affinity_mode: 'single_instance', preparation_enabled: true,
+      automatic_activation_retry: false,
+    })
     if (path === setupPath) return Response.json({ application_name: 'Vopak Enterprise Security', application_type: 'confidential_web_application',
       normal_callback_url: 'https://app.example.test/api/auth/callback', test_callback_url: 'https://app.example.test/api/auth/test/callback',
       grant_types: ['authorization_code'], pkce_methods: ['S256'], scopes: ['openid', 'profile', 'email'],
@@ -117,10 +123,10 @@ it('keeps runtime environment authentication separate from approved and database
   expect(fetcher.mock.calls.filter(([path]) => path.startsWith(statusPath)).every(([path]) => path === statusPath)).toBe(true)
 })
 
-it('shows empty history and future capability explanations without nonfunctional controls', async () => {
+it('shows empty history and activation status without nonfunctional controls', async () => {
   const { fetcher } = authAPI(); mount(); await openAuth()
   expect(screen.getByText(en.emptyHistory)).toBeTruthy()
-  expect(screen.getByText((text) => text.includes(en.futureCapabilities))).toBeTruthy()
+  expect(screen.getByRole('region', { name: en.activationStatusTitle })).toBeTruthy()
   expect(screen.queryByRole('button', { name: /activate|test connection|rollback/i })).toBeNull()
   expect(writes(fetcher)).toHaveLength(0)
 })

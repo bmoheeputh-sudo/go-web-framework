@@ -10,9 +10,13 @@ import { PageTools } from '../components/PageTools'
 import { formatDate, formatNumber } from '../i18n'
 import { useNotifications } from '../notifications/notifications'
 import type { Notification } from '../notifications/notifications'
+import type { User } from '../api/client'
 import AuthDraftForm from './AuthDraftForm'
+import ActivationWorkflow from './ActivationWorkflow'
 import OIDCConnectionTest from './OIDCConnectionTest'
 import OIDCProviderSetup from './OIDCProviderSetup'
+import RecoveryDraftDialog from './RecoveryDraftDialog'
+import type { ConnectionTest } from '../api/authConfiguration'
 
 export default function AuthenticationSettings() {
   const { t, i18n } = useTranslation(['auth', 'common', 'admin'])
@@ -24,6 +28,9 @@ export default function AuthenticationSettings() {
   const [selected, setSelected] = useState<string | null>(null)
   const detail = useQuery<AuthRevision>(selected ? `${authSettingsPath}/${encodeURIComponent(selected)}` : null)
   const [approval, setApproval] = useState<AuthRevision | null>(null)
+  const [isolatedTest, setIsolatedTest] = useState<ConnectionTest | null>(null)
+  const [enrolledUser, setEnrolledUser] = useState<User | null>(null)
+  const [recoverySource, setRecoverySource] = useState<AuthRevision | null>(null)
   const [busy, setBusy] = useState(false), [mutationError, setMutationError] = useState('')
   const mutating = useRef(false), reportedError = useRef('')
   const queryError = status.error || history.error || detail.error
@@ -68,15 +75,15 @@ export default function AuthenticationSettings() {
       <Typography component="h2" variant="h6" sx={{ mb: 2 }}>{t('runtimeTitle')}</Typography>
       <Stack spacing={1}>
         <Typography><strong>{t('runtimeProvider')}: </strong><bdi>{status.data.runtime_provider}</bdi></Typography>
-        <Typography><strong>{t('configurationSource')}: </strong>{t('sourceEnvironment')}</Typography>
-        <Alert severity="info">{t('managementOnly')}</Alert>
+        <Typography><strong>{t('configurationSource')}: </strong>{t(status.data.runtime_source === 'database' ? 'sourceDatabase' : 'sourceEnvironment')}</Typography>
+        {status.data.management_only && <Alert severity="info">{t('managementOnly')}</Alert>}
         <Typography><strong>{t('validationMode')}: </strong>{t('offlineValidation')}</Typography>
         <Typography><strong>{t('latestRevision')}: </strong>{summary(status.data.latest_revision)}</Typography>
         <Typography><strong>{t('databaseActiveRevision')}: </strong>{summary(status.data.database_active_revision)}</Typography>
       </Stack>
     </Paper>}
     <OIDCProviderSetup metadata={setup.data} loading={setup.loading} error={setup.error} />
-    <Alert severity="info">{t('offlineHelp')} {t('futureCapabilities')}</Alert>
+    <Alert severity="info">{t('offlineHelp')}</Alert>
     {status.data && <AuthDraftForm development={development} latestVersion={status.data.latest_revision?.configuration_version || 0} busy={locked || Boolean(queryError)} trustedRedirectURI={setup.data?.normal_callback_url} onCreate={async (body) => {
       const success = await mutate(authSettingsPath, body, 'auth:draftCreated')
       if (success) setCursors([0])
@@ -116,8 +123,12 @@ export default function AuthenticationSettings() {
         {metadata.status === 'draft' && <Button disabled={locked || Boolean(queryError)} variant="contained" onClick={() => void mutate(`${authSettingsPath}/${metadata.id}/validate`, { expected_generation: metadata.generation }, 'auth:validationSaved')}>{t('validateSettings')}</Button>}
         {metadata.status === 'validated' && <Button disabled={locked || Boolean(queryError)} variant="contained" onClick={() => setApproval(metadata)}>{t('approveRevision')}</Button>}
       </Stack>
-      {metadata.status === 'approved' && metadata.provider === 'oidc' && <OIDCConnectionTest key={metadata.id} revision={metadata} disabled={locked || Boolean(queryError)} />}
+      {metadata.status === 'approved' && metadata.provider === 'oidc' && <OIDCConnectionTest key={metadata.id} revision={metadata} disabled={locked || Boolean(queryError)}
+        onResult={(result) => { setIsolatedTest(result); setEnrolledUser(null) }} onEnrolled={setEnrolledUser} />}
+      {metadata.status === 'superseded' && metadata.provider === 'oidc' && <Button variant="outlined" disabled={locked || Boolean(queryError)} onClick={() => setRecoverySource(metadata)}>{t('recoveryCreateAction')}</Button>}
     </Paper>}
+    {status.data && <ActivationWorkflow key={metadata?.id || 'no-activation-revision'} revision={metadata?.status === 'approved' && metadata.provider === 'oidc' ? metadata : null}
+      isolatedTest={isolatedTest} enrolledUser={enrolledUser} disabled={locked || Boolean(queryError)} onResolvedUser={setEnrolledUser} />}
     <Dialog open={Boolean(approval)} onClose={() => { if (!busy) setApproval(null) }} fullWidth maxWidth="sm" aria-labelledby="auth-approve-title">
       <DialogTitle id="auth-approve-title">{t('approveTitle')}</DialogTitle>
       <DialogContent>{approval && <Typography sx={{ mb: 2 }}>{summary(approval)}</Typography>}<Typography>{t('approveHelp')}</Typography></DialogContent>
@@ -130,5 +141,9 @@ export default function AuthenticationSettings() {
         }}>{t('admin:confirmPermissions')}</Button>
       </DialogActions>
     </Dialog>
+    {recoverySource && <RecoveryDraftDialog revision={recoverySource} latestVersion={status.data?.latest_revision?.configuration_version || 0}
+      open onClose={() => setRecoverySource(null)} onCreated={(revision) => {
+        setRecoverySource(null); setSelected(revision.id); setCursors([0]); cache.invalidate()
+      }} />}
   </Stack>
 }

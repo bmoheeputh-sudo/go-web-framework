@@ -8,10 +8,13 @@ import { useSession } from '../auth/session'
 import { useQueryCache } from '../api/queries'
 import { useNotifications } from '../notifications/notifications'
 import { formatDate, roleKeys } from '../i18n'
+import type { User } from '../api/client'
 
 const roles = ['Admin', 'User', 'Viewer'] as const
 
-export default function IdentityEnrollment({ revision, result, disabled }: { revision: AuthRevision; result: ConnectionTest; disabled: boolean }) {
+export default function IdentityEnrollment({ revision, result, disabled, onEnrolled }: {
+  revision: AuthRevision; result: ConnectionTest; disabled: boolean; onEnrolled?: (user: User) => void
+}) {
   const { t, i18n } = useTranslation(['auth', 'admin', 'common'])
   const { authentication, access, expire } = useSession()
   const notify = useNotifications(), cache = useQueryCache()
@@ -32,9 +35,10 @@ export default function IdentityEnrollment({ revision, result, disabled }: { rev
     try {
       // The server resolves identity from evidence. No issuer, subject, email,
       // actor or deployment fields may be submitted by this form.
-      await api(`${authSettingsPath}/${encodeURIComponent(revision.id)}/enroll`, 'POST', {
+      const user = await api<User>(`${authSettingsPath}/${encodeURIComponent(revision.id)}/enroll`, 'POST', {
         evidence_id: result.evidence_id, expected_generation: revision.generation, role, confirm: true,
       })
+      onEnrolled?.(user)
       setDone(true); setConfirm(false); cache.invalidate()
       notify({ severity: 'success', messageKey: 'auth:enrollmentSuccess' })
     } catch (error) {
