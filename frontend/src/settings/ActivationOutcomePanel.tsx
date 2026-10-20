@@ -1,6 +1,7 @@
-import { Alert, Button, Paper, Stack, Typography } from '@mui/material'
+import { Alert, Box, Button, Stack, Typography } from '@mui/material'
 import { useTranslation } from 'react-i18next'
 import type { ActivationResult, ActivationStatus } from '../api/authConfiguration'
+import SectionCard from '../components/common/SectionCard'
 
 export type DisplayedOutcome = ActivationResult | { outcome: 'outcome_unknown'; desired_generation: number; revision_id: string }
 
@@ -18,9 +19,9 @@ export default function ActivationOutcomePanel({ outcome, status, busy, onInspec
   const notCommitted = outcome.outcome === 'not_committed'
   const severity = outcome.outcome === 'committed_applied' ? 'success' : uncertain || committedNotApplied ? 'warning' : 'error'
   const key = `activationOutcome_${outcome.outcome}`
-  return <Paper component="section" sx={{ p: { xs: 2, sm: 3 } }} aria-live="assertive">
+  return <Box aria-live="assertive">
+    <SectionCard title={t('activationOutcomeTitle')}>
     <Stack spacing={2}>
-      <Typography component="h3" variant="h6">{t('activationOutcomeTitle')}</Typography>
       <Alert severity={severity}>{t(key)}</Alert>
       {'commit_persisted' in outcome && <>
         <Typography>{t('activationCommitPersisted')}: {outcome.commit_persisted === null ? t('activationUnknown') : t(outcome.commit_persisted ? 'yes' : 'no')}</Typography>
@@ -36,9 +37,9 @@ export default function ActivationOutcomePanel({ outcome, status, busy, onInspec
         <Button disabled={busy} onClick={onInspect}>{t('activationRefreshStatus')}</Button>
         <Button variant="contained" disabled={busy || !status || !status.reconciliation_required} onClick={onReconcile}>{t('activationReconcile')}</Button>
       </Stack>}
-      {uncertain && status?.reconciliation_required && <Button variant="contained" disabled={busy} onClick={onReconcile}>{t('activationReconcile')}</Button>}
       {notCommitted && <Button disabled={busy} onClick={onReset}>{t('activationStartOver')}</Button>}
       {outcome.outcome === 'committed_applied' && <Alert severity="info">{t('activationReauthenticateGuidance')}</Alert>}
     </Stack>
-  </Paper>
+    </SectionCard>
+  </Box>
 }

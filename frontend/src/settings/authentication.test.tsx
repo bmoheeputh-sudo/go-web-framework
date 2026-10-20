@@ -95,12 +95,14 @@ async function openAuth() {
 }
 const writes = (fetcher: ReturnType<typeof mockAPI>['fetcher']) => fetcher.mock.calls.filter(([path, init]) => path.startsWith('/api/admin/auth/') && init?.method === 'POST')
 async function fillOIDC(secret = 'synthetic-test-secret') {
+  if (!screen.queryByRole('dialog', { name: en.newDraft })) await userEvent.click(screen.getByRole('button', { name: en.newDraft }))
   fireEvent.change(screen.getByLabelText(en.issuerURL + ' *'), { target: { value: 'https://issuer.example.test' } })
   fireEvent.change(screen.getByLabelText(en.clientID + ' *'), { target: { value: 'test-client' } })
   fireEvent.change(screen.getByLabelText(en.clientSecret + ' *'), { target: { value: secret } })
   fireEvent.change(screen.getByLabelText(en.redirectURI + ' *'), { target: { value: 'https://app.example.test/api/auth/callback' } })
 }
 async function chooseProvider(name: string) {
+  if (!screen.queryByRole('dialog', { name: en.newDraft })) await userEvent.click(screen.getByRole('button', { name: en.newDraft }))
   await userEvent.click(screen.getByRole('combobox', { name: en.provider }))
   await userEvent.click(screen.getByRole('option', { name }))
 }
@@ -114,9 +116,10 @@ it('keeps runtime environment authentication separate from approved and database
   const active = revision({ id: '44444444-4444-4444-8444-444444444444', provider: 'google_iap', status: 'active', has_secret: false })
   const { fetcher } = authAPI([approved, active]); mount(); await openAuth()
   const runtime = screen.getByRole('region', { name: en.runtimeTitle })
-  expect(runtime.textContent).toContain('Current runtime provider: local_dev')
-  expect(runtime.textContent).toContain('Latest database revision: Revision 2 · oidc · Approved')
-  expect(runtime.textContent).toContain('Database active revision (separate from runtime): Revision 1 · google_iap · Active in database')
+  expect(runtime.textContent).toContain('Current runtime provider')
+  expect(runtime.textContent).toContain('local_dev')
+  expect(runtime.textContent).toContain('Revision 2 · oidc · Approved')
+  expect(runtime.textContent).toContain('Revision 1 · google_iap · Active in database')
   expect(within(runtime).getByText(en.managementOnly)).toBeTruthy()
   expect(runtime.textContent).toContain(en.sourceEnvironment)
   expect(runtime.textContent).toContain(en.offlineValidation)
@@ -129,6 +132,45 @@ it('keeps runtime environment authentication separate from approved and database
   expect(fetcher.mock.calls.filter(([path]) => path.startsWith(statusPath)).every(([path]) => path === statusPath)).toBe(true)
 }, 15000)
 
+it('opens and closes revision details without document navigation', async () => {
+  const unloading = vi.fn()
+  window.addEventListener('beforeunload', unloading)
+  try {
+    authAPI([revision()]); mount(); await openAuth()
+    const detail = await view()
+    expect(detail.textContent).toContain('https://issuer.example.test')
+    expect(screen.getByRole('button', { name: en.validateSettings })).toBeTruthy()
+    await userEvent.click(within(screen.getByRole('dialog', { name: en.revisionMetadata })).getByRole('button', { name: resources.en.common.close }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: en.revisionMetadata })).toBeNull())
+    expect(screen.getByRole('region', { name: en.history })).toBeTruthy()
+    expect(unloading).not.toHaveBeenCalled()
+  } finally { window.removeEventListener('beforeunload', unloading) }
+})
+
+it('shows only lifecycle-appropriate revision actions', async () => {
+  const approved = revision({ status: 'approved', configuration_version: 2 })
+  const superseded = revision({ id: 'revision-1', status: 'superseded', configuration_version: 1 })
+  authAPI([approved, superseded]); mount(); await openAuth()
+  await view(2)
+  expect(screen.getByRole('button', { name: en.testConnection })).toBeTruthy()
+  expect(screen.getByRole('button', { name: en.activationPrepare })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: en.validateSettings })).toBeNull()
+  await userEvent.click(within(screen.getByRole('dialog', { name: en.revisionMetadata })).getByRole('button', { name: resources.en.common.close }))
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: en.revisionMetadata })).toBeNull())
+  await view(1)
+  expect(screen.getByRole('button', { name: en.recoveryCreateAction })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: en.activationPrepare })).toBeNull()
+})
+
+it('anchors the revision drawer on the Arabic trailing edge', async () => {
+  authAPI([revision()]); const instance = mount(); await openAuth()
+  await act(async () => { await instance.changeLanguage('ar') })
+  await userEvent.click(await screen.findByRole('button', { name: resources.ar.auth.viewRevision.replace('{{version}}', '1') }))
+  const drawer = screen.getByRole('dialog', { name: resources.ar.auth.revisionMetadata })
+  expect(getComputedStyle(drawer).left).toBe('0px')
+  expect(document.documentElement.dir).toBe('rtl')
+})
+
 it('shows empty history and activation status without nonfunctional controls', async () => {
   const { fetcher } = authAPI(); mount(); await openAuth()
   expect(screen.getByText(en.emptyHistory)).toBeTruthy()
@@ -139,6 +181,7 @@ it('shows empty history and activation status without nonfunctional controls', a
 
 it('renders trusted provider setup metadata, provider templates, and copy feedback', async () => {
   const { fetcher } = authAPI(); mount(); await openAuth()
+  await userEvent.click(screen.getByRole('button', { name: en.setupTitle }))
   const guide = screen.getByRole('region', { name: en.setupTitle })
   expect(guide.textContent).toContain('Vopak Enterprise Security')
   expect(guide.textContent).toContain('https://app.example.test/api/auth/callback')
@@ -162,7 +205,10 @@ it('renders trusted provider setup metadata, provider templates, and copy feedba
 
   await userEvent.click(within(guide).getByRole('button', { name: en.copySetupValue.replace('{{field}}', en.setupNormalCallback) }))
   expect(navigator.clipboard.writeText).toHaveBeenCalledWith('https://app.example.test/api/auth/callback')
-  expect((await screen.findByRole('status')).textContent).toContain(en.setupCopied.replace('{{field}}', en.setupNormalCallback))
+  expect((await screen.findByRole('status', { hidden: true })).textContent).toContain(en.setupCopied.replace('{{field}}', en.setupNormalCallback))
+  await userEvent.click(within(screen.getByRole('dialog', { name: en.setupTitle })).getByRole('button', { name: resources.en.common.close }))
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: en.setupTitle })).toBeNull())
+  await userEvent.click(await screen.findByRole('button', { name: en.newDraft }))
   const redirect = screen.getByLabelText(en.redirectURI + ' *') as HTMLInputElement
   expect(redirect.value).toBe('https://app.example.test/api/auth/callback')
   expect(redirect.readOnly).toBe(true)
@@ -172,6 +218,7 @@ it('localizes the provider guide in Arabic and preserves RTL direction', async (
   authAPI(); const instance = mount(); await openAuth()
   await act(async () => { await instance.changeLanguage('ar') })
   expect(document.documentElement.dir).toBe('rtl')
+  await userEvent.click(screen.getByRole('button', { name: resources.ar.auth.setupTitle }))
   const guide = screen.getByRole('region', { name: resources.ar.auth.setupTitle })
   expect(within(guide).getByRole('combobox', { name: resources.ar.auth.setupProvider })).toBeTruthy()
   expect(guide.textContent).toContain(resources.ar.auth.setupHTTPSCallbacks)
@@ -179,13 +226,17 @@ it('localizes the provider guide in Arabic and preserves RTL direction', async (
 
 it('keeps existing authentication settings usable when setup metadata is unavailable', async () => {
   const { failures } = authAPI(); failures.set(`GET ${setupPath}`, 503); mount(); await openAuth()
+  await userEvent.click(screen.getByRole('button', { name: en.setupTitle }))
   expect(screen.getAllByText(en.setupUnavailable).length).toBeGreaterThanOrEqual(1)
-  expect(screen.getByRole('button', { name: en.createDraft })).toBeTruthy()
+  await userEvent.click(within(screen.getByRole('dialog', { name: en.setupTitle })).getByRole('button', { name: resources.en.common.close }))
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: en.setupTitle })).toBeNull())
+  expect(await screen.findByRole('button', { name: en.newDraft })).toBeTruthy()
   expect(screen.getByRole('heading', { name: en.runtimeTitle })).toBeTruthy()
 })
 
 it('requires complete OIDC settings and a fresh secret; clears secrets after submission and never persists them', async () => {
   const { fetcher, records } = authAPI(); mount(); await openAuth()
+  await userEvent.click(screen.getByRole('button', { name: en.newDraft }))
   await userEvent.click(screen.getByRole('button', { name: en.createDraft }))
   expect(writes(fetcher)).toHaveLength(0)
   await fillOIDC('synthetic-secret-not-real')
@@ -200,7 +251,7 @@ it('requires complete OIDC settings and a fresh secret; clears secrets after sub
   expect(toast.textContent).toContain(en.draftCreated)
   expect(writes(fetcher)).toHaveLength(1)
   expect(JSON.parse(writes(fetcher)[0][1]!.body as string)).toEqual({ expected_latest_version: 0, provider: 'oidc', issuer_url: 'https://issuer.example.test', client_id: 'test-client', client_secret: 'synthetic-secret-not-real', redirect_uri: 'https://app.example.test/api/auth/callback', allow_http_development: false })
-  expect((screen.getByLabelText(en.clientSecret + ' *') as HTMLInputElement).value).toBe('')
+  expect(screen.queryByLabelText(en.clientSecret + ' *')).toBeNull()
   expect(JSON.stringify(records)).not.toContain('synthetic-secret-not-real')
   expect(JSON.stringify(localStorage) + JSON.stringify(sessionStorage) + document.body.innerHTML).not.toContain('synthetic-secret-not-real')
   await userEvent.click(within(toast).getByRole('button', { name: 'Close' }))
@@ -231,6 +282,8 @@ it('uses a trusted loopback HTTP callback only with explicit development allowan
   const body = JSON.parse(writes(fetcher)[0][1]!.body as string)
   expect(body.allow_http_development).toBe(true)
   expect(body.redirect_uri).toBe('http://localhost:8080/api/auth/callback')
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: en.newDraft })).toBeNull())
+  await userEvent.click(await screen.findByRole('button', { name: en.setupTitle }))
   expect(screen.getByText(en.setupDevelopmentHTTP)).toBeTruthy()
 })
 
@@ -254,6 +307,7 @@ it('allows Local DEV only when development is confirmed and explains that it nev
 
 it.each(['production', 'test', 'unknown'] as const)('disables development-only options for %s environments', async (environment) => {
   authAPI(environment === 'unknown' ? [] : [revision({ environment })], 'oidc'); mount(); await openAuth()
+  await userEvent.click(screen.getByRole('button', { name: en.newDraft }))
   expect(screen.queryByRole('checkbox', { name: en.allowHTTP })).toBeNull()
   expect(screen.getByText(en.developmentUnavailable)).toBeTruthy()
   await userEvent.click(screen.getByRole('combobox', { name: en.provider }))
@@ -264,19 +318,19 @@ it('validates offline using the current generation, then requires explicit confi
   const { fetcher, records } = authAPI([revision()]); mount(); await openAuth(); await view()
   expect(screen.queryByRole('button', { name: en.approveRevision })).toBeNull()
   await userEvent.click(screen.getByRole('button', { name: en.validateSettings }))
-  const toast = await screen.findByRole('status'); expect(toast.textContent).toContain(en.validationSaved)
+  const toast = await screen.findByRole('status', { hidden: true }); expect(toast.textContent).toContain(en.validationSaved)
   expect(JSON.parse(writes(fetcher)[0][1]!.body as string)).toEqual({ expected_generation: 1 })
-  await userEvent.click(within(toast).getByRole('button', { name: 'Close' }))
+  await userEvent.click(within(toast).getByRole('button', { name: 'Close', hidden: true }))
   await userEvent.click(await screen.findByRole('button', { name: en.approveRevision }))
   expect(writes(fetcher)).toHaveLength(1)
   expect(within(screen.getByRole('dialog')).getByText(en.approveHelp)).toBeTruthy()
   await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
-  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: en.approveTitle })).toBeNull())
   expect(writes(fetcher)).toHaveLength(1)
   await userEvent.click(screen.getByRole('button', { name: en.approveRevision }))
   await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Confirm' }))
-  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-  expect((await screen.findByRole('status')).textContent).toContain(en.approvalSaved)
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: en.approveTitle })).toBeNull())
+  expect((await screen.findByRole('status', { hidden: true })).textContent).toContain(en.approvalSaved)
   expect(JSON.parse(writes(fetcher)[1][1]!.body as string)).toEqual({ expected_generation: 2 })
   expect(records[0].status).toBe('approved')
   expect(writes(fetcher).map(([path]) => path)).toEqual([`${settings}/${records[0].id}/validate`, `${settings}/${records[0].id}/approve`])
@@ -298,7 +352,7 @@ it.each(['draft', 'validate', 'approve'])('refreshes metadata after a %s conflic
   await waitFor(() => expect(fetcher.mock.calls.filter(([path]) => path === statusPath).length).toBe(2))
   if (operation !== 'draft') expect(fetcher.mock.calls.filter(([path, init]) => path === `${settings}/${records[0].id}` && init?.method === 'GET')).toHaveLength(2)
   expect(document.body.textContent).not.toContain('UNTRUSTED SERVER DETAILS')
-  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: en.approveTitle })).toBeNull())
 })
 
 it('reports unavailable management service with one localized dismissible Snackbar and no raw errors', async () => {
@@ -319,7 +373,9 @@ it('pages revision history with the server cursor and fetches selected historica
   await view(1)
   expect(fetcher.mock.calls.some(([path]) => path === `${settings}?limit=20&before_version=2`)).toBe(true)
   expect(fetcher.mock.calls.some(([path]) => path === `${settings}/revision-1`)).toBe(true)
-  await userEvent.click(screen.getByRole('button', { name: 'Previous page' }))
+  await userEvent.click(within(screen.getByRole('dialog', { name: en.revisionMetadata })).getByRole('button', { name: resources.en.common.close }))
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: en.revisionMetadata })).toBeNull())
+  await userEvent.click(await screen.findByRole('button', { name: 'Previous page' }))
   expect(await screen.findByRole('button', { name: 'View revision 21' })).toBeTruthy()
 })
 
@@ -330,11 +386,13 @@ it('preserves form edits across Arabic/mobile/theme rendering without refetching
   expect(document.documentElement.dir).toBe('rtl')
   expect((screen.getByLabelText(resources.ar.auth.clientID + ' *') as HTMLInputElement).value).toBe('test-client')
   expect(fetcher.mock.calls).toHaveLength(calls)
-  const history = screen.getByRole('region', { name: resources.ar.auth.history })
+  await userEvent.click(within(screen.getByRole('dialog', { name: resources.ar.auth.newDraft })).getByRole('button', { name: resources.ar.common.cancel }))
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: resources.ar.auth.newDraft })).toBeNull())
+  const history = screen.getByRole('region', { name: resources.ar.auth.revision })
   expect(getComputedStyle(history).overflowX).toBe('auto')
   await userEvent.click(screen.getByRole('tab', { name: resources.ar.admin.rolesPermissions }))
   await userEvent.click(screen.getByRole('tab', { name: resources.ar.auth.title }))
-  expect((screen.getByLabelText(resources.ar.auth.clientSecret + ' *') as HTMLInputElement).value).toBe('')
+  expect(screen.queryByLabelText(resources.ar.auth.clientSecret + ' *')).toBeNull()
 })
 
 it('keeps Settings tab selection in history without reloading authentication or remounting the shell', async () => {

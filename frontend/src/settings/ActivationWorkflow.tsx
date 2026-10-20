@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert, Button, Chip, CircularProgress, Divider, LinearProgress, Paper, Stack, Typography,
+  Alert, Button, CircularProgress, Divider, LinearProgress, Stack, Typography,
 } from '@mui/material'
 import { useTranslation } from 'react-i18next'
 import type { User } from '../api/client'
@@ -20,6 +20,10 @@ import ActivationConfirmDialog from './ActivationConfirmDialog'
 import type { ActivationConfirmation } from './ActivationConfirmDialog'
 import ActivationOutcomePanel from './ActivationOutcomePanel'
 import type { DisplayedOutcome } from './ActivationOutcomePanel'
+import ActivationWizardDialog from './ActivationWizardDialog'
+import SectionCard from '../components/common/SectionCard'
+import StatusBadge from '../components/common/StatusBadge'
+import TwoColumnKeyValue from '../components/common/TwoColumnKeyValue'
 
 type WorkflowState =
   | { kind: 'idle' }
@@ -51,12 +55,14 @@ function stopReadiness(run: ReadinessRun) {
   run.popup.close()
 }
 
-export default function ActivationWorkflow({ revision, isolatedTest, enrolledUser, disabled, onResolvedUser }: {
+export default function ActivationWorkflow({ revision, isolatedTest, enrolledUser, disabled, onResolvedUser, open, onClose }: {
   revision: AuthRevision | null
   isolatedTest: ConnectionTest | null
   enrolledUser: User | null
   disabled: boolean
   onResolvedUser: (user: User | null) => void
+  open?: boolean
+  onClose?: () => void
 }) {
   const { t, i18n } = useTranslation(['auth', 'common'])
   const notify = useNotifications()
@@ -296,32 +302,42 @@ export default function ActivationWorkflow({ revision, isolatedTest, enrolledUse
 
   const countdown = preparation ? Math.max(0, Math.ceil((Date.parse(preparation.expires_at) - now) / 1000)) : 0
   const outcome = state.kind === 'outcome' ? state.result : null
-  return <Stack spacing={3}>
-    <Paper component="section" sx={{ p: { xs: 2, sm: 3 } }} aria-label={t('activationStatusTitle')}>
+  const wizardOpen = (open ?? Boolean(revision)) && Boolean(revision) && !outcome
+  const wizardBusy = state.kind === 'preparing' || state.kind === 'readiness_pending' || state.kind === 'activating'
+  const wizardStep = state.kind === 'idle' || state.kind === 'preparing' ? 'prepare' : ready ? 'confirm' : 'evidence'
+  function closeWizard() {
+    if (wizardBusy) return
+    setState({ kind: 'idle' })
+    setConfirming(false)
+    onClose?.()
+  }
+  return <Stack spacing={2}>
+    <SectionCard title={t('activationStatusTitle')}>
       <Stack spacing={1.5}>
-        <Typography component="h2" variant="h6">{t('activationStatusTitle')}</Typography>
         {statusError && <Alert severity="warning">{t('settingsUnavailable')}</Alert>}
         {!status && !statusError && <LinearProgress aria-label={t('common:loading')} />}
         {status && <>
-          <Typography>{t('activationAuthoritativeSource')}: <bdi>{status.authoritative_source}</bdi></Typography>
-          <Typography>{t('activationAuthoritativeGeneration')}: {formatNumber(status.authoritative_generation, language)}</Typography>
-          <Typography>{t('activationAuthoritativeRevision')}: <bdi>{status.authoritative_revision_id || t('common:none')}</bdi></Typography>
-          <Typography>{t('activationLocalState', { source: status.local_source, generation: formatNumber(status.local_applied_generation, language) })}</Typography>
-          <Typography>{t('activationLocalRevision')}: <bdi>{status.local_revision_id || t('common:none')}</bdi></Typography>
+          <TwoColumnKeyValue items={[
+            { label: t('activationAuthoritativeSource'), value: <bdi>{status.authoritative_source}</bdi> },
+            { label: t('activationAuthoritativeGeneration'), value: formatNumber(status.authoritative_generation, language) },
+            { label: t('activationAuthoritativeRevision'), value: <bdi>{status.authoritative_revision_id || t('common:none')}</bdi> },
+            { label: t('activationLocalState', { source: status.local_source, generation: formatNumber(status.local_applied_generation, language) }), value: <bdi>{status.local_provider}</bdi> },
+            { label: t('activationLocalRevision'), value: <bdi>{status.local_revision_id || t('common:none')}</bdi> },
+            { label: t('activationAffinityMode'), value: <bdi>{status.preparation_affinity_mode || t('common:none')}</bdi> },
+          ]} />
           <Stack direction="row" sx={{ gap: 1, flexWrap: 'wrap' }}>
-            <Chip size="small" color={status.listener_connected ? 'success' : 'warning'} label={t(status.listener_connected ? 'activationListenerConnected' : 'activationListenerDisconnected')} />
-            <Chip size="small" color={status.synchronization_degraded ? 'warning' : 'success'} label={t(status.synchronization_degraded ? 'activationSynchronizationDegraded' : 'activationSynchronizationHealthy')} />
-            <Chip size="small" color={status.reconciliation_required ? 'warning' : 'success'} label={t(status.reconciliation_required ? 'activationReconciliationRequired' : 'activationReconciled')} />
+            <StatusBadge tone={status.listener_connected ? 'success' : 'warning'} label={t(status.listener_connected ? 'activationListenerConnected' : 'activationListenerDisconnected')} />
+            <StatusBadge tone={status.synchronization_degraded ? 'warning' : 'success'} label={t(status.synchronization_degraded ? 'activationSynchronizationDegraded' : 'activationSynchronizationHealthy')} />
+            <StatusBadge tone={status.reconciliation_required ? 'warning' : 'success'} label={t(status.reconciliation_required ? 'activationReconciliationRequired' : 'activationReconciled')} />
           </Stack>
-          <Typography>{t('activationAffinityMode')}: <bdi>{status.preparation_affinity_mode || t('common:none')}</bdi></Typography>
+          {status.reconciliation_required && !statusError && !outcome && <Button variant="outlined" sx={{ alignSelf: 'flex-start' }} onClick={() => void reconcile()}>{t('activationReconcile')}</Button>}
           {!status.preparation_enabled && <Alert severity="warning">{t('activationAffinityUnavailable')}</Alert>}
         </>}
       </Stack>
-    </Paper>
+    </SectionCard>
 
-    {revision && !outcome && <Paper component="section" sx={{ p: { xs: 2, sm: 3 } }} aria-label={t('activationWorkflowTitle')}>
+    {revision && !outcome && <ActivationWizardDialog open={wizardOpen} busy={wizardBusy} step={wizardStep} onClose={closeWizard}>
       <Stack spacing={2}>
-        <Typography component="h2" variant="h6">{t('activationWorkflowTitle')}</Typography>
         <Typography>{t('activationSelectedRevision')}: <bdi>{revision.id}</bdi></Typography>
         {state.kind === 'idle' && <Button variant="contained" disabled={disabled || !status?.preparation_enabled} onClick={() => void prepare()}>{t('activationPrepare')}</Button>}
         {state.kind === 'preparing' && <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}><CircularProgress size={20} /><Typography role="status">{t('activationPreparing')}</Typography></Stack>}
@@ -356,9 +372,9 @@ export default function ActivationWorkflow({ revision, isolatedTest, enrolledUse
         </Alert>}
         {recoveryError && <Alert severity="info">{t('recoveryReadinessUnavailable')}</Alert>}
       </Stack>
-    </Paper>}
+    </ActivationWizardDialog>}
 
-    {outcome && <ActivationOutcomePanel outcome={outcome} status={status || undefined} busy={false}
+    {outcome && <ActivationOutcomePanel outcome={outcome} status={statusError ? undefined : status || undefined} busy={false}
       onInspect={() => void inspect()} onReconcile={() => void reconcile()} onReset={() => setState({ kind: 'idle' })} />}
 
     {confirming && revision && preparation && isolatedTest?.tested_identity && enrolledUser && <ActivationConfirmDialog

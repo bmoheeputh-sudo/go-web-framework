@@ -183,6 +183,7 @@ describe('OIDC activation state machine', () => {
       confirm: true, reason: 'Approved security cutover',
     })
     expect(screen.getByText(en.activationOutcome_committed_applied)).toBeTruthy()
+    expect(screen.queryByRole('dialog', { name: en.activationWorkflowTitle })).toBeNull()
     expect(localWrite).not.toHaveBeenCalled()
   })
 
@@ -208,6 +209,7 @@ describe('OIDC activation state machine', () => {
     for (const checkbox of within(dialog).getAllByRole('checkbox')) fireEvent.click(checkbox)
     await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: en.activationConfirmAction })) })
     expect(screen.getByText(en.activationOutcome_committed_not_applied)).toBeTruthy()
+    expect(screen.queryByRole('dialog', { name: en.activationWorkflowTitle })).toBeNull()
     await tick()
     expect(screen.getByTestId('cached-auth-history').textContent).toBe('updated')
     expect(fetcher.mock.calls.filter(([path]) => path === authStatusPath)).toHaveLength(2)
@@ -248,6 +250,7 @@ describe('OIDC activation state machine', () => {
     fetcher.mockImplementation(async (path: string) => path === '/api/admin/auth/activation/status' ? Response.json({ error: 'unavailable' }, { status: 503 }) : Promise.reject(new Error('unexpected')))
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationInspectStatus })) })
     expect(screen.getByText(en.activationOutcome_outcome_unknown)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: en.activationReconcile })).toBeNull()
     await tick(60_000)
     expect(fetcher.mock.calls.filter(([path]) => String(path).endsWith('/activate'))).toHaveLength(1)
   })
@@ -312,7 +315,7 @@ describe('OIDC activation state machine', () => {
     const { instance } = setup(); await tick()
     await act(async () => { await instance.changeLanguage('ar') })
     expect(document.documentElement.dir).toBe('rtl')
-    expect(screen.getByRole('region', { name: resources.ar.auth.activationStatusTitle })).toBeTruthy()
+    expect(screen.getByRole('region', { name: resources.ar.auth.activationStatusTitle, hidden: true })).toBeTruthy()
   })
 })
 

@@ -38,10 +38,11 @@ function CopyValue({ label, value }: { label: string; value: string }) {
   </Box>
 }
 
-export default function OIDCProviderSetup({ metadata, loading, error }: {
+export default function OIDCProviderSetup({ metadata, loading, error, defaultExpanded = false }: {
   metadata?: OIDCProviderSetupMetadata
   loading: boolean
   error: string
+  defaultExpanded?: boolean
 }) {
   const { t } = useTranslation(['auth', 'common'])
   const notify = useNotifications()
@@ -58,7 +59,7 @@ export default function OIDCProviderSetup({ metadata, loading, error }: {
     okta: t('setupProviderOkta'), auth0: t('setupProviderAuth0'), entra: t('setupProviderEntra'),
     google: t('setupProviderGoogle'), generic: t('setupProviderGeneric'),
   }
-  return <Accordion component="section" role="region" aria-labelledby="oidc-provider-setup-title" defaultExpanded disableGutters sx={{ '&::before': { display: 'none' } }}>
+  return <Accordion component="section" role="region" aria-labelledby="oidc-provider-setup-title" defaultExpanded={defaultExpanded} disableGutters sx={{ '&::before': { display: 'none' } }}>
     <AccordionSummary expandIcon={<ExpandMore />} aria-controls="oidc-provider-setup-content" id="oidc-provider-setup-header">
       <Box>
         <Typography id="oidc-provider-setup-title" component="h2" variant="h6">{t('setupTitle')}</Typography>

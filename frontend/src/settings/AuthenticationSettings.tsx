@@ -1,23 +1,26 @@
 import { useEffect, useRef, useState } from 'react'
-import { Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Paper, Stack, TableCell, TableRow, Typography } from '@mui/material'
+import { Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Stack, TableCell, TableRow, Typography } from '@mui/material'
 import { useTranslation } from 'react-i18next'
 import { APIError, errorKey } from '../api/client'
+import type { User } from '../api/client'
 import { authProviderSetupPath, authSettingsPath, authStatusPath } from '../api/authConfiguration'
-import type { AuthHistory, AuthRevision, AuthStatus, OIDCProviderSetupMetadata } from '../api/authConfiguration'
+import type { AuthHistory, AuthRevision, AuthStatus, ConnectionTest, OIDCProviderSetupMetadata } from '../api/authConfiguration'
 import { useQuery, useQueryCache } from '../api/queries'
 import { useAuthenticationCacheSync } from '../api/authCache'
 import CompactTable from '../components/CompactTable'
 import { PageTools } from '../components/PageTools'
+import DetailDrawer from '../components/common/DetailDrawer'
+import SectionCard from '../components/common/SectionCard'
+import StatusBadge from '../components/common/StatusBadge'
+import TwoColumnKeyValue from '../components/common/TwoColumnKeyValue'
 import { formatDate, formatNumber } from '../i18n'
 import { useNotifications } from '../notifications/notifications'
 import type { Notification } from '../notifications/notifications'
-import type { User } from '../api/client'
 import AuthDraftForm from './AuthDraftForm'
 import ActivationWorkflow from './ActivationWorkflow'
-import OIDCConnectionTest from './OIDCConnectionTest'
 import OIDCProviderSetup from './OIDCProviderSetup'
 import RecoveryDraftDialog from './RecoveryDraftDialog'
-import type { ConnectionTest } from '../api/authConfiguration'
+import RevisionDetailDrawer from './RevisionDetailDrawer'
 
 export default function AuthenticationSettings() {
   const { t, i18n } = useTranslation(['auth', 'common', 'admin'])
@@ -29,10 +32,12 @@ export default function AuthenticationSettings() {
   const history = useQuery<AuthHistory>(`${authSettingsPath}?limit=20&before_version=${cursors.at(-1)}`)
   const [selected, setSelected] = useState<string | null>(null)
   const detail = useQuery<AuthRevision>(selected ? `${authSettingsPath}/${encodeURIComponent(selected)}` : null)
+  const [draftOpen, setDraftOpen] = useState(false), [guideOpen, setGuideOpen] = useState(false)
   const [approval, setApproval] = useState<AuthRevision | null>(null)
   const [isolatedTest, setIsolatedTest] = useState<ConnectionTest | null>(null)
   const [enrolledUser, setEnrolledUser] = useState<User | null>(null)
   const [recoverySource, setRecoverySource] = useState<AuthRevision | null>(null)
+  const [activationRevision, setActivationRevision] = useState<AuthRevision | null>(null)
   const [busy, setBusy] = useState(false), [mutationError, setMutationError] = useState('')
   const mutating = useRef(false), reportedError = useRef('')
   const queryError = status.error || history.error || detail.error
@@ -41,17 +46,15 @@ export default function AuthenticationSettings() {
     if (queryMessage && reportedError.current !== queryMessage) notify({ severity: 'error', messageKey: queryMessage as Notification['messageKey'] })
     reportedError.current = queryMessage
   }, [queryMessage, notify])
-  const loading = status.loading || history.loading || detail.loading
-  const locked = busy || loading
+  const locked = busy || status.loading || history.loading
   const language = i18n.resolvedLanguage || 'en'
   const date = (value?: string) => value ? formatDate(value, language) : t('common:none')
   const version = (revision: AuthRevision) => t('revisionLabel', { version: formatNumber(revision.configuration_version, language) })
   const summary = (revision: AuthRevision | null) => revision ? `${version(revision)} · ${revision.provider} · ${t(`revisionStatus_${revision.status}`)}` : t('common:none')
-  const metadata = detail.data
+  const metadata = detail.data?.id === selected ? detail.data : undefined
   const environment = status.data?.latest_revision?.environment || status.data?.database_active_revision?.environment
-  // The runtime local_dev provider is allowed only in development by the backend.
-  // An empty history under OIDC/IAP does not establish a development environment.
   const development = environment ? environment === 'development' : status.data?.runtime_provider === 'local_dev'
+
   async function mutate(path: string, body: unknown, messageKey: Notification['messageKey']) {
     if (mutating.current) return false
     mutating.current = true; setBusy(true); setMutationError('')
@@ -66,71 +69,73 @@ export default function AuthenticationSettings() {
         : key === 'errorUnavailable' || key === 'errorRequest' ? 'auth:settingsUnavailable' : `admin:${key}`
       setMutationError(messageKey)
       notify({ severity: conflict ? 'warning' : 'error', messageKey })
-      if (conflict) refreshViews() // Refresh metadata/generations; never retry a write automatically.
+      if (conflict) refreshViews()
       return false
     } finally { mutating.current = false; setBusy(false) }
   }
-  return <Stack spacing={3} sx={{ minWidth: 0 }}>
+
+  return <Stack spacing={2} sx={{ minWidth: 0 }}>
     <PageTools busy={locked} error={queryMessage} onRefresh={() => setMutationError('')} />
     {mutationError && <Alert severity={mutationError === 'auth:revisionConflict' ? 'warning' : 'error'}>{t(mutationError)}</Alert>}
-    {status.data && <Paper component="section" aria-label={t('runtimeTitle')} sx={{ p: { xs: 2, sm: 3 }, overflowWrap: 'anywhere' }}>
-      <Typography component="h2" variant="h6" sx={{ mb: 2 }}>{t('runtimeTitle')}</Typography>
-      <Stack spacing={1}>
-        <Typography><strong>{t('runtimeProvider')}: </strong><bdi>{status.data.runtime_provider}</bdi></Typography>
-        <Typography><strong>{t('configurationSource')}: </strong>{t(status.data.runtime_source === 'database' ? 'sourceDatabase' : 'sourceEnvironment')}</Typography>
-        {status.data.management_only && <Alert severity="info">{t('managementOnly')}</Alert>}
-        <Typography><strong>{t('validationMode')}: </strong>{t('offlineValidation')}</Typography>
-        <Typography><strong>{t('latestRevision')}: </strong>{summary(status.data.latest_revision)}</Typography>
-        <Typography><strong>{t('databaseActiveRevision')}: </strong>{summary(status.data.database_active_revision)}</Typography>
-      </Stack>
-    </Paper>}
-    <OIDCProviderSetup metadata={setup.data} loading={setup.loading} error={setup.error} />
-    <Alert severity="info">{t('offlineHelp')}</Alert>
-    {status.data && <AuthDraftForm development={development} latestVersion={status.data.latest_revision?.configuration_version || 0} busy={locked || Boolean(queryError)} trustedRedirectURI={setup.data?.normal_callback_url} onCreate={async (body) => {
-      const success = await mutate(authSettingsPath, body, 'auth:draftCreated')
-      if (success) setCursors([0])
-      return success
-    }} />}
-    <Paper component="section" sx={{ p: { xs: 2, sm: 3 }, minWidth: 0 }}>
-      <Typography component="h2" variant="h6" sx={{ mb: 2 }}>{t('history')}</Typography>
-      <CompactTable label={t('history')} headers={[t('revision'), t('provider'), t('common:status'), t('creator'), t('createdAt'), t('validatedAt'), t('approvedAt'), t('secretIndicator'), t('actions')]}
-        empty={Boolean(history.data) && !history.data?.revisions?.length} emptyMessage={t('emptyHistory')} minWidth={950}>
-        {history.data?.revisions?.map((revision) => <TableRow key={revision.id}>
-          <TableCell>{formatNumber(revision.configuration_version, language)}</TableCell><TableCell><bdi>{revision.provider}</bdi></TableCell>
-          <TableCell>{t(`revisionStatus_${revision.status}`)}</TableCell><TableCell><bdi>{revision.created_by}</bdi></TableCell>
-          <TableCell>{date(revision.created_at)}</TableCell><TableCell>{date(revision.validated_at)}</TableCell><TableCell>{date(revision.approved_at)}</TableCell>
-          <TableCell>{t(revision.has_secret ? 'secretPresent' : 'secretAbsent')}</TableCell>
-          <TableCell><Button disabled={locked} onClick={() => { setSelected(revision.id); setMutationError('') }} aria-label={t('viewRevision', { version: formatNumber(revision.configuration_version, language) })}>{t('view')}</Button></TableCell>
+    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'repeat(2, minmax(0, 1fr))' }, gap: 2, alignItems: 'start' }}>
+      {status.data && <SectionCard title={t('runtimeTitle')}>
+        <Stack spacing={2}>
+          <TwoColumnKeyValue items={[
+            { label: t('runtimeProvider'), value: <bdi>{status.data.runtime_provider}</bdi> },
+            { label: t('configurationSource'), value: t(status.data.runtime_source === 'database' ? 'sourceDatabase' : 'sourceEnvironment') },
+            { label: t('validationMode'), value: t('offlineValidation') },
+            { label: t('latestRevision'), value: summary(status.data.latest_revision) },
+            { label: t('databaseActiveRevision'), value: summary(status.data.database_active_revision) },
+          ]} />
+          {status.data.management_only && <Alert severity="info">{t('managementOnly')}</Alert>}
+        </Stack>
+      </SectionCard>}
+      <ActivationWorkflow revision={activationRevision} open={Boolean(activationRevision)} onClose={() => setActivationRevision(null)}
+        isolatedTest={isolatedTest} enrolledUser={enrolledUser} disabled={locked || Boolean(queryError)} onResolvedUser={setEnrolledUser} />
+    </Box>
+
+    <SectionCard title={t('history')} actions={<Stack direction="row" sx={{ gap: 1, flexWrap: 'wrap' }}>
+      <Button variant="contained" disabled={locked || !status.data} onClick={() => setDraftOpen(true)}>{t('newDraft')}</Button>
+      <Button variant="outlined" onClick={() => setGuideOpen(true)}>{t('setupTitle')}</Button>
+    </Stack>}>
+      <CompactTable label={t('revision')} headers={[t('revision'), t('provider'), t('issuerURL'), t('common:status'), t('activationAuthoritativeGeneration'), t('createdAt'), t('actions')]}
+        empty={Boolean(history.data) && !history.data?.revisions?.length} emptyMessage={t('emptyHistory')} minWidth={800}>
+        {history.data?.revisions?.map((revision) => <TableRow key={revision.id} hover>
+          <TableCell>{formatNumber(revision.configuration_version, language)}</TableCell>
+          <TableCell><bdi>{revision.provider}</bdi></TableCell>
+          <TableCell sx={{ maxWidth: 220 }}><Typography variant="body2" noWrap title={revision.issuer_url || undefined}><bdi>{revision.issuer_url || t('common:none')}</bdi></Typography></TableCell>
+          <TableCell><StatusBadge label={t(`revisionStatus_${revision.status}`)} tone={revision.status === 'active' ? 'success' : revision.status === 'approved' ? 'info' : 'neutral'} /></TableCell>
+          <TableCell>{formatNumber(revision.generation, language)}</TableCell>
+          <TableCell>{date(revision.created_at)}</TableCell>
+          <TableCell><Button size="small" disabled={locked} onClick={() => { setSelected(revision.id); setMutationError('') }} aria-label={t('viewRevision', { version: formatNumber(revision.configuration_version, language) })}>{t('view')}</Button></TableCell>
         </TableRow>)}
       </CompactTable>
       <Stack direction="row" sx={{ mt: 2, flexWrap: 'wrap', gap: 1 }}>
         <Button disabled={locked || cursors.length === 1} onClick={() => setCursors(cursors.slice(0, -1))}>{t('common:previousPage')}</Button>
         <Button disabled={locked || !history.data?.next_before_version} onClick={() => setCursors([...cursors, history.data!.next_before_version])}>{t('common:nextPage')}</Button>
       </Stack>
-    </Paper>
-    {metadata && <Paper component="section" aria-label={t('revisionMetadata')} sx={{ p: { xs: 2, sm: 3 }, overflowWrap: 'anywhere' }}>
-      <Typography component="h2" variant="h6">{t('revisionMetadata')} — {version(metadata)}</Typography>
-      <Box component="dl" sx={{ '& dt': { fontWeight: 600, mt: 1 }, '& dd': { m: 0 } }}>
-        {[
-          [t('provider'), metadata.provider], [t('common:status'), t(`revisionStatus_${metadata.status}`)],
-          [t('revisionID'), metadata.id], [t('deployment'), metadata.deployment_id], [t('environment'), metadata.environment],
-          [t('creator'), metadata.created_by], [t('createdAt'), date(metadata.created_at)],
-          [t('validatedAt'), date(metadata.validated_at)], [t('approvedAt'), date(metadata.approved_at)],
-          [t('secretIndicator'), t(metadata.has_secret ? 'secretPresent' : 'secretAbsent')],
-          ...(metadata.provider === 'oidc' ? [[t('issuerURL'), metadata.issuer_url], [t('clientID'), metadata.client_id], [t('redirectURI'), metadata.redirect_uri], [t('allowHTTP'), t(metadata.allow_http_development ? 'yes' : 'no')]] : []),
-          ...(metadata.provider === 'google_iap' ? [[t('iapAudience'), metadata.iap_audience]] : []),
-        ].map(([label, value]) => <Box key={label}><dt>{label}</dt><dd><bdi>{value}</bdi></dd></Box>)}
-      </Box>
-      <Stack direction="row" sx={{ gap: 1, flexWrap: 'wrap' }}>
-        {metadata.status === 'draft' && <Button disabled={locked || Boolean(queryError)} variant="contained" onClick={() => void mutate(`${authSettingsPath}/${metadata.id}/validate`, { expected_generation: metadata.generation }, 'auth:validationSaved')}>{t('validateSettings')}</Button>}
-        {metadata.status === 'validated' && <Button disabled={locked || Boolean(queryError)} variant="contained" onClick={() => setApproval(metadata)}>{t('approveRevision')}</Button>}
-      </Stack>
-      {metadata.status === 'approved' && metadata.provider === 'oidc' && <OIDCConnectionTest key={metadata.id} revision={metadata} disabled={locked || Boolean(queryError)}
-        onResult={(result) => { setIsolatedTest(result); setEnrolledUser(null) }} onEnrolled={setEnrolledUser} />}
-      {metadata.status === 'superseded' && metadata.provider === 'oidc' && <Button variant="outlined" disabled={locked || Boolean(queryError)} onClick={() => setRecoverySource(metadata)}>{t('recoveryCreateAction')}</Button>}
-    </Paper>}
-    {status.data && <ActivationWorkflow key={metadata?.id || 'no-activation-revision'} revision={metadata?.status === 'approved' && metadata.provider === 'oidc' ? metadata : null}
-      isolatedTest={isolatedTest} enrolledUser={enrolledUser} disabled={locked || Boolean(queryError)} onResolvedUser={setEnrolledUser} />}
+    </SectionCard>
+
+    <RevisionDetailDrawer open={Boolean(selected)} revision={metadata} loading={detail.loading} disabled={locked || detail.loading || Boolean(queryError)}
+      onClose={() => setSelected(null)} onValidate={(revision) => void mutate(`${authSettingsPath}/${revision.id}/validate`, { expected_generation: revision.generation }, 'auth:validationSaved')}
+      onApprove={setApproval} onPrepare={(revision) => { setActivationRevision(revision); setSelected(null) }} onRecovery={setRecoverySource}
+      onTestResult={(result) => { setIsolatedTest(result); setEnrolledUser(null) }} onEnrolled={setEnrolledUser} />
+
+    <Dialog open={draftOpen && Boolean(status.data)} onClose={() => { if (!busy) setDraftOpen(false) }} fullWidth maxWidth="sm" aria-labelledby="auth-draft-title">
+      <DialogTitle id="auth-draft-title">{t('newDraft')}</DialogTitle>
+      <DialogContent dividers>{status.data && <AuthDraftForm development={development} latestVersion={status.data.latest_revision?.configuration_version || 0}
+        busy={locked || Boolean(queryError)} trustedRedirectURI={setup.data?.normal_callback_url} onCreate={async (body) => {
+          const success = await mutate(authSettingsPath, body, 'auth:draftCreated')
+          if (success) { setCursors([0]); setDraftOpen(false) }
+          return success
+        }} />}</DialogContent>
+      <DialogActions><Button disabled={busy} onClick={() => setDraftOpen(false)}>{t('common:cancel')}</Button></DialogActions>
+    </Dialog>
+
+    <DetailDrawer open={guideOpen} onClose={() => setGuideOpen(false)} title={t('setupTitle')}>
+      <OIDCProviderSetup metadata={setup.data} loading={setup.loading} error={setup.error} defaultExpanded />
+    </DetailDrawer>
+
     <Dialog open={Boolean(approval)} onClose={() => { if (!busy) setApproval(null) }} fullWidth maxWidth="sm" aria-labelledby="auth-approve-title">
       <DialogTitle id="auth-approve-title">{t('approveTitle')}</DialogTitle>
       <DialogContent>{approval && <Typography sx={{ mb: 2 }}>{summary(approval)}</Typography>}<Typography>{t('approveHelp')}</Typography></DialogContent>

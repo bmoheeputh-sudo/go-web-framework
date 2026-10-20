@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Alert, Button, Checkbox, FormControlLabel, IconButton, InputAdornment, MenuItem, Paper, Stack, TextField, Typography } from '@mui/material'
+import { Alert, Box, Button, Checkbox, FormControlLabel, IconButton, InputAdornment, MenuItem, Stack, TextField, Typography } from '@mui/material'
 import Visibility from '@mui/icons-material/Visibility'
 import VisibilityOff from '@mui/icons-material/VisibilityOff'
 import { useTranslation } from 'react-i18next'
@@ -39,7 +39,7 @@ export default function AuthDraftForm({ development, latestVersion, busy, truste
     setSecret(''); setShowSecret(false); setInvalid(false)
     await onCreate(body) // Only the request owns the submitted secret; never persisted or cached.
   }
-  return <Paper component="form" onSubmit={(event) => void submit(event)} noValidate autoComplete="off" sx={{ p: { xs: 2, sm: 3 }, minWidth: 0 }} aria-label={t('newDraft')}>
+  return <Box component="form" onSubmit={(event) => void submit(event)} noValidate autoComplete="off" sx={{ pt: 1, minWidth: 0 }} aria-label={t('newDraft')}>
     <Stack spacing={2}>
       <Typography component="h3" variant="h6">{t('newDraft')}</Typography>
       {invalid && <Alert severity="error">{t('admin:errorInvalid')}</Alert>}
@@ -69,5 +69,5 @@ export default function AuthDraftForm({ development, latestVersion, busy, truste
       {provider === 'local_dev' && <Alert severity="warning">{t('localHelp')}</Alert>}
       <Button type="submit" variant="contained" disabled={busy || (provider === 'local_dev' && !development)} sx={{ alignSelf: 'flex-start' }}>{t('createDraft')}</Button>
     </Stack>
-  </Paper>
+  </Box>
 }
