@@ -10,8 +10,8 @@ import (
 var ErrUnauthenticated = errors.New("unauthenticated")
 
 // Authenticator resolves the identity for a protected request. It does not impose
-// a shared credential format: IAP can verify its assertion, while OIDC can resolve
-// a session established by separate login/callback handlers. Those flows and
+// a shared credential format: OIDC resolves a session established by separate
+// login/callback handlers, while Local DEV uses a fixed development identity. Those flows and
 // session storage are intentionally outside this request-authentication interface.
 type Authenticator interface {
 	Authenticate(*http.Request) (Identity, error)
@@ -38,7 +38,7 @@ func Require(provider Authenticator, next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "unauthenticated")
 			return
 		}
-		if errors.Is(err, ErrStoreUnavailable) || errors.Is(err, ErrIAPKeysUnavailable) {
+		if errors.Is(err, ErrStoreUnavailable) {
 			writeError(w, http.StatusServiceUnavailable, "authentication temporarily unavailable")
 			return
 		}

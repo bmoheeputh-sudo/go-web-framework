@@ -11,9 +11,8 @@ import (
 type Provider string
 
 const (
-	OIDC      Provider = "oidc"
-	GoogleIAP Provider = "google_iap"
-	LocalDev  Provider = "local_dev"
+	OIDC     Provider = "oidc"
+	LocalDev Provider = "local_dev"
 )
 
 // Identity is the result of authentication, never a client-supplied login payload.
@@ -40,7 +39,7 @@ func (i Identity) Validate() error {
 		}
 	}
 	switch i.Provider {
-	case OIDC, GoogleIAP, LocalDev:
+	case OIDC, LocalDev:
 	default:
 		return errors.New("identity has an unsupported authentication provider")
 	}

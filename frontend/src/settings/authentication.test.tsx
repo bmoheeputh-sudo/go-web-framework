@@ -8,7 +8,8 @@ import LanguageProvider from '../LanguageProvider'
 import { createI18n, resources } from '../i18n'
 import { bob, mockAPI, mockMedia } from '../test/fixtures'
 import { activationStatusPath, authProviderSetupPath as setupPath, authSettingsPath as settings, authStatusPath as statusPath } from '../api/authConfiguration'
-import type { AuthProvider, AuthRevision, OIDCProviderSetupMetadata } from '../api/authConfiguration'
+import type { AuthRevision, OIDCProviderSetupMetadata } from '../api/authConfiguration'
+import type { Identity } from '../api/client'
 
 beforeEach(() => {
   mockMedia(); localStorage.clear(); sessionStorage.clear()
@@ -24,7 +25,7 @@ function revision(overrides: Partial<AuthRevision> = {}): AuthRevision {
     status: 'draft', generation: 1, created_by: '22222222-2222-4222-8222-222222222222', created_at: stamp,
     updated_by: '22222222-2222-4222-8222-222222222222', updated_at: stamp, validation: {}, has_secret: true, ...overrides }
 }
-function authAPI(initial: AuthRevision[] = [], runtime: AuthProvider = 'local_dev', setupOverrides: Partial<OIDCProviderSetupMetadata> = {}) {
+function authAPI(initial: AuthRevision[] = [], runtime: Identity['provider'] = 'local_dev', setupOverrides: Partial<OIDCProviderSetupMetadata> = {}) {
   const fixture = mockAPI({ provider: runtime })
   const records = structuredClone(initial)
   const original = fixture.fetcher.getMockImplementation()!
@@ -132,6 +133,17 @@ it('keeps runtime environment authentication separate from approved and database
   expect(fetcher.mock.calls.filter(([path]) => path.startsWith(statusPath)).every(([path]) => path === statusPath)).toBe(true)
 }, 15000)
 
+it.each(['draft', 'validated'] as const)('keeps historical IAP %s revisions readable but not actionable', async (status) => {
+  const legacy = revision({ provider: 'google_iap', iap_audience: '/projects/123/apps/legacy', status, has_secret: false })
+  const { fetcher } = authAPI([legacy]); mount(); await openAuth()
+  const detail = await view()
+  expect(detail.textContent).toContain('/projects/123/apps/legacy')
+  expect(screen.queryByRole('button', { name: en.validateSettings })).toBeNull()
+  expect(screen.queryByRole('button', { name: en.approveRevision })).toBeNull()
+  expect(screen.queryByRole('button', { name: en.testConnection })).toBeNull()
+  expect(writes(fetcher)).toHaveLength(0)
+})
+
 it('opens and closes revision details without document navigation', async () => {
   const unloading = vi.fn()
   window.addEventListener('beforeunload', unloading)
@@ -139,7 +151,7 @@ it('opens and closes revision details without document navigation', async () => 
     authAPI([revision()]); mount(); await openAuth()
     const detail = await view()
     expect(detail.textContent).toContain('https://issuer.example.test')
-    expect(screen.getByRole('button', { name: en.validateSettings })).toBeTruthy()
+    expect(screen.getByRole('button', { name: en.testConnection })).toBeTruthy()
     await userEvent.click(within(screen.getByRole('dialog', { name: /^Revision \d+$/ })).getByRole('button', { name: resources.en.common.close }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(await screen.findByRole('region', { name: en.history })).toBeTruthy()
@@ -176,7 +188,7 @@ it('keeps the configuration table compact and puts revision actions in its fixed
   expect(within(drawer).getByRole('region', { name: en.detailConfiguration })).toBeTruthy()
   expect(within(drawer).getByRole('region', { name: en.detailIdentityProvider })).toBeTruthy()
   expect(within(drawer).getByRole('region', { name: en.detailAuditHistory })).toBeTruthy()
-  expect(within(drawer).getByRole('button', { name: en.validateSettings }).closest('.MuiStack-root')?.parentElement?.className).toContain('MuiDrawer-paper')
+  expect(within(drawer).getByRole('button', { name: en.testConnection }).closest('.MuiStack-root')?.parentElement?.className).toContain('MuiDrawer-paper')
 })
 
 it('shows only lifecycle-appropriate revision actions', async () => {
@@ -186,8 +198,8 @@ it('shows only lifecycle-appropriate revision actions', async () => {
   await view(2)
   const approvedDrawer = screen.getByRole('dialog', { name: 'Revision 2' })
   expect(within(approvedDrawer).getByRole('button', { name: en.testConnection })).toBeTruthy()
-  expect(within(approvedDrawer).getByText(en.testHelp)).toBeTruthy()
-  expect(screen.getByRole('button', { name: en.activationPrepare })).toBeTruthy()
+  expect(within(approvedDrawer).queryByText(en.testHelp)).toBeNull()
+  expect(within(approvedDrawer).queryByRole('button', { name: en.activationPrepare })).toBeNull()
   expect(screen.queryByRole('button', { name: en.validateSettings })).toBeNull()
   await userEvent.click(within(screen.getByRole('dialog', { name: /^Revision \d+$/ })).getByRole('button', { name: resources.en.common.close }))
   await waitFor(() => expect(screen.queryByRole('dialog', { name: /^Revision \d+$/ })).toBeNull())
@@ -295,7 +307,7 @@ it('requires complete OIDC settings and a fresh secret; clears secrets after sub
   await fillOIDC('')
   await userEvent.click(screen.getByRole('button', { name: en.createDraft }))
   expect(writes(fetcher)).toHaveLength(1)
-})
+}, 15000)
 
 it.each(['http://issuer.example.test', 'https://user:password@issuer.test'])('rejects invalid OIDC issuer %s without sending a secret', async (issuer) => {
   const { fetcher } = authAPI(); mount(); await openAuth(); await fillOIDC()
@@ -323,15 +335,11 @@ it('uses a trusted loopback HTTP callback only with explicit development allowan
   expect(screen.getByText(en.setupDevelopmentHTTP)).toBeTruthy()
 })
 
-it('validates IAP audiences and sends only provider-specific settings', async () => {
-  const { fetcher } = authAPI(); mount(); await openAuth(); await fillOIDC()
-  await chooseProvider(en.providerIap)
-  expect(screen.getByText(en.iapHelp)).toBeTruthy()
-  fireEvent.change(screen.getByLabelText(en.iapAudience + ' *'), { target: { value: 'https://wrong.example.test' } })
-  await userEvent.click(screen.getByRole('button', { name: en.createDraft })); expect(writes(fetcher)).toHaveLength(0)
-  fireEvent.change(screen.getByLabelText(en.iapAudience + ' *'), { target: { value: '/projects/123/global/backendServices/456' } })
-  await userEvent.click(screen.getByRole('button', { name: en.createDraft })); await screen.findByRole('status')
-  expect(JSON.parse(writes(fetcher)[0][1]!.body as string)).toEqual({ provider: 'google_iap', iap_audience: '/projects/123/global/backendServices/456', expected_latest_version: 0 })
+it('does not offer IAP for new configurations', async () => {
+  authAPI(); mount(); await openAuth()
+  await userEvent.click(screen.getByRole('button', { name: en.newDraft }))
+  await userEvent.click(screen.getByRole('combobox', { name: en.provider }))
+  expect(screen.queryByRole('option', { name: en.providerIap })).toBeNull()
 })
 
 it('allows Local DEV only when development is confirmed and explains that it never changes runtime', async () => {
@@ -345,13 +353,13 @@ it.each(['production', 'test', 'unknown'] as const)('disables development-only o
   authAPI(environment === 'unknown' ? [] : [revision({ environment })], 'oidc'); mount(); await openAuth()
   await userEvent.click(screen.getByRole('button', { name: en.newDraft }))
   expect(screen.queryByRole('checkbox', { name: en.allowHTTP })).toBeNull()
-  expect(screen.getByText(en.developmentUnavailable)).toBeTruthy()
+  expect(screen.queryByText(en.developmentUnavailable)).toBeNull()
   await userEvent.click(screen.getByRole('combobox', { name: en.provider }))
   expect(screen.getByRole('option', { name: en.providerLocal }).getAttribute('aria-disabled')).toBe('true')
 })
 
 it('validates offline using the current generation, then requires explicit confirmation for approval', async () => {
-  const { fetcher, records } = authAPI([revision()]); mount(); await openAuth(); await view()
+  const { fetcher, records } = authAPI([revision({ provider: 'local_dev', has_secret: false })]); mount(); await openAuth(); await view()
   expect(screen.queryByRole('button', { name: en.approveRevision })).toBeNull()
   await userEvent.click(screen.getByRole('button', { name: en.validateSettings }))
   const toast = await screen.findByRole('status', { hidden: true }); expect(toast.textContent).toContain(en.validationSaved)
@@ -374,7 +382,7 @@ it('validates offline using the current generation, then requires explicit confi
 })
 
 it.each(['draft', 'validate', 'approve'])('refreshes metadata after a %s conflict without retrying the write', async (operation) => {
-  const { fetcher, records } = authAPI([revision({ status: operation === 'approve' ? 'validated' : 'draft' })]); mount(); await openAuth()
+  const { fetcher, records } = authAPI([revision({ provider: 'local_dev', has_secret: false, status: operation === 'approve' ? 'validated' : 'draft' })]); mount(); await openAuth()
   if (operation === 'draft') {
     await fillOIDC(); records[0].configuration_version = 2
     await userEvent.click(screen.getByRole('button', { name: en.createDraft }))

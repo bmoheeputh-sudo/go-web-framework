@@ -1,5 +1,7 @@
 # Runtime authentication dispatcher
 
+> **Phase 10.1 compatibility note:** Google IAP is retired. References below describe the historical design; `AUTH_PROVIDER=google_iap` now fails startup. OIDC and Local DEV remain supported.
+
 Phase 9.2.5E adds an [internal controlled activation foundation](auth-controlled-activation.md).
 The historical environment-only description below is superseded at startup by
 [read-only rehydration](auth-controlled-activation.md#read-only-startup-rehydration-and-lifecycle-hardening).
@@ -93,9 +95,8 @@ an issuer/email match. The current dispatcher does not provide that transition.
 ## Provider boundaries and deferred work
 
 - Local DEV retains development-only startup, loopback binding and fixed identity.
-- IAP still verifies the signed assertion on every authenticated request. There
-  is no OIDC/local fallback or publication path that can replace mandatory IAP.
-  Upstream IAP enforcement and origin restrictions remain infrastructure duties.
+- Retired Google IAP configuration fails startup. The runtime accepts OIDC or
+  development-only Local DEV; it never falls back to another provider.
 - The isolated OIDC connection-test callback remains separate and does not
   create normal sessions. Its existing admin authorization/audit logic is intact.
 - Database activation, rollback, coexistence and old-flow routing are internal
@@ -104,7 +105,7 @@ an issuer/email match. The current dispatcher does not provide that transition.
   snapshot consistency within one process does not establish simultaneous
   activation across processes.
 
-Validation uses synthetic HTTPS OIDC/IAP fixtures and disposable PostgreSQL
+Validation uses synthetic HTTPS OIDC fixtures and disposable PostgreSQL
 clusters, not the development database or live Auth0 credentials:
 
 ```bash

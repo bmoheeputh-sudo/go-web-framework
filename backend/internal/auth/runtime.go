@@ -90,12 +90,6 @@ func prepareEnvironment(provider Authenticator, status RuntimeStatus) (*runtimeS
 		}
 		copy := *p
 		s.auth, s.status.Provider = &copy, LocalDev
-	case *IAPAuthenticator:
-		if p == nil || p.keys == nil || p.now == nil || ValidateIAPAudience(p.audience) != nil {
-			return nil, errors.New("unprepared IAP authentication provider")
-		}
-		copy := *p
-		s.auth, s.status.Provider = &copy, GoogleIAP
 	case *OIDCAuthenticator:
 		if p == nil || p.store == nil || p.verifier == nil || p.client == nil || p.issuer == "" || p.config.ClientID == "" {
 			return nil, errors.New("unprepared OIDC authentication provider")
@@ -121,7 +115,7 @@ func prepareEnvironment(provider Authenticator, status RuntimeStatus) (*runtimeS
 // publish is the legacy environment-only path: it permits only re-publication
 // of the same prepared configuration. Controlled database transitions use
 // Stage/Publication through the internal administrator activation service.
-// Neither path permits replacing an IAP deployment with OIDC.
+// Neither path accepts an unprepared or unsupported provider.
 func (m *Runtime) publish(expected, next *runtimeSnapshot) bool {
 	if next == nil || next.status.Source != "environment" || next.status.TransitionState != "none" || next.status.AppliedGeneration != 0 ||
 		next.status.ActiveRevisionID != "" || next.status.PreviousRevisionID != "" ||

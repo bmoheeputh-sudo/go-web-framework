@@ -20,12 +20,9 @@ type StartupLoader struct {
 	client   func(context.Context, string) (*http.Client, error)
 }
 
-func NewStartupLoader(reader *ActivationReader, cipher *Cipher, sessions auth.SessionConfig, callback string, iapPinned bool) (*StartupLoader, error) {
+func NewStartupLoader(reader *ActivationReader, cipher *Cipher, sessions auth.SessionConfig, callback string) (*StartupLoader, error) {
 	if reader == nil || cipher == nil || cipher.aead == nil || callback == "" {
 		return nil, ErrInvalid
-	}
-	if iapPinned {
-		return nil, ErrDenied
 	}
 	return &StartupLoader{reader, cipher, sessions, callback, newTestClient}, nil
 }
@@ -165,15 +162,15 @@ func (l *StartupLoader) Load(ctx context.Context) (*auth.Runtime, error) {
 // StartupRuntimeFromEnv returns nil only for an explicitly permitted environment
 // policy. Missing keys or failed database preparation must never mean fallback.
 func StartupRuntimeFromEnv(ctx context.Context, reader *ActivationReader, getenv func(string) string) (*auth.Runtime, error) {
+	if getenv("AUTH_PROVIDER") == "google_iap" {
+		return nil, ErrDenied
+	}
 	err := reader.RequireEnvironmentStartup(ctx)
 	if err == nil {
 		return nil, nil
 	}
 	if !errors.Is(err, ErrDatabaseRuntimeRequired) {
 		return nil, err
-	}
-	if auth.Provider(getenv("AUTH_PROVIDER")) == auth.GoogleIAP {
-		return nil, ErrDenied
 	}
 	cipher, err := CipherFromEnv(getenv)
 	if err != nil {
@@ -183,7 +180,7 @@ func StartupRuntimeFromEnv(ctx context.Context, reader *ActivationReader, getenv
 	if err != nil {
 		return nil, ErrInvalid
 	}
-	loader, err := NewStartupLoader(reader, cipher, sessions, getenv("APP_ORIGIN")+"/api/auth/callback", false)
+	loader, err := NewStartupLoader(reader, cipher, sessions, getenv("APP_ORIGIN")+"/api/auth/callback")
 	if err != nil {
 		return nil, err
 	}

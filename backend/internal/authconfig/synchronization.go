@@ -157,7 +157,7 @@ func (s *Synchronizer) Reconcile(ctx context.Context) (err error) {
 	s.mu.Lock()
 	s.status.DesiredGeneration = head.Generation
 	s.mu.Unlock()
-	if applied.Provider == auth.GoogleIAP || head.Generation < applied.AppliedGeneration {
+	if (applied.Provider != auth.OIDC && applied.Provider != auth.LocalDev) || head.Generation < applied.AppliedGeneration {
 		return ErrDenied
 	}
 	if head.Generation == applied.AppliedGeneration {
@@ -327,7 +327,9 @@ func NewSynchronizerFromEnv(reader *ActivationReader, runtime *auth.Runtime, get
 	}
 	host, _, addressErr := net.SplitHostPort(address)
 	unsafeHTTP := strings.HasPrefix(callback, "http://") && (addressErr != nil || !net.ParseIP(host).IsLoopback())
-	pinned := auth.Provider(getenv("AUTH_PROVIDER")) == auth.GoogleIAP
+	if getenv("AUTH_PROVIDER") == "google_iap" {
+		return nil, ErrDenied
+	}
 	load := func(ctx context.Context) (*auth.Runtime, error) {
 		if unsafeHTTP {
 			return nil, ErrInvalid
@@ -338,7 +340,7 @@ func NewSynchronizerFromEnv(reader *ActivationReader, runtime *auth.Runtime, get
 		if sessionErr != nil {
 			return nil, ErrInvalid
 		}
-		loader, err := NewStartupLoader(reader, cipher, sessions, callback, pinned)
+		loader, err := NewStartupLoader(reader, cipher, sessions, callback)
 		if err != nil {
 			return nil, err
 		}

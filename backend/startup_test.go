@@ -66,7 +66,7 @@ func TestStartupPolicyPreservesLocalDevWithIsolatedDatabase(t *testing.T) {
 }
 
 func TestStartupPolicyBlocksBeforeAnyEnvironmentProvider(t *testing.T) {
-	for _, provider := range []string{"local_dev", "oidc", "google_iap", ""} {
+	for _, provider := range []string{"local_dev", "oidc", ""} {
 		for _, failure := range []error{authconfig.ErrDatabaseRuntimeRequired, authconfig.ErrUnavailable} {
 			env := developmentEnvironment()
 			env["AUTH_PROVIDER"] = provider

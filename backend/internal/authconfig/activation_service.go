@@ -61,7 +61,7 @@ func NewActivationService(repo *Repository, runtime *auth.Runtime, store *auth.P
 		return nil, ErrInvalid
 	}
 	status, _, mismatch := runtime.ControlStatus()
-	if mismatch || status.Provider == auth.GoogleIAP || status.DeploymentID != repo.scope.DeploymentID || status.Environment != repo.scope.Environment {
+	if mismatch || (status.Provider != auth.OIDC && status.Provider != auth.LocalDev) || status.DeploymentID != repo.scope.DeploymentID || status.Environment != repo.scope.Environment {
 		return nil, ErrDenied
 	}
 	return &ActivationService{repo: repo, runtime: runtime, store: store, sessions: sessions, callback: callback,

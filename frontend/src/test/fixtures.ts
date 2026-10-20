@@ -37,6 +37,10 @@ export function mockAPI(options: { user?: User; provider?: Identity['provider'];
       return new Response(null, { status: 204 })
     }
     if (path === '/api/modules') return Response.json({ modules: options.modules || [] })
+    if (path === '/api/admin/auth/status') return Response.json({
+      runtime_provider: options.provider || 'oidc', runtime_source: (options.provider || 'oidc') === 'oidc' ? 'database' : 'environment',
+      database_active_revision: (options.provider || 'oidc') === 'oidc' ? { provider: 'oidc', issuer_url: identity.issuer } : null,
+    })
     if (path === '/api/access/me') return options.accessStatus ? Response.json({ error: 'UNTRUSTED SERVER DETAILS' }, { status: options.accessStatus }) : Response.json(current)
     if (path === '/api/accounts') return Response.json(accounts.filter((a) => a.active && current.account_ids.includes(a.id)))
     if (method !== 'GET') {

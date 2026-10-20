@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import { Alert, Button, Stack, Typography } from '@mui/material'
+import { Accordion, AccordionDetails, AccordionSummary, Alert, Button, Stack, Typography } from '@mui/material'
+import ExpandMore from '@mui/icons-material/ExpandMore'
 import { useTranslation } from 'react-i18next'
 import { api, APIError } from '../api/client'
 import type { AuthRevision, ConnectionTest, StartedConnectionTest } from '../api/authConfiguration'
@@ -19,19 +20,29 @@ function stop(run: Run) {
   clearTimeout(run.timer)
   clearTimeout(run.deadlineTimer)
   run.controller.abort()
-  run.popup.close()
+  try { run.popup.close() } catch { /* COOP may sever the window reference. */ }
 }
 
-export type OIDCConnectionTestHandle = { start: () => void }
+function releasePopup(run: Run) {
+  run.stopped = true
+  clearTimeout(run.timer)
+  clearTimeout(run.deadlineTimer)
+  run.controller.abort()
+}
+
+export type OIDCConnectionTestHandle = { start: (popup?: Window) => void }
 
 const OIDCConnectionTest = forwardRef<OIDCConnectionTestHandle, {
   revision: AuthRevision; disabled: boolean
   externalTrigger?: boolean
   showEnrollment?: boolean
+  inlineEnrollment?: boolean
+  guided?: boolean
   onBusyChange?: (busy: boolean) => void
   onResult?: (result: ConnectionTest | null) => void
   onEnrolled?: (user: User) => void
-}>(function OIDCConnectionTest({ revision, disabled, externalTrigger = false, showEnrollment = true, onBusyChange, onResult, onEnrolled }, ref) {
+  onVerifiedPopup?: (popup: Window, result: ConnectionTest) => void
+}>(function OIDCConnectionTest({ revision, disabled, externalTrigger = false, showEnrollment = true, inlineEnrollment = false, guided = false, onBusyChange, onResult, onEnrolled, onVerifiedPopup }, ref) {
   const { t, i18n } = useTranslation('auth')
   const notify = useNotifications(), cache = useQueryCache(), { expire } = useSession()
   const active = useRef<Run | null>(null)
@@ -56,7 +67,12 @@ const OIDCConnectionTest = forwardRef<OIDCConnectionTestHandle, {
   function accept(run: Run, value: ConnectionTest) {
     setResult(value); onResult?.(value)
     if (pending(value)) return false
-    stop(run); setBusy(false); onBusyChange?.(false)
+    if (value.status === 'succeeded' && onVerifiedPopup) {
+      releasePopup(run)
+      active.current = null
+      onVerifiedPopup(run.popup, value)
+    } else stop(run)
+    setBusy(false); onBusyChange?.(false)
     notify({ severity: value.status === 'succeeded' ? 'success' : value.status === 'failed' ? 'error' : 'warning', messageKey: `auth:test_${value.status}` })
     return true
   }
@@ -73,16 +89,16 @@ const OIDCConnectionTest = forwardRef<OIDCConnectionTestHandle, {
     try {
       const value = await api<ConnectionTest>(testPath(run.id), 'GET', undefined, run.controller.signal)
       if (run.stopped || accept(run, value)) return
-      if (run.popup.closed) { await cancel(run); return }
       // A server response remains authoritative; a client deadline only bounds
-      // polling and closes the popup when the network cannot report expiry.
+      // polling when the network cannot report expiry. Cross-origin window
+      // properties are never inspected while the identity provider is open.
       if (Date.now() > deadline + 15_000) { fail(run, new Error('test deadline')); return }
       run.timer = setTimeout(() => void poll(run, deadline), 2000)
     } catch (error) { fail(run, error) }
   }
-  async function start() {
+  async function start(existingPopup?: Window) {
     if (active.current && !active.current.stopped) return
-    const popup = window.open('about:blank', '_blank', 'popup,width=520,height=720')
+    const popup = existingPopup ?? window.open('about:blank', '_blank', 'popup,width=520,height=720')
     if (!popup) { notify({ severity: 'warning', messageKey: 'auth:testPopupBlocked' }); return }
     popup.opener = null // Provider pages cannot navigate the administrator's window.
     const run: Run = { popup, stopped: false, controller: new AbortController() }
@@ -94,7 +110,6 @@ const OIDCConnectionTest = forwardRef<OIDCConnectionTestHandle, {
       clearTimeout(run.timer); run.id = started.id
       const { authorization_url: authorizationURL, ...value } = started
       if (accept(run, value)) return
-      if (popup.closed) { await cancel(run); return }
       const location = new URL(authorizationURL || '')
       if (location.protocol !== 'https:' || location.origin !== new URL(revision.issuer_url).origin || location.username || location.password) throw new Error('invalid test URL')
       popup.location.replace(location.href)
@@ -102,9 +117,9 @@ const OIDCConnectionTest = forwardRef<OIDCConnectionTestHandle, {
       run.timer = setTimeout(() => void poll(run, Date.parse(value.expires_at)), 2000)
     } catch (error) { fail(run, error) }
   }
-  useImperativeHandle(ref, () => ({ start: () => { if (!disabled) void start() } }))
+  useImperativeHandle(ref, () => ({ start: (popup?: Window) => { if (!disabled) void start(popup) } }))
   return <Stack spacing={2} sx={{ mt: 2, minWidth: 0 }}>
-    <Alert severity="info">{t('testHelp')}</Alert>
+    {!guided && <Alert severity="info">{t('testHelp')}</Alert>}
     <Stack direction="row" sx={{ gap: 1, flexWrap: 'wrap' }}>
       {!externalTrigger && <Button variant="outlined" disabled={disabled || busy} onClick={() => void start()}>{t('testConnection')}</Button>}
       {busy && <Button onClick={() => { if (active.current?.id) void cancel(active.current); else if (active.current) { stop(active.current); setBusy(false); onBusyChange?.(false); notify({ severity: 'warning', messageKey: 'auth:test_cancelled' }) } }}>{t('testCancel')}</Button>}
@@ -112,13 +127,17 @@ const OIDCConnectionTest = forwardRef<OIDCConnectionTestHandle, {
     {busy && <Typography role="status">{t('testInProgress')}</Typography>}
     {error && <Alert severity="error">{t('testUnavailable')}</Alert>}
     {result && <Stack spacing={1} sx={{ overflowWrap: 'anywhere' }}>
-      <Typography>{t('revisionLabel', { version: formatNumber(result.configuration_version, i18n.resolvedLanguage || 'en') })} — {t(`test_${result.status}`)}</Typography>
-      <Typography>{t('testCallback')}: <bdi>{result.callback_uri}</bdi></Typography>
-      {result.tested_identity && <>
-        <Typography>{t('testIdentity')}</Typography>
-        <Typography><bdi>{result.tested_identity.issuer}</bdi> · <bdi>{result.tested_identity.subject}</bdi></Typography>
-      </>}
-      {showEnrollment && result.evidence_id && <IdentityEnrollment key={result.evidence_id} revision={revision} result={result} disabled={disabled || busy} onEnrolled={onEnrolled} />}
+      <Typography>{t(`test_${result.status}`)}</Typography>
+      {result.status === 'succeeded' && result.tested_identity && <Typography variant="body2" color="text.secondary">{t('testIdentity')}</Typography>}
+      <Accordion disableGutters variant="outlined" sx={{ '&::before': { display: 'none' } }}>
+        <AccordionSummary expandIcon={<ExpandMore />}>{t('technicalDetails')}</AccordionSummary>
+        <AccordionDetails><Stack spacing={1}>
+          <Typography>{t('revisionLabel', { version: formatNumber(result.configuration_version, i18n.resolvedLanguage || 'en') })}</Typography>
+          <Typography>{t('testCallback')}: <bdi>{result.callback_uri}</bdi></Typography>
+          {result.tested_identity && <Typography><bdi>{result.tested_identity.issuer}</bdi> · <bdi>{result.tested_identity.subject}</bdi></Typography>}
+        </Stack></AccordionDetails>
+      </Accordion>
+      {showEnrollment && result.evidence_id && <IdentityEnrollment key={result.evidence_id} revision={revision} result={result} disabled={disabled || busy} inlineConfirmation={inlineEnrollment} onEnrolled={onEnrolled} />}
     </Stack>}
   </Stack>
 })

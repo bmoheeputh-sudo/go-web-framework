@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { I18nextProvider } from 'react-i18next'
 import LanguageProvider from '../LanguageProvider'
@@ -53,6 +53,7 @@ const committed = (outcome: ActivationResult['outcome']): ActivationResult => ({
 })
 
 type SetupOptions = {
+  initialRevision?: AuthRevision
   preparationEnabled?: boolean
   activation?: ActivationResult | 'network' | 'auth_loss' | 'forbidden' | 'proxy_502' | 'proxy_504' | 'truncated_json' | 'invalid_json_contract'
   activationStatus?: number
@@ -60,8 +61,10 @@ type SetupOptions = {
   wrongInstance?: boolean
   readinessPending?: boolean
   withCachedViews?: boolean
-  expiredIsolated?: boolean
   prepareConflictOnce?: boolean
+  cancelStatus?: 404 | 503
+  expiredPreparation?: boolean
+  recoveryMissing?: boolean
 }
 
 function CachedViews() {
@@ -78,9 +81,12 @@ function setup(options: SetupOptions = {}) {
   let ready = false
   let activationSubmitted = false
   let prepareConflict = options.prepareConflictOnce ?? false
+  let testStarts = 0
   const popup = { closed: false, opener: window, location: { replace: vi.fn() }, close: vi.fn(() => { popup.closed = true }) }
   vi.spyOn(window, 'open').mockImplementation(() => { popup.closed = false; return options.popupBlocked ? null : popup as unknown as Window })
   const fetcher = vi.fn(async (path: string, init?: RequestInit) => {
+    if (path === `${authSettingsPath}/${revision.id}/validate`) return Response.json({ ...revision, status: 'validated', generation: 2 })
+    if (path === `${authSettingsPath}/${revision.id}/approve`) return Response.json(revision)
     if (path === authStatusPath) return Response.json({ marker: activationSubmitted ? 'committed' : 'initial' })
     if (path === `${authSettingsPath}?limit=20&before_version=0`) return Response.json({ marker: activationSubmitted ? 'updated' : 'initial' })
     if (path === '/api/admin/auth/activation/status') {
@@ -93,15 +99,17 @@ function setup(options: SetupOptions = {}) {
     }
     if (path.endsWith('/activation/prepare')) {
       if (prepareConflict) return Response.json({ error: 'activation_preparation_conflict' }, { status: 409 })
-      return Response.json(preparation(), { status: 201 })
+      return Response.json(options.expiredPreparation ? { ...preparation(), expires_at: new Date(Date.now() - 1000).toISOString() } : preparation(), { status: 201 })
     }
     if (path === '/api/admin/auth/activation-preparations/current/cancel') { prepareConflict = false; return new Response(null, { status: 204 }) }
-    if (path === '/api/admin/auth/activation-preparations/instance.preparation/cancel') return new Response(null, { status: 204 })
-    if (path === `${authSettingsPath}/${revision.id}/test`) return Response.json({
+    if (path === '/api/admin/auth/activation-preparations/instance.preparation/cancel') return options.cancelStatus
+      ? Response.json({ error: options.cancelStatus === 503 ? 'activation_preparation_wrong_instance' : 'auth_config_not_found' }, { status: options.cancelStatus })
+      : new Response(null, { status: 204 })
+    if (path === `${authSettingsPath}/${revision.id}/test`) { testStarts++; return Response.json({
       ...isolated, id: 'refresh-test', status: 'pending', evidence_id: undefined, evidence_expires_at: undefined,
       authorization_url: 'https://issuer.example.test/authorize?state=isolated',
-    }, { status: 201 })
-    if (path === '/api/admin/auth/tests/refresh-test') return Response.json({ ...isolated, id: 'refresh-test', evidence_id: 'refreshed-isolated-evidence', evidence_expires_at: future() })
+    }, { status: 201 }) }
+    if (path === '/api/admin/auth/tests/refresh-test') return Response.json({ ...isolated, id: 'refresh-test', evidence_id: testStarts > 1 ? 'refreshed-isolated-evidence' : 'isolated-evidence', evidence_expires_at: future() })
     if (path === '/api/admin/users?offset=0') return Response.json([admin])
     if (path.endsWith('/readiness')) { ready = !options.readinessPending; return Response.json({ preparation_id: 'instance.preparation', status: 'pending', authorization_url: 'https://issuer.example.test/authorize?state=opaque', callback_url: revision.redirect_uri, expires_at: future() }, { status: 201 }) }
     if (path === '/api/admin/auth/activation-preparations/instance.preparation' && init?.method === 'GET') {
@@ -120,7 +128,9 @@ function setup(options: SetupOptions = {}) {
       return Response.json(options.activationStatus ? { error: 'auth_activation_runtime_mismatch', ...result } : result, { status: options.activationStatus || 200 })
     }
     if (path === '/api/admin/auth/activation/reconcile') return Response.json({ ...status, authoritative_source: 'database', authoritative_generation: 1, authoritative_revision_id: revision.id, local_source: 'database', local_provider: 'oidc', local_applied_generation: 1, local_desired_generation: 1, local_revision_id: revision.id, reconciled: true, reconciliation_required: false })
-    if (path.endsWith('/recovery-readiness')) return Response.json({ revision_id: revision.id, source_revision_id: '', status: 'approved', configuration_pre_staged: true, enrolled_administrator_ready: true, fresh_isolated_evidence: true, fresh_normal_callback_evidence: true, ready_for_portal_activation: true, live_provider_required: true, offline_recovery_procedure: 'auth-recovery-cli' })
+    if (path.endsWith('/recovery-readiness')) return options.recoveryMissing
+      ? Response.json({ error: 'not_found' }, { status: 404 })
+      : Response.json({ revision_id: revision.id, source_revision_id: '', status: 'approved', configuration_pre_staged: true, enrolled_administrator_ready: true, fresh_isolated_evidence: true, fresh_normal_callback_evidence: true, ready_for_portal_activation: true, live_provider_required: true, offline_recovery_procedure: 'auth-recovery-cli' })
     throw new Error(`unexpected endpoint ${path}`)
   })
   vi.stubGlobal('fetch', fetcher)
@@ -131,10 +141,13 @@ function setup(options: SetupOptions = {}) {
   }
   const instance = createI18n('en')
   const cache = new QueryCache(vi.fn())
-  const initialTest = options.expiredIsolated ? { ...isolated, evidence_expires_at: new Date(Date.now() - 1000).toISOString() } : isolated
+  const evidenceControls = { expire: () => {} }
   function Harness({ selectedRevision }: { selectedRevision: AuthRevision }) {
-    const [currentTest, setCurrentTest] = useState<ConnectionTest | null>(initialTest)
+    const [currentTest, setCurrentTest] = useState<ConnectionTest | null>(null)
     const [currentUser, setCurrentUser] = useState<User | null>(admin)
+    useEffect(() => {
+      evidenceControls.expire = () => setCurrentTest((current) => current ? { ...current, evidence_expires_at: new Date(Date.now() - 1000).toISOString() } : current)
+    }, [])
     return <ActivationWorkflow revision={selectedRevision} isolatedTest={currentTest} enrolledUser={currentUser} disabled={false}
       onIsolatedTestResult={(result) => { setCurrentTest(result); setCurrentUser(null) }} onResolvedUser={setCurrentUser} />
   }
@@ -142,15 +155,18 @@ function setup(options: SetupOptions = {}) {
     {options.withCachedViews && <CachedViews />}
     <Harness selectedRevision={selectedRevision} />
   </QueryContext.Provider></SessionContext.Provider></NotificationProvider></LanguageProvider></I18nextProvider>
-  const view = render(tree(revision))
-  return { ...view, rerenderRevision: (selectedRevision: AuthRevision) => view.rerender(tree(selectedRevision)), fetcher, popup, session, instance, cache }
+  const view = render(tree(options.initialRevision ?? revision))
+  return { ...view, rerenderRevision: (selectedRevision: AuthRevision) => view.rerender(tree(selectedRevision)), expireIsolatedEvidence: () => evidenceControls.expire(), fetcher, popup, session, instance, cache }
 }
 
 async function tick(ms = 0) { await act(async () => { await vi.advanceTimersByTimeAsync(ms) }) }
-async function prepareAndVerify() {
+async function prepareAndIsolated() {
   await tick()
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationPrepare })) })
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationRunNormalTest })) })
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.testConnection })) })
+  await tick(2000)
+}
+async function prepareAndVerify() {
+  await prepareAndIsolated()
   await tick(1000)
 }
 
@@ -180,24 +196,50 @@ describe('OIDC activation state machine', () => {
     const { fetcher, popup } = setup()
     await prepareAndVerify()
     expect(popup.opener).toBeNull()
+    expect(popup.location.replace).toHaveBeenCalledTimes(2)
     expect(popup.location.replace).toHaveBeenCalledWith(expect.stringMatching(/^https:\/\/issuer\.example\.test\/authorize/))
     expect(document.body.textContent).toContain(`${en.activationNormalEvidence}: ${en.activationEvidenceReady}`)
     expect(fetcher.mock.calls.some(([path]) => String(path).endsWith('/activate'))).toBe(false)
   })
 
+  it('validates and approves before testing, then binds both tests to the approved generation', async () => {
+    const { fetcher, popup } = setup({ initialRevision: { ...revision, status: 'draft', generation: 1 } })
+    await tick()
+    expect(screen.getByText(en.testWillApprove)).toBeTruthy()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.testConnection })) })
+    await tick(3000)
+    const paths = fetcher.mock.calls.map(([path]) => String(path))
+    const validate = paths.indexOf(`${authSettingsPath}/${revision.id}/validate`)
+    const approve = paths.indexOf(`${authSettingsPath}/${revision.id}/approve`)
+    const prepare = paths.indexOf(`${authSettingsPath}/${revision.id}/activation/prepare`)
+    const isolatedStart = paths.indexOf(`${authSettingsPath}/${revision.id}/test`)
+    const normalStart = paths.indexOf('/api/admin/auth/activation-preparations/instance.preparation/readiness')
+    expect(validate).toBeGreaterThan(-1)
+    expect(validate).toBeLessThan(approve)
+    expect(approve).toBeLessThan(prepare)
+    expect(prepare).toBeLessThan(isolatedStart)
+    expect(isolatedStart).toBeLessThan(normalStart)
+    expect(JSON.parse(fetcher.mock.calls[approve][1]!.body as string)).toEqual({ expected_generation: 2 })
+    expect(JSON.parse(fetcher.mock.calls[prepare][1]!.body as string)).toEqual({ expected_revision_generation: 3, expected_activation_generation: 0 })
+    expect(JSON.parse(fetcher.mock.calls[isolatedStart][1]!.body as string)).toEqual({ expected_generation: 3 })
+    expect(popup.location.replace).toHaveBeenCalledTimes(2)
+    expect(paths.some((path) => path.endsWith('/activate'))).toBe(false)
+  })
+
   it('identifies expired isolated evidence, refreshes it, resolves enrollment, and retains valid normal evidence', async () => {
-    const { fetcher } = setup({ expiredIsolated: true })
+    const { fetcher, expireIsolatedEvidence } = setup()
     await prepareAndVerify()
+    await act(async () => expireIsolatedEvidence())
     expect(screen.getByText(en.activationIsolatedExpiredBlocker)).toBeTruthy()
     expect(screen.getByText((text) => text.startsWith(en.activationPreparationExpiry.split('{{')[0]))).toBeTruthy()
     expect(screen.getByText((text) => text.startsWith(en.activationNormalExpiry.split('{{')[0]))).toBeTruthy()
-    expect((screen.getByRole('button', { name: en.activationReview }) as HTMLButtonElement).disabled).toBe(true)
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationRefreshIsolated })) })
-    await tick(2000)
+    expect(screen.queryByRole('button', { name: en.activationReview })).toBeNull()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.testConnection })) })
+    await tick(3000)
     expect(fetcher.mock.calls.some(([path]) => path === `${authSettingsPath}/${revision.id}/test`)).toBe(true)
     expect(fetcher.mock.calls.some(([path]) => path === '/api/admin/users?offset=0')).toBe(true)
     expect(document.body.textContent).toContain(`${en.activationNormalEvidence}: ${en.activationEvidenceReady}`)
-    expect((screen.getByRole('button', { name: en.activationReview }) as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.getByRole('button', { name: en.activationReview })).toBeTruthy()
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationReview })) })
     const dialog = screen.getByRole('dialog')
     fireEvent.change(within(dialog).getByLabelText(new RegExp(en.activationReason)), { target: { value: 'Approved security cutover' } })
@@ -212,24 +254,67 @@ describe('OIDC activation state machine', () => {
 
   it('abandons an unused preparation and can prepare again without activating', async () => {
     const { fetcher } = setup()
-    await tick()
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationPrepare })) })
+    await prepareAndVerify()
+    await act(async () => { fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: en.advancedTroubleshooting })) })
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationAbandon })) })
     expect(fetcher.mock.calls.filter(([path]) => path === '/api/admin/auth/activation-preparations/instance.preparation/cancel')).toHaveLength(1)
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationPrepare })) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.testConnection })) })
+    await tick(3000)
     expect(fetcher.mock.calls.filter(([path]) => String(path).endsWith('/activation/prepare'))).toHaveLength(2)
     expect(fetcher.mock.calls.some(([path]) => String(path).endsWith('/activate'))).toBe(false)
+  })
+
+  it('treats an already expired preparation 404 as completed local cleanup', async () => {
+    const { fetcher } = setup({ expiredPreparation: true, cancelStatus: 404 })
+    await prepareAndVerify()
+    await act(async () => { fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: en.advancedTroubleshooting })) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationAbandon })) })
+    expect(fetcher.mock.calls.filter(([path]) => path === '/api/admin/auth/activation-preparations/instance.preparation/cancel')).toHaveLength(1)
+    expect(screen.queryByText(en.activationOutcome_outcome_unknown)).toBeNull()
+    expect(screen.getByRole('button', { name: en.testConnection })).toBeTruthy()
+  })
+
+  it('does not assume an unexpired 404 means activation was not claimed', async () => {
+    const { fetcher } = setup({ cancelStatus: 404 })
+    await prepareAndVerify()
+    await act(async () => { fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: en.advancedTroubleshooting })) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationAbandon })); fireEvent.click(screen.getByRole('button', { name: en.activationAbandon })) })
+    expect(fetcher.mock.calls.filter(([path]) => path === '/api/admin/auth/activation-preparations/instance.preparation/cancel')).toHaveLength(1)
+    expect(screen.getByText(en.activationOutcome_outcome_unknown)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: en.testConnection })).toBeNull()
+    expect(fetcher.mock.calls.some(([path]) => String(path).endsWith('/activate'))).toBe(false)
+  })
+
+  it('retains wrong-instance routing errors and does not retry cancellation', async () => {
+    const { fetcher } = setup({ cancelStatus: 503 })
+    await prepareAndVerify()
+    await act(async () => { fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: en.advancedTroubleshooting })) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationAbandon })) })
+    expect(screen.getByText(en.activationBlocked_wrong_instance)).toBeTruthy()
+    expect(fetcher.mock.calls.filter(([path]) => path === '/api/admin/auth/activation-preparations/instance.preparation/cancel')).toHaveLength(1)
+    expect(fetcher.mock.calls.some(([path]) => String(path).endsWith('/activate'))).toBe(false)
+  })
+
+  it('shows expected recovery-readiness 404 as not applicable rather than an error', async () => {
+    setup({ recoveryMissing: true })
+    await tick()
+    await act(async () => { fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: en.advancedTroubleshooting })) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.recoveryCheckReadiness })) })
+    expect(screen.getByText(en.recoveryReadinessNotApplicable)).toBeTruthy()
+    expect(screen.queryByText(en.recoveryReadinessUnavailable)).toBeNull()
   })
 
   it('offers explicit cancellation after a preparation conflict without automatically retrying', async () => {
     const { fetcher } = setup({ prepareConflictOnce: true })
     await tick()
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationPrepare })) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.testConnection })) })
     expect(screen.getByText(en.activationBlocked_preparation_conflict)).toBeTruthy()
     expect(fetcher.mock.calls.filter(([path]) => String(path).endsWith('/activation/prepare'))).toHaveLength(1)
+    await act(async () => { fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: en.advancedTroubleshooting })) })
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationDiscardExisting })) })
     expect(fetcher.mock.calls.filter(([path]) => path === '/api/admin/auth/activation-preparations/current/cancel')).toHaveLength(1)
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationPrepare })) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.testConnection })) })
+    await tick(3000)
     expect(fetcher.mock.calls.filter(([path]) => String(path).endsWith('/activation/prepare'))).toHaveLength(2)
     expect(fetcher.mock.calls.some(([path]) => String(path).endsWith('/activate'))).toBe(false)
   })
@@ -242,7 +327,7 @@ describe('OIDC activation state machine', () => {
     const dialog = screen.getByRole('dialog')
     expect(screen.getAllByRole('dialog')).toHaveLength(1)
     expect(within(dialog).getByRole('region', { name: en.activationConfirmTitle })).toBeTruthy()
-    expect(within(dialog).getAllByRole('heading', { name: en.activationWorkflowTitle })).toHaveLength(1)
+    expect(within(dialog).getAllByRole('heading', { name: en.activationReview })).toHaveLength(1)
     const activate = within(dialog).getByRole('button', { name: en.activationConfirmAction }) as HTMLButtonElement
     expect(activate.disabled).toBe(true)
     expect(within(dialog).getAllByRole('checkbox').every((item) => !(item as HTMLInputElement).checked)).toBe(true)
@@ -259,18 +344,18 @@ describe('OIDC activation state machine', () => {
       confirm: true, reason: 'Approved security cutover',
     })
     expect(screen.getByText(en.activationOutcome_committed_applied)).toBeTruthy()
-    expect(screen.queryByRole('dialog', { name: en.activationWorkflowTitle })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: en.activationReview })).toBeNull()
     expect(localWrite).not.toHaveBeenCalled()
   })
 
   it('keeps ambiguous outcomes visible after the wizard closes without reopening or retrying activation', async () => {
     const { fetcher, rerenderRevision } = setup({ activation: 'network' })
     await submitActivation()
-    expect(screen.queryByRole('dialog', { name: en.activationWorkflowTitle })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: en.activationReview })).toBeNull()
     expect(screen.getByText(en.activationOutcome_outcome_unknown)).toBeTruthy()
     rerenderRevision({ ...revision, id: 'another-approved-revision' })
     expect(screen.getByText(en.activationOutcome_outcome_unknown)).toBeTruthy()
-    expect(screen.queryByRole('button', { name: en.activationPrepare })).toBeNull()
+    expect(screen.queryByRole('button', { name: en.testConnection })).toBeNull()
     await tick(20_000)
     expect(screen.getByText(en.activationOutcome_outcome_unknown)).toBeTruthy()
     expect(fetcher.mock.calls.filter(([path]) => String(path).endsWith('/activate'))).toHaveLength(1)
@@ -298,7 +383,7 @@ describe('OIDC activation state machine', () => {
     for (const checkbox of within(dialog).getAllByRole('checkbox')) fireEvent.click(checkbox)
     await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: en.activationConfirmAction })) })
     expect(screen.getByText(en.activationOutcome_committed_not_applied)).toBeTruthy()
-    expect(screen.queryByRole('dialog', { name: en.activationWorkflowTitle })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: en.activationReview })).toBeNull()
     await tick()
     expect(screen.getByTestId('cached-auth-history').textContent).toBe('updated')
     expect(fetcher.mock.calls.filter(([path]) => path === authStatusPath)).toHaveLength(2)
@@ -368,9 +453,7 @@ describe('OIDC activation state machine', () => {
 
   it('fails closed on cross-instance preparation routing and does not retry or consume evidence', async () => {
     const { fetcher } = setup({ wrongInstance: true })
-    await tick(); await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationPrepare })) })
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationRunNormalTest })) })
-    await tick(1000)
+    await prepareAndVerify()
     expect(screen.getByText(en.activationBlocked_wrong_instance)).toBeTruthy()
     const calls = fetcher.mock.calls.length
     await tick(20_000)
@@ -378,24 +461,41 @@ describe('OIDC activation state machine', () => {
     expect(fetcher.mock.calls.some(([path]) => String(path).endsWith('/activate'))).toBe(false)
   })
 
-  it('handles a closed readiness popup and requires a fresh preparation', async () => {
+  it('keeps polling protected readiness status when the cross-origin popup is inaccessible', async () => {
     const { fetcher, popup } = setup({ readinessPending: true })
-    await tick(); await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationPrepare })) })
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationRunNormalTest })) })
-    popup.closed = true
-    await tick(1000)
-    expect(screen.getByText(en.activationBlocked_popup_closed)).toBeTruthy()
+    await prepareAndIsolated()
+    Object.defineProperty(popup, 'closed', { get: () => { throw new Error('COOP') } })
+    await tick(3000)
+    expect(fetcher.mock.calls.filter(([path]) => path === '/api/admin/auth/activation-preparations/instance.preparation').length).toBeGreaterThan(0)
+    expect(screen.getByText(en.activationNormalTestPending)).toBeTruthy()
+    expect(fetcher.mock.calls.some(([path]) => String(path).endsWith('/activate'))).toBe(false)
+  })
+
+  it('cancels a pending normal callback through the protected preparation endpoint', async () => {
+    const { fetcher, popup } = setup({ readinessPending: true })
+    await prepareAndIsolated()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.testCancel })) })
+    expect(fetcher.mock.calls.filter(([path]) => path === '/api/admin/auth/activation-preparations/instance.preparation/cancel')).toHaveLength(1)
+    expect(popup.close).toHaveBeenCalled()
+    expect(fetcher.mock.calls.some(([path]) => String(path).endsWith('/activate'))).toBe(false)
+  })
+
+  it('bounds pending normal callback polling without trusting popup properties', async () => {
+    const { fetcher, popup } = setup({ readinessPending: true })
+    await prepareAndIsolated()
+    Object.defineProperty(popup, 'closed', { get: () => { throw new Error('COOP') } })
+    await tick(305_000)
+    expect(screen.getByText(en.activationPreparationExpired)).toBeTruthy()
     expect(fetcher.mock.calls.some(([path]) => String(path).endsWith('/activate'))).toBe(false)
   })
 
   it('blocks preparation when affinity is disabled and handles a blocked popup without consuming readiness', async () => {
     const disabled = setup({ preparationEnabled: false }); await tick()
     expect(screen.getByText(en.activationAffinityUnavailable)).toBeTruthy()
-    expect((screen.getByRole('button', { name: en.activationPrepare }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: en.testConnection }) as HTMLButtonElement).disabled).toBe(true)
     disabled.unmount(); cleanup()
     const blocked = setup({ popupBlocked: true }); await tick()
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationPrepare })) })
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.activationRunNormalTest })) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.testConnection })) })
     expect(blocked.fetcher.mock.calls.some(([path]) => String(path).endsWith('/readiness'))).toBe(false)
     expect(screen.getByText(en.testPopupBlocked)).toBeTruthy()
   })

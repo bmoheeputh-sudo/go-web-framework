@@ -137,7 +137,8 @@ describe('navigation registry and route authorization', () => {
     await screen.findByRole('heading', { level: 2, name: resources.ar.common.pageNotFound })
     await screen.findByRole('link', { name: resources.ar.common.navUsers })
     await link(resources.ar.common.backDashboard)
-    await screen.findByText(resources.ar.common.backendStatus)
+    await screen.findByText(resources.ar.auth.title)
+    expect(screen.queryByText(resources.ar.common.backendStatus)).toBeNull()
     expect(screen.queryByText('404')).toBeNull()
   })
 })
@@ -389,12 +390,23 @@ describe('authentication and cache boundaries', () => {
     expect((await screen.findByRole('link', { name: 'Sign in' })).getAttribute('href')).toBe('/api/auth/login')
     expect(fetcher.mock.calls.some(([path]) => path.startsWith('/api/admin/') || path === '/api/access/me')).toBe(false)
   })
-  it.each(['google_iap', 'local_dev'] as const)('preserves %s authentication without OIDC login/logout controls', async (provider) => {
+  it('rejects a retired IAP identity response without loading protected access', async () => {
+    const { fetcher } = mockAPI()
+    const original = fetcher.getMockImplementation()!
+    fetcher.mockImplementation((path, init) => path === '/api/auth/me'
+      ? Promise.resolve(Response.json({ issuer: 'https://cloud.google.com/iap', subject: 'legacy', email: '', email_verified: false, display_name: '', provider: 'google_iap' }))
+      : original(path, init))
+    mount()
+    expect(await screen.findByText(resources.en.auth.identityError)).toBeTruthy()
+    expect(fetcher.mock.calls.some(([path]) => path === '/api/access/me')).toBe(false)
+  })
+  it('preserves local_dev authentication without OIDC login/logout controls', async () => {
+    const provider = 'local_dev'
     mockAPI({ provider })
     mount()
     await screen.findByText('Original account name')
     await userEvent.click(screen.getByRole('button', { name: 'User profile' }))
-    await screen.findByText(resources.en.auth[provider === 'google_iap' ? 'iapSignOutManaged' : 'localDevIdentity'])
+    await screen.findByText(resources.en.auth.localDevIdentity)
     expect(screen.queryByRole('menuitem', { name: 'Sign out' })).toBeNull()
     await userEvent.keyboard('{Escape}')
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())

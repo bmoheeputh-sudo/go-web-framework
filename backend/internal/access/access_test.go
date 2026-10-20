@@ -77,6 +77,9 @@ func TestRBACIntegration(t *testing.T) {
 		return u
 	}
 	admin := resolve(adminIdentity)
+	if admin.Provider != string(auth.OIDC) {
+		t.Fatal("verified OIDC provider missing from user metadata")
+	}
 	user := resolve(userIdentity)
 	viewer := resolve(viewerIdentity)
 	outsider := resolve(outsiderIdentity)
@@ -388,10 +391,19 @@ func TestLocalDevBootstrap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if user.Provider != string(auth.LocalDev) || user.Issuer != auth.LocalDevIssuer {
+		t.Fatal("local development user metadata does not match verified identity")
+	}
 	if err = s.Bootstrap(ctx, verified.Issuer, verified.Subject, "development"); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Allowed(ctx, user.ID, AdminManage, ""); err != nil {
 		t.Fatal(err)
+	}
+	response := call(s, verified, "GET", "/api/admin/users", "", "")
+	requireStatus(t, response, 200)
+	var listed []User
+	if json.Unmarshal(response.Body.Bytes(), &listed) != nil || len(listed) != 1 || listed[0].Provider != string(auth.LocalDev) {
+		t.Fatal("admin user listing omitted the stored provider")
 	}
 }

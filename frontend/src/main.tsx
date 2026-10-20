@@ -6,6 +6,7 @@ import { I18nextProvider } from 'react-i18next'
 import { browserStorage, createI18n, detectLanguage, direction } from './i18n'
 import LanguageProvider from './LanguageProvider'
 import { BrowserRouter } from 'react-router-dom'
+import VerificationResultPage from './auth/VerificationResultPage'
 
 const language = detectLanguage(browserStorage(), navigator.languages)
 const i18n = createI18n(language)
@@ -15,7 +16,9 @@ document.documentElement.dir = direction(language)
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <I18nextProvider i18n={i18n}>
-      <LanguageProvider><BrowserRouter><App /></BrowserRouter></LanguageProvider>
+      <LanguageProvider>{window.location.pathname === '/auth/verification-result'
+        ? <VerificationResultPage result={new URLSearchParams(window.location.search).get('result')} />
+        : <BrowserRouter><App /></BrowserRouter>}</LanguageProvider>
     </I18nextProvider>
   </StrictMode>,
 )

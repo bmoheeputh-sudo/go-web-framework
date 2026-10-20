@@ -206,14 +206,10 @@ func TestAuthConfigurationHTTPWorkflow(t *testing.T) {
 	if json.Unmarshal(response.Body.Bytes(), &status) != nil || status.Active == nil || status.Active.ID != m.ID || status.RuntimeProvider != auth.LocalDev || status.RuntimeSource != "environment" || !status.ManagementOnly {
 		t.Fatal("database active state confused with runtime")
 	}
-	for version, body := range []map[string]any{
-		{"expected_latest_version": 1, "provider": "google_iap", "iap_audience": "/projects/123/global/backendServices/456"},
-		{"expected_latest_version": 2, "provider": "local_dev"},
-	} {
-		added := metadataResponse(t, apiRequest(t, handler, "POST", settingsPath, body, 201))
-		if added.HasSecret || added.Version != int64(version+2) {
-			t.Fatal("incorrect non-OIDC draft")
-		}
+	apiRequest(t, handler, "POST", settingsPath, map[string]any{"expected_latest_version": 1, "provider": "google_iap", "iap_audience": "/projects/123/global/backendServices/456"}, 400)
+	added := metadataResponse(t, apiRequest(t, handler, "POST", settingsPath, map[string]any{"expected_latest_version": 1, "provider": "local_dev"}, 201))
+	if added.HasSecret || added.Version != 2 {
+		t.Fatal("incorrect Local DEV draft")
 	}
 }
 

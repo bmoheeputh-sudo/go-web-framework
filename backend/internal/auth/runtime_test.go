@@ -10,8 +10,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/go-jose/go-jose/v4"
 )
 
 func runtimeLocal(t *testing.T) *LocalDevAuthenticator {
@@ -93,7 +91,7 @@ func TestRuntimeLocalAndStableRoutes(t *testing.T) {
 }
 
 func TestRuntimeRejectsUnpreparedProvidersAndMissingCapture(t *testing.T) {
-	for _, p := range []Authenticator{&OIDCAuthenticator{}, &IAPAuthenticator{}, (*LocalDevAuthenticator)(nil)} {
+	for _, p := range []Authenticator{&OIDCAuthenticator{}, (*LocalDevAuthenticator)(nil)} {
 		if _, err := NewEnvironmentRuntime(p, "test", "development"); err == nil {
 			t.Fatal("unprepared provider accepted")
 		}
@@ -273,42 +271,6 @@ func TestRuntimeRefusedActivationRetainsOIDCWithoutLocalFallback(t *testing.T) {
 	}
 }
 
-func TestRuntimeIAPVerificationAndNoFallback(t *testing.T) {
-	f := newIAPFixture(t)
-	m := runtimeFor(t, f.provider)
-	h := runtimeRouter(m)
-	for _, valid := range []bool{false, true} {
-		r := runtimeRequestFor("GET", "/api/auth/me", &http.Cookie{Name: sessionCookie, Value: "pretend-oidc-session"})
-		r.Header.Set("X-Goog-Authenticated-User-Id", "forged")
-		if valid {
-			r.Header.Set("X-Goog-IAP-JWT-Assertion", signIAP(t, f.key, jose.ES256, "first", f.claims(), nil))
-		}
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, r)
-		want := 401
-		if valid {
-			want = 200
-		}
-		if w.Code != want {
-			t.Fatalf("IAP: got %d want %d", w.Code, want)
-		}
-		if len(w.Result().Cookies()) != 0 {
-			t.Fatal("IAP created session")
-		}
-	}
-	local := runtimeFor(t, runtimeLocal(t)).current.Load()
-	if m.publish(m.current.Load(), local) {
-		t.Fatal("IAP verification bypassed by publication")
-	}
-	for _, path := range []string{"/api/auth/login", "/api/auth/callback"} {
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, runtimeRequestFor("GET", path))
-		if w.Code != 404 {
-			t.Fatal("IAP offered login fallback")
-		}
-	}
-}
-
 func TestRuntimeOIDCLoginCallbackLogoutAndCapturedDispatch(t *testing.T) {
 	f := newTestIssuer(t)
 	p := f.provider(t)
@@ -380,5 +342,17 @@ func TestRuntimeOIDCLoginCallbackLogoutAndCapturedDispatch(t *testing.T) {
 	}
 	if _, ok := m.Status(context.Background()); ok {
 		t.Fatal("status loaded independently")
+	}
+}
+
+func TestRetiredIAPAssertionDoesNotAuthenticateOIDC(t *testing.T) {
+	m := runtimeFor(t, newTestIssuer(t).provider(t))
+	r := runtimeRequestFor("GET", "/api/auth/me")
+	r.Header.Set("X-Goog-IAP-JWT-Assertion", "untrusted-legacy-assertion")
+	r.Header.Set("X-Goog-Authenticated-User-Email", "accounts.google.com:forged@example.invalid")
+	w := httptest.NewRecorder()
+	runtimeRouter(m).ServeHTTP(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("legacy IAP headers authenticated OIDC: %d", w.Code)
 	}
 }

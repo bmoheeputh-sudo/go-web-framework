@@ -88,21 +88,21 @@ export default function AuthenticationSettings() {
             { label: t('runtimeProvider'), value: providerLabel(status.data.runtime_provider) },
             { label: t('configurationSource'), value: t(status.data.runtime_source === 'database' ? 'sourceDatabase' : 'sourceEnvironment') },
           ]} />
-          {status.data.management_only && <Alert severity="info">{t('managementOnly')}</Alert>}
           <Accordion disableGutters variant="outlined" sx={{ '&::before': { display: 'none' } }}>
-            <AccordionSummary expandIcon={<ExpandMore />}>{t('technicalDetails')}</AccordionSummary>
-            <AccordionDetails><TwoColumnKeyValue items={[
+            <AccordionSummary expandIcon={<ExpandMore />}>{t('advancedTroubleshooting')}</AccordionSummary>
+            <AccordionDetails><Stack spacing={1.5}>{status.data.management_only && <Alert severity="info">{t('managementOnly')}</Alert>}<TwoColumnKeyValue items={[
             { label: t('validationMode'), value: t('offlineValidation') },
             { label: t('latestRevision'), value: summary(status.data.latest_revision) },
             { label: t('databaseActiveRevision'), value: summary(status.data.database_active_revision) },
-          ]} /></AccordionDetails>
+          ]} /></Stack></AccordionDetails>
           </Accordion>
         </Stack>
       </SectionCard>}
       <ActivationWorkflow revision={activationRevision} open={Boolean(activationRevision)} onClose={() => setActivationRevision(null)}
-        isolatedTest={isolatedTest} enrolledUser={enrolledUser} disabled={locked || Boolean(queryError)}
+        isolatedTest={isolatedTest} enrolledUser={enrolledUser} disabled={busy || Boolean(queryError)}
         onIsolatedTestResult={(result) => { setIsolatedTest(result); setEnrolledUser(null) }}
-        onResolvedUser={setEnrolledUser} onOutcomeChange={setActivationOutcome} />
+        onResolvedUser={setEnrolledUser} onOutcomeChange={setActivationOutcome}
+        onRevisionChange={(revision) => { setActivationRevision(revision); refreshViews() }} />
     </Box>
 
     <SectionCard title={t('history')} actions={<Stack direction="row" sx={{ gap: 1, flexWrap: 'wrap' }}>
@@ -128,8 +128,7 @@ export default function AuthenticationSettings() {
     <RevisionDetailDrawer open={Boolean(selected)} revision={metadata} loading={detail.loading} disabled={locked || detail.loading || Boolean(queryError)}
       prepareDisabled={Boolean(activationOutcome)}
       onClose={() => setSelected(null)} onValidate={(revision) => void mutate(`${authSettingsPath}/${revision.id}/validate`, { expected_generation: revision.generation }, 'auth:validationSaved')}
-      onApprove={setApproval} onPrepare={(revision) => { if (activationOutcome) return; setActivationRevision(revision); setSelected(null) }} onRecovery={setRecoverySource}
-      onTestResult={(result) => { setIsolatedTest(result); setEnrolledUser(null) }} onEnrolled={setEnrolledUser} />
+      onApprove={setApproval} onTest={(revision) => { if (activationOutcome) return; setActivationRevision(revision); setSelected(null) }} onRecovery={setRecoverySource} />
 
     <Dialog open={draftOpen && Boolean(status.data)} onClose={() => { if (!busy) setDraftOpen(false) }} fullWidth maxWidth="sm" aria-labelledby="auth-draft-title">
       <DialogTitle id="auth-draft-title">{t('newDraft')}</DialogTitle>

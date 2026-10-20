@@ -1,5 +1,7 @@
 # Offline emergency OIDC recovery
 
+> **Phase 10.1 compatibility note:** Google IAP is retired. References below describe the historical design; `AUTH_PROVIDER=google_iap` now fails startup. OIDC and Local DEV remain supported.
+
 `backend/cmd/auth-recovery` is a break-glass command for a deployment whose
 database-managed OIDC provider cannot be restored through the normal administrator
 path. It is not an HTTP endpoint and does not enable Local DEV, change roles, link
@@ -56,8 +58,8 @@ lived and cannot be reused as historical proof during an outage.
 Recovery always records a zero-length transition deadline. Existing sessions and
 callbacks from the failed provider receive no new grace period; expired/deleted
 sessions are never restored. Connected instances receive the transaction-scoped
-notification and reconcile through their existing synchronizers. Google IAP-pinned
-deployments are rejected.
+notification and reconcile through their existing synchronizers. Retired
+`AUTH_PROVIDER=google_iap` configurations fail startup and are not recovery targets.
 
 ## Migration
 

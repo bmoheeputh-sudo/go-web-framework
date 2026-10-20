@@ -6,7 +6,7 @@ Reusable web application framework.
 - Backend: Go
 - Frontend: React + Material UI
 - Database: PostgreSQL
-- Authentication: generic OIDC, Google IAP, and Local DEV
+- Authentication: generic OIDC and development-only Local DEV
 - Authorization: PostgreSQL RBAC with explicit account associations
 - Deployment: Manual
 
@@ -71,7 +71,7 @@ curl http://127.0.0.1:8080/api/auth/me
 
 | Variable | Purpose |
 | --- | --- |
-| `AUTH_PROVIDER` | Select `local_dev`, `oidc`, or `google_iap` explicitly. Unset means public health only; `/api/auth/me` returns 401. |
+| `AUTH_PROVIDER` | Select `local_dev` or `oidc` explicitly. `google_iap` is retired and fails startup. Unset means public health only; `/api/auth/me` returns 401. |
 | `APP_ENV` | Must exactly equal `development` for Local DEV; TEST, PRD, production, and every other value are rejected at startup. |
 | `HTTP_ADDR` | Defaults to `127.0.0.1:8080`. Local DEV requires a literal loopback IP and a valid port, such as `127.0.0.1:8080` or `[::1]:8080`. |
 | `LOCAL_DEV_SUBJECT` | Required fixed development user identifier; never supplied by the browser. |
@@ -97,115 +97,21 @@ The `auth.Authenticator` interface resolves an identity for an HTTP request.
 `auth.Require` validates it and places it in request context for protected handlers.
 There is no universal credential string: OIDC login/callback handlers verify the
 authorization flow and establish a server-side session; the OIDC authenticator
-resolves that session on subsequent requests. The Google IAP authenticator verifies
-the signed assertion on every protected request, without creating a session.
+resolves that session on subsequent requests. Local DEV uses a fixed identity
+and is restricted to development on loopback.
 Unknown providers and missing required provider configuration fail startup.
 
 React calls same-origin APIs and receives only the public identity fields. Keep
 backend authentication configuration out of `VITE_*` variables and frontend code.
 
-## Google IAP on App Engine, Cloud Run, or external hosts (Phase 4)
+## Retired Google IAP provider
 
-Set `AUTH_PROVIDER=google_iap` and explicitly set `IAP_AUDIENCE` to the **Signed
-Header JWT Audience** of the Google IAP resource protecting this deployment.
-Missing or malformed audiences stop startup. No project, audience, or hosting
-information is discovered: this provider never uses the Google Cloud Metadata
-Server, application default credentials, or a service account. IAP authentication
-does not use PostgreSQL; the separate RBAC feature requires it when enabled.
-OIDC and Local DEV retain their existing configuration and behavior.
-
-| IAP resource | Exact `IAP_AUDIENCE` format |
-| --- | --- |
-| App Engine application | `/projects/PROJECT_NUMBER/apps/PROJECT_ID` |
-| Global backend service, including an IAP connector forwarding to AWS EC2 | `/projects/PROJECT_NUMBER/global/backendServices/BACKEND_SERVICE_ID` |
-| IAP enabled directly on a Cloud Run service | `/projects/PROJECT_NUMBER/locations/REGION/services/SERVICE_NAME` |
-
-Use the numeric project **number**, and the numeric backend service **ID** where
-applicable. Copy the actual signed-header audience from the IAP resource's console
-settings; it is not the OAuth client ID, AWS instance ID, hostname, or service URL.
-For Cloud Run protected at a load balancer, use that backend service's audience;
-for direct Cloud Run IAP, use the regional service audience. See Google's
-[signed-header audience reference](https://cloud.google.com/iap/docs/signed-headers-howto)
-and [Cloud Run IAP options](https://cloud.google.com/iap/docs/enabling-cloud-run).
-
-Edit your local configuration with `vi .env`, keeping real environment values out
-of Git. Example for an external deployment (replace both numeric placeholders):
-
-```dotenv
-APP_ENV=PRD
-AUTH_PROVIDER=google_iap
-IAP_AUDIENCE=/projects/123456789/global/backendServices/987654321
-HTTP_ADDR=127.0.0.1:8080
-```
-
-Load the environment and run the backend as in the local startup instructions.
-For App Engine or Cloud Run, supply these variables in deployment configuration
-and set `HTTP_ADDR` to the platform-required listener, for example `0.0.0.0:8080`
-when its assigned port is 8080. For EC2, bind to loopback behind a local reverse
-proxy, or a private interface reachable only by the trusted connector/proxy.
-Configure HTTPS at ingress and protected transport to the origin. There is no
-IAP development bypass, including in TEST and PRD. For offline UI development use
-`AUTH_PROVIDER=local_dev` with `APP_ENV=development` instead.
-
-### External hosting and network boundary
-
-Running on AWS EC2 alone does not provide IAP. Deploy supported Google IAP
-connector/proxy infrastructure that authenticates requests and forwards Google's
-signed assertion to the origin. Google's [external application connector guide](https://cloud.google.com/iap/docs/enabling-on-prem-howto)
-describes this infrastructure. Audience configuration alone is insufficient.
-Restrict AWS security groups, firewalls, and origin listeners to the authorized
-connector/proxy path; prevent public or alternate ingress that bypasses IAP.
-Apply equivalent ingress restrictions on App Engine and Cloud Run. Serve React
-and `/api` through the protected same-origin route. The proxy must forward the
-IAP assertion without logging it; never synthesize identities from unsigned
-`X-Goog-Authenticated-User-*` headers. This change provisions no cloud resources.
-
-### Verification, caching, and operational limits
-
-The existing maintained `go-jose/v4` dependency verifies compact ES256 signatures
-using only keys fetched over HTTPS from
-`https://www.gstatic.com/iap/verify/public_key-jwk`. The issuer must exactly equal
-`https://cloud.google.com/iap`, the audience must be one exact string, and subject,
-issued-at, and expiration are required. Clock skew is limited to 30 seconds and
-`exp - iat` to 660 seconds. A future `nbf` is also rejected beyond the skew.
-Keep host clocks synchronized. No environment setting disables verification or
-substitutes a different key URL.
-
-`issuer`, `subject`, `email`, `name` (as `display_name`), and `email_verified` come
-only from verified claims. Missing optional email/name stay empty; email verification
-stays false unless explicitly asserted. Unsigned identity headers, query strings,
-OIDC session cookies, and Authorization headers cannot substitute for the assertion.
-React receives only the common identity, displays Google IAP as the provider, and
-handles 401 independently of backend health. It receives no assertion or token.
-IAP controls sign-in; the application's OIDC login/callback/logout routes are not
-registered in this mode, and no application cookies or PostgreSQL sessions are made.
-
-All authenticated handlers must use `auth.Require(provider, handler)`, as
-`/api/auth/me` does, to verify each request. `/api/health` and the provider-only
-`/api/auth/config` remain public; use `/api/health` for unauthenticated health
-probes through the appropriate infrastructure exception.
-
-Public keys are fetched on demand with a five-second HTTP timeout, no redirects,
-a 1 MiB response limit, and validation of key IDs/types/algorithms. They are cached
-in memory for at most five minutes. An unknown key ID triggers refresh, limited
-to once every 30 seconds across concurrent requests, including after errors.
-A newly rotated key can therefore be rejected for up to 30 seconds; retry after
-that interval. Removed keys stop working when the cache refreshes or expires.
-No background worker or database cache is needed.
-
-Invalid or missing assertions return 401. When trusted keys cannot be obtained,
-protected requests return a generic 503; fresh cached keys remain usable until
-expiry, but stale keys never authorize requests. Startup validates configuration
-without fetching keys, so health remains available during a key endpoint outage.
-Allow outbound HTTPS to the fixed Google endpoint. Error responses and application
-logs never include raw assertions, identity payloads, or key-fetch details.
-
-IAP assertions are bearer credentials and can be replayed until expiry; this phase
-does not add per-token revocation or application logout. Phase 5 adds RBAC and
-Origin checks to account/admin writes; future APIs must use those protections too. Restrict origin access and protect transport and logs.
-Deployment IAM policy, proxy forwarding, actual Google key rotation, and end-to-end
-cloud access must still be validated in the target environment; automated tests
-use generated ES256 keys and mocked key responses, with no live IAP credentials.
+Google IAP is no longer a supported authentication provider. `AUTH_PROVIDER=google_iap`
+now fails startup, even when an OIDC revision is active in PostgreSQL. New IAP
+configuration drafts and lifecycle changes are rejected. Existing IAP user,
+revision and audit records remain readable as historical data; applied migrations
+and their columns are unchanged. Deployments previously using IAP must plan an
+OIDC cutover and review their ingress controls before upgrading.
 
 ## Run locally with OIDC and PostgreSQL (Phase 3)
 
@@ -515,8 +421,9 @@ Do not add permissive CORS middleware. React sends same-origin requests.
 `RBAC_ENABLED` defaults to false; account/admin APIs then return 503 for
 authenticated requests, granting no access. PostgreSQL is always required for
 the startup policy check. When RBAC is enabled, missing RBAC tables also stop
-startup. Policy checks, OIDC sessions and authorization reuse the same pool. `/api/health`, `/api/auth/me`, OIDC callbacks/sessions, and
-IAP per-request verification retain their existing behavior. Disabling a framework
+startup. Policy checks, OIDC sessions and authorization reuse the same pool.
+`/api/health`, `/api/auth/me`, and OIDC callbacks and sessions retain their
+existing behavior. Disabling a framework
 user denies RBAC access immediately, but does not revoke their external identity
 or invalidate `/api/auth/me` authentication responses.
 
@@ -628,7 +535,7 @@ The command checks authentication/RBAC schema availability but applies no migrat
 
 For Local DEV, use issuer `urn:go-web-framework:local-dev` and the configured
 `LOCAL_DEV_SUBJECT` only after that identity has accessed `/api/access/me`, and only
-in development. For OIDC/IAP, use the verified issuer and subject returned by that
+in development. For OIDC, use the verified issuer and subject returned by the
 provider. Refresh account access in the dashboard after bootstrap. Create a second
 verified administrator when needed: users cannot change their own roles or active
 status, and API changes cannot eliminate the last active administrator.
@@ -710,7 +617,7 @@ Switching back restores LTR styling. MUI's locale bundles localize its own label
 Application labels, role/permission descriptions, known audit actions, buttons,
 and errors are translated. User names, account names, email addresses, identity
 identifiers, the Go Web Framework product name, and protocol/provider names such
-as OIDC and Google IAP retain their original values. Audit payloads are explicitly
+as OIDC and historical Google IAP retain their original values. Audit payloads are explicitly
 labelled **Original audit data** and displayed unchanged as LTR JSON; this retains
 their exact before/after values and technical field names. Unknown future role,
 permission, and audit-action codes remain visible as their original codes until
@@ -723,8 +630,8 @@ it does not parse English API error prose or display raw response/exception text
 Translations change display labels only: authorization, identity matching, role
 assignment payloads, account links, and audit records retain their original codes.
 
-After updating dependencies, start the backend using the existing Local DEV,
-OIDC, or IAP configuration and run the frontend as usual:
+After updating dependencies, start the backend using the existing Local DEV or
+OIDC configuration and run the frontend as usual:
 
 ```bash
 cd frontend
@@ -826,9 +733,8 @@ remain grouped horizontally, with the toolbar able to wrap on narrow screens.
 
 Open the avatar or name to inspect display name, email, provider, issuer, and subject.
 `layout/UserProfileMenu.tsx` explicitly renders only these identity fields. OIDC
-Sign out uses the existing POST logout and session-clearing behavior. Google IAP
-shows that sign-out is managed by the identity provider/IAP; Local DEV explains its
-fixed development identity and offers no logout action.
+Sign out uses the existing POST logout and session-clearing behavior. Local DEV
+explains its fixed development identity and offers no logout action.
 
 `notifications/NotificationProvider.tsx` queues transient MUI Snackbar/Alert
 messages. `useNotifications()` supports `success`, `error`, `warning`, and `info`,
@@ -975,10 +881,7 @@ in the deployment's supported browsers.
 The Go tests cover identity validation, Local DEV guards, OIDC discovery and
 configuration, successful login, PKCE, browser-bound state, nonce, signed tokens,
 issuer/audience/expiry rejection, session rotation/expiration, logout CSRF, and
-unauthenticated access. IAP tests cover signed identity mapping, all supported
-audience formats, invalid claims/signatures/headers, key rotation, expired key
-caches, outages, and concurrent refresh. They use generated ES256 keys and mocked
-HTTPS transport responses, without contacting Google. OIDC integration tests start a temporary loopback HTTPS
+unauthenticated access. OIDC integration tests start a temporary loopback HTTPS
 provider with generated signing keys and real JWKS verification; they require
 local socket access but no external identity services or credentials. PostgreSQL
 tests create and destroy their own isolated clusters under `/tmp`, using private
@@ -1022,8 +925,8 @@ are validated even for disabled modules, while only enabled modules run `Registe
 Enabled modules require `RBAC_ENABLED=true`, an explicit authentication provider,
 valid `APP_ORIGIN`, and the existing PostgreSQL settings. Keep `DB_USER=go_web_app`;
 startup checks the existing framework schema and performs no permission or schema
-writes. Existing database-free Local DEV/IAP behavior remains available when RBAC
-and modules are disabled.
+writes. Local DEV remains available in development when RBAC and modules are
+disabled, subject to the read-only database startup policy check.
 
 For an already configured RBAC deployment, the optional example configuration is:
 
@@ -1590,7 +1493,7 @@ Migration `000005_auth_configuration.up.sql` creates two framework tables:
 
 - `framework.auth_config_revisions`: immutable UUID, deployment/environment,
   monotonically increasing configuration version within that scope, provider,
-  issuer URL, client ID, callback URI, IAP audience, explicit loopback-HTTP
+  issuer URL, client ID, callback URI, legacy IAP audience, explicit loopback-HTTP
   development flag, encrypted secret envelope, creator and creation timestamp.
   PostgreSQL rejects UPDATE and DELETE, including edits to ciphertext or key IDs.
 - `framework.auth_config_lifecycle`: revision-bound status, optimistic generation,
@@ -1602,8 +1505,8 @@ Migration `000005_auth_configuration.up.sql` creates two framework tables:
 
 All timestamps are `TIMESTAMPTZ`. Provider-specific checks reject mixed settings,
 missing/malformed encryption envelopes, invalid providers and Local DEV outside
-`development`. Application validation also reuses the existing OIDC/IAP validators
-without network requests. Local DEV identity values remain environment-configured;
+`development`. Application validation supports OIDC and Local DEV; historical IAP
+revisions remain readable but cannot be validated or approved. Local DEV identity values remain environment-configured;
 this foundation stores its provider choice only, not a replacement local identity.
 
 `AUTH_CONFIG_DEPLOYMENT` is a required, explicit deployment identifier for the
@@ -1763,8 +1666,8 @@ shell history, request logs or monitoring payloads):
 use the highest version from the first list page or status's `latest_revision`.
 A stale value yields 409; refresh and review before retrying. A new OIDC draft
 always requires a nonempty client secret; no implicit copying of stored secrets.
-Google IAP drafts instead use `provider: "google_iap"` and `iap_audience` with no
-OIDC fields or secret. Local DEV drafts use `provider: "local_dev"` and are allowed
+Google IAP drafts are no longer accepted; historical revisions remain readable.
+Local DEV drafts use `provider: "local_dev"` and are allowed
 only in `APP_ENV=development`; local identity values remain environment-owned.
 HTTP callback allowance is confined to existing loopback development rules.
 
@@ -1816,7 +1719,7 @@ It supports all twelve languages, Arabic RTL and the existing appearance modes.
 
 - Runtime provider/source are displayed separately from the latest and active
   database revisions. Drafts and approvals never alter environment-based login.
-- Create an immutable OIDC, Google IAP or Local DEV draft. OIDC requires a newly
+- Create an immutable OIDC or Local DEV draft. OIDC requires a newly
   entered secret every time; there is no copy-secret option. The password field
   offers an explicit visibility toggle. Secrets are not written to browser
   storage or the query cache and are cleared on submission, provider changes,
@@ -1835,7 +1738,7 @@ It supports all twelve languages, Arabic RTL and the existing appearance modes.
 Development-only controls require trusted evidence: a stored revision's
 `environment`, or the running `local_dev` provider when history is empty. The
 current status contract does not report the environment separately. With OIDC
-or IAP and no history, the UI conservatively disables Local DEV and HTTP callback
+and no history, the UI conservatively disables Local DEV and HTTP callback
 allowance. A future API capability can remove this limitation without trusting
 browser-provided environment flags. The backend remains the authorization and
 configuration-validation authority.
@@ -2094,7 +1997,7 @@ scope and a generation hint. Verified database state remains authoritative.
 The listener preserves the last verified snapshot on temporary failure, while
 session/flow SQL and environment admission checks prevent stale-provider bypasses.
 Initial cutover still requires reauthentication; later drains retain their recorded
-maximum thirty-minute deadline. IAP remains infrastructure-controlled. See the
+maximum thirty-minute deadline. Retired IAP configuration fails startup. See the
 [listener, failure policy, internal status and clock requirements](docs/auth-controlled-activation.md#event-driven-multi-instance-synchronization-phase-925f).
 Allow one additional session-affine PostgreSQL connection per instance. There are
 still no public activation or rollback endpoints, and no migration is needed.

@@ -151,10 +151,6 @@ func validate(scope Scope, s Settings, secret Secret) error {
 		if scope.Environment != "development" || s.IAPAudience != "" {
 			return ErrInvalid
 		}
-	case auth.GoogleIAP:
-		if err := auth.ValidateIAPAudience(s.IAPAudience); err != nil {
-			return ErrInvalid
-		}
 	default:
 		return ErrInvalid
 	}
@@ -376,6 +372,10 @@ func (r *Repository) Transition(ctx context.Context, id string, expectedGenerati
 		}
 		if m.Generation != expectedGeneration {
 			return ErrConflict
+		}
+		// Legacy IAP revisions remain readable, never actionable.
+		if m.Provider != auth.OIDC && m.Provider != auth.LocalDev {
+			return ErrInvalid
 		}
 		if (to == Validated && m.Status != Draft) || (to == Approved && m.Status != Validated) {
 			return ErrInvalid

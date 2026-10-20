@@ -156,7 +156,7 @@ func (m *Runtime) Stage(p *PreparedOIDC, expectedGeneration int64) (*Publication
 	defer m.mu.Unlock()
 	m.pruneExpiredLocked()
 	s := m.current.Load()
-	if m.closed || m.mismatch || s == nil || p == nil || s.status.Provider == GoogleIAP || s.status.AppliedGeneration != expectedGeneration || p.binding.ActivationGeneration != expectedGeneration+1 || p.binding.DeploymentID != s.status.DeploymentID || p.binding.Environment != s.status.Environment {
+	if m.closed || m.mismatch || s == nil || p == nil || (s.status.Provider != OIDC && s.status.Provider != LocalDev) || s.status.AppliedGeneration != expectedGeneration || p.binding.ActivationGeneration != expectedGeneration+1 || p.binding.DeploymentID != s.status.DeploymentID || p.binding.Environment != s.status.Environment {
 		return nil, ErrRuntimeConflict
 	}
 	if s.draining != nil && time.Now().Before(s.status.TransitionDeadline) {

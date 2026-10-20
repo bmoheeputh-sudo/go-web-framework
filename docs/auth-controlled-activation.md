@@ -1,5 +1,7 @@
 # Controlled OIDC activation and administration APIs (Phase 9.2.5H)
 
+> **Phase 10.1 compatibility note:** Google IAP is retired. References below describe the historical design; `AUTH_PROVIDER=google_iap` now fails startup. OIDC and Local DEV remain supported.
+
 The server exposes a protected backend control plane for preparation,
 normal-callback readiness testing, activation, and immutable recovery-draft
 creation. The administrator UI requires explicit evidence and confirmation; startup rehydrates an
@@ -13,6 +15,17 @@ lock before mutation. Responses use `Cache-Control: no-store` and never contain
 client secrets, keys, OAuth tokens, authorization codes, raw provider responses,
 or identity/administrator claims supplied by the browser.
 
+The administrator UI presents two primary OIDC actions after configuration:
+Test Connection and Enable. Test Connection performs the required offline
+validation and approval before starting any provider test, so both evidence
+records bind to the approved revision generation. Approval is an explicit
+configuration lifecycle change; Test Connection does not enable the provider.
+The guided test opens two separate provider authorizations:
+an isolated connection test and a normal-callback readiness test. They cannot
+be merged without changing the server's separate callback and evidence checks.
+Testing never enables the provider; Enable still requires fresh evidence, an
+enrolled administrator, and explicit confirmation.
+
 ## Protected HTTP workflow
 
 1. `POST /api/admin/auth/settings/{id}/activation/prepare` accepts only expected
@@ -25,6 +38,11 @@ or identity/administrator claims supplied by the browser.
    the provider authorization URL and a separate HttpOnly readiness cookie.
    `GET /api/admin/auth/activation-preparations/{id}` reports safe progress and a
    durable normal-callback evidence ID after verified completion.
+   Both browser callbacks redirect to the minimal
+   `/auth/verification-result` page after clearing the callback URL. Its
+   display-only result parameter is never accepted as evidence; the protected
+   administrator status endpoints remain authoritative. Deploy the frontend
+   with the same direct-route fallback used by `/settings`.
    `POST /api/admin/auth/activation-preparations/{id}/cancel` with `{}` releases
    an unused preparation owned by the verified administrator. If its ID was lost,
    `POST /api/admin/auth/activation-preparations/current/cancel` releases that
@@ -32,6 +50,11 @@ or identity/administrator claims supplied by the browser.
    administrator authorization, origin and JSON protections. Cancellation cannot
    interrupt an activation after its one-shot claim; an uncertain activation
    result must be resolved from authoritative status, never by cancelling and retrying.
+   A cancellation 404 can mean expired, missing, or already claimed. The UI only
+   treats it as completed local cleanup when the known preparation has expired;
+   an unexpired 404 is treated as an unknown outcome requiring inspection. The
+   protected test and preparation status endpoints, not cross-origin popup
+   window properties, determine verification completion.
 3. `POST /api/admin/auth/activation-preparations/{id}/activate` is one-shot. The
    request repeats revision/generations, references both fresh evidence records and
    the explicitly enrolled administrator, confirms the operation, supplies a
@@ -238,7 +261,7 @@ only to explicitly bound database sessions.
 
 Readiness therefore reports `RequiresReauthentication=true` and
 `MaximumSessionGrace=0` for Local DEV and environment OIDC. A future confirmation
-UI must explain: **"Existing sign-ins and pending environment logins will not
+UI explains: **"Existing sign-ins and pending environment logins will not
 carry over. Sign in again using the new OIDC configuration."** The activation API
 requires explicit reauthentication and emergency-recovery acknowledgments and a
 zero transition duration; activation history
@@ -313,8 +336,8 @@ request contexts without an explicit bounded ownership design.
 `AUTH_PROVIDER` authenticator. An absent head on an unenrolled database or an
 explicit clean environment policy keeps existing behavior. Database policy loads
 only its active OIDC revision; missing keys, invalid configuration, database or
-provider failures stop startup. `AUTH_PROVIDER=google_iap` pins the infrastructure
-boundary and refuses a conflicting database OIDC policy.
+provider failures stop startup. Retired `AUTH_PROVIDER=google_iap` fails before
+policy loading, including when the database head requires OIDC.
 
 `StartupLoader` is a separate read-only capability, with no administrator context
 or `AdminTransaction`. A repeatable-read, read-only PostgreSQL transaction checks
@@ -398,8 +421,8 @@ Publication transfers ownership of immutable snapshots and leases. Captured
 requests keep their original snapshot; replaced authenticators retire immediately
 unless they are precisely the permitted draining binding. Transport cleanup waits
 for their final retained reference. Initial environment-to-database publication
-never retains Local DEV or environment credentials as a grace provider. IAP-pinned
-instances refuse OIDC reconciliation and do not alter upstream IAP infrastructure.
+never retains Local DEV or environment credentials as a grace provider. Unsupported
+environment providers cannot be admitted to OIDC reconciliation.
 The background service reads/decrypts trusted state without an administrator identity
 and never invokes `AdminTransaction` or changes activation records.
 
@@ -462,7 +485,7 @@ latest **observed** desired generation, applied generation, provider, connection
 state, last successful reconciliation, degraded/mismatched state and transition
 deadline. This is per-instance status, not a claim that every instance has activated.
 Existing management endpoints remain compatible. The protected Phase H endpoints
-do not claim cluster-wide success, and no activation UI is added. Configuration
+and administrator UI do not claim cluster-wide success. Configuration
 keys and callback/listener settings are captured at process
 startup. Provision historical keys on every instance before a new revision needs
 them; changing process secrets requires restarting that instance.

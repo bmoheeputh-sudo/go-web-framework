@@ -231,7 +231,7 @@ func TestRepository(t *testing.T) {
 				if _, err := other.ReadSecretPrivileged(ctx, first.ID); !errors.Is(err, ErrNotFound) {
 					t.Fatal("cross-deployment secret")
 				}
-				m, err := other.CreateDraft(ctx, 0, Settings{Provider: auth.GoogleIAP, IAPAudience: "/projects/123/apps/app-test"}, Secret{})
+				m, err := other.CreateDraft(ctx, 0, testMetadata().Settings, NewSecret([]byte("synthetic-test-secret")))
 				if err != nil || m.Version != 1 {
 					t.Fatal("independent versions failed", err)
 				}
@@ -379,8 +379,8 @@ func TestInvalidSettings(t *testing.T) {
 			t.Fatal("Local DEV outside development accepted")
 		}
 	}
-	if validate(scope, Settings{Provider: auth.GoogleIAP, IAPAudience: "bad"}, Secret{}) == nil || validate(scope, settings, Secret{}) == nil {
-		t.Fatal("missing credential or invalid audience accepted")
+	if validate(scope, Settings{Provider: "google_iap", IAPAudience: "/projects/123/apps/app-test"}, Secret{}) == nil || validate(scope, settings, Secret{}) == nil {
+		t.Fatal("missing credential or retired provider accepted")
 	}
 	for _, scope := range []Scope{{"", "development"}, {"../bad", "development"}, {"deployment", "unknown"}} {
 		if scope.valid() {
@@ -390,6 +390,62 @@ func TestInvalidSettings(t *testing.T) {
 	if _, err := NewRepository(nil, testMetadata().Scope, nil); !errors.Is(err, ErrInvalid) {
 		t.Fatal("nil store accepted")
 	}
+}
+
+func TestHistoricalIAPRevisionIsReadOnly(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	tx, err := f.owner.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	var id, actor string
+	err = tx.QueryRow(ctx, `INSERT INTO framework.auth_config_revisions
+		(id,deployment_id,environment,configuration_version,provider,iap_audience,created_by)
+		SELECT gen_random_uuid(),'installation-a','development',1,'google_iap','/projects/123/apps/legacy',id
+		FROM framework.users WHERE subject='config-admin' RETURNING id::text`).Scan(&id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = tx.QueryRow(ctx, `SELECT id::text FROM framework.users WHERE subject='config-admin'`).Scan(&actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO framework.auth_config_lifecycle(revision_id,deployment_id,environment,updated_by)
+		VALUES($1,'installation-a','development',$2)`, id, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.run(t, func(ctx context.Context) {
+		m, err := f.repo.Read(ctx, id)
+		if err != nil || m.Provider != "google_iap" || m.IAPAudience != "/projects/123/apps/legacy" || m.Status != Draft {
+			t.Fatal("historical IAP metadata not readable", err)
+		}
+		list, err := f.repo.List(ctx, 0, 10)
+		if err != nil || len(list) != 1 || list[0].ID != id {
+			t.Fatal("historical IAP history not readable", err)
+		}
+		if _, err := f.repo.CreateDraft(ctx, 1, m.Settings, Secret{}); !errors.Is(err, ErrInvalid) {
+			t.Fatal("new IAP draft accepted", err)
+		}
+		if _, err := f.repo.Transition(ctx, id, m.Generation, Validated); !errors.Is(err, ErrInvalid) {
+			t.Fatal("historical IAP validation accepted", err)
+		}
+	})
+	_, err = f.owner.Exec(ctx, `UPDATE framework.auth_config_lifecycle SET status='validated',generation=2,
+		validation='{"check":"static","version":1}'::jsonb WHERE revision_id=$1`, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.run(t, func(ctx context.Context) {
+		if _, err := f.repo.Transition(ctx, id, 2, Approved); !errors.Is(err, ErrInvalid) {
+			t.Fatal("historical IAP approval accepted", err)
+		}
+	})
 }
 
 func TestRepositoryAuthorizationRecheck(t *testing.T) {

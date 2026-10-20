@@ -126,7 +126,7 @@ describe('language selection and dashboard', () => {
       await chooseLanguage(language as Language)
       expect(screen.getByRole('heading', { name: resources[language].common.dashboard })).toBeTruthy()
       expect(screen.getByRole('link', { name: resources[language].auth.signIn }).getAttribute('href')).toBe('/api/auth/login')
-      expect(screen.getByText(resources[language].common.connected)).toBeTruthy()
+      expect(screen.queryByText(resources[language].common.backendStatus)).toBeNull()
       expect(document.documentElement.lang).toBe(language)
       expect(document.documentElement.dir).toBe(direction(language))
     }

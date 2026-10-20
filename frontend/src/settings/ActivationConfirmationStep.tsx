@@ -1,7 +1,8 @@
 import {
-  Alert, Checkbox,
+  Accordion, AccordionDetails, AccordionSummary, Alert, Checkbox,
   FormControlLabel, Stack, TextField, Typography,
 } from '@mui/material'
+import ExpandMore from '@mui/icons-material/ExpandMore'
 import { useTranslation } from 'react-i18next'
 import type { Identity } from '../api/client'
 import type { ActivationPreparation, AuthRevision } from '../api/authConfiguration'
@@ -24,11 +25,7 @@ export default function ActivationConfirmationStep({ revision, preparation, iden
         <Typography component="h3" variant="h6">{t('activationConfirmTitle')}</Typography>
         <Alert severity="warning">{t(firstCutover ? 'activationFirstCutoverWarning' : 'activationTransitionWarning')}</Alert>
         <Typography><strong>{t('provider')}:</strong> OIDC</Typography>
-        <Typography><strong>{t('activationTargetRevision')}:</strong> <bdi>{revision.id}</bdi></Typography>
-        <Typography><strong>{t('activationGenerations')}:</strong> {preparation.expected_activation_generation} → {preparation.target_activation_generation}</Typography>
-        <Typography><strong>{t('issuerURL')}:</strong> <bdi>{identity.issuer}</bdi></Typography>
-        <Typography><strong>{t('activationVerifiedSubject')}:</strong> <bdi>{identity.subject}</bdi></Typography>
-        <Typography><strong>{t('activationEnrolledUser')}:</strong> <bdi>{enrolledUserID}</bdi></Typography>
+        <Typography><strong>{t('revision')}:</strong> {revision.configuration_version}</Typography>
         <Typography><strong>{t('activationEvidenceStatus')}:</strong> {t('activationEvidenceReady')}</Typography>
         <Typography><strong>{t('activationRecoveryProcedure')}:</strong> {t('activationRecoveryProcedureName')}</Typography>
         <Typography variant="body2" color="text.secondary">{t('activationRecoveryRunbook')}</Typography>
@@ -45,6 +42,16 @@ export default function ActivationConfirmationStep({ revision, preparation, iden
           <FormControlLabel control={<Checkbox checked={value.acknowledgeEmergencyRecovery} disabled={busy || expired} onChange={(_, checked) => onChange({ ...value, acknowledgeEmergencyRecovery: checked })} />}
             label={t('activationAcknowledgeRecovery')} />
         </>}
+        <Accordion disableGutters variant="outlined" sx={{ '&::before': { display: 'none' } }}>
+          <AccordionSummary expandIcon={<ExpandMore />}>{t('technicalDetails')}</AccordionSummary>
+          <AccordionDetails><Stack spacing={1}>
+            <Typography><strong>{t('activationTargetRevision')}:</strong> <bdi>{revision.id}</bdi></Typography>
+            <Typography><strong>{t('activationGenerations')}:</strong> {preparation.expected_activation_generation} → {preparation.target_activation_generation}</Typography>
+            <Typography><strong>{t('issuerURL')}:</strong> <bdi>{identity.issuer}</bdi></Typography>
+            <Typography><strong>{t('activationVerifiedSubject')}:</strong> <bdi>{identity.subject}</bdi></Typography>
+            <Typography><strong>{t('activationEnrolledUser')}:</strong> <bdi>{enrolledUserID}</bdi></Typography>
+          </Stack></AccordionDetails>
+        </Accordion>
         {expired && <Alert severity="error">{t('activationPreparationExpired')}</Alert>}
   </Stack>
 }

@@ -86,7 +86,10 @@ func openLive(ctx context.Context, getenv func(string) string, operator *authcon
 		pool.Close()
 		return nil, errors.New("session store unavailable")
 	}
-	service, err := authconfig.NewRecoveryService(repo, postgres, sessions, getenv("APP_ORIGIN")+"/api/auth/callback", auth.Provider(getenv("AUTH_PROVIDER")) == auth.GoogleIAP)
+	if getenv("AUTH_PROVIDER") == "google_iap" {
+		return nil, errors.New("AUTH_PROVIDER=google_iap is no longer supported")
+	}
+	service, err := authconfig.NewRecoveryService(repo, postgres, sessions, getenv("APP_ORIGIN")+"/api/auth/callback")
 	if err != nil {
 		pool.Close()
 		return nil, errors.New("offline OIDC recovery is not permitted for this deployment")

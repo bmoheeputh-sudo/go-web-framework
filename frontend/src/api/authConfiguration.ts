@@ -1,7 +1,8 @@
 import { APIError } from './client'
 import type { Identity, User } from './client'
 
-export type AuthProvider = Identity['provider']
+// Legacy IAP revisions remain readable but cannot be created or activated.
+export type AuthProvider = Identity['provider'] | 'google_iap'
 export type RevisionStatus = 'draft' | 'validated' | 'approved' | 'active' | 'superseded'
 export type AuthSettings = {
   provider: AuthProvider; issuer_url: string; client_id: string; redirect_uri: string
@@ -17,18 +18,24 @@ export type AuthRevision = AuthSettings & {
   has_secret: boolean
 }
 export type AuthStatus = {
-  runtime_provider: AuthProvider; runtime_source: 'environment' | 'database'; management_only: boolean; activation_api_available: boolean
+  runtime_provider: Identity['provider']; runtime_source: 'environment' | 'database'; management_only: boolean; activation_api_available: boolean
   validation_mode: 'offline_static'; latest_revision: AuthRevision | null; database_active_revision: AuthRevision | null
 }
 export type AuthHistory = { revisions: AuthRevision[]; next_before_version: number }
 export type NewAuthDraft = { expected_latest_version: number } & (
   | { provider: 'oidc'; issuer_url: string; client_id: string; client_secret: string; redirect_uri: string; allow_http_development: boolean }
-  | { provider: 'google_iap'; iap_audience: string }
   | { provider: 'local_dev' }
 )
 export const authSettingsPath = '/api/admin/auth/settings'
 export const authStatusPath = '/api/admin/auth/status' // No query parameters on this endpoint.
 export const authProviderSetupPath = '/api/admin/auth/provider-setup'
+
+// Lifecycle transitions return the new immutable-revision metadata generation.
+// A connection test must use the approved generation, never a pre-approval one.
+export const validateAuthRevision = (id: string, expectedGeneration: number, signal?: AbortSignal) =>
+  configurationRequest<AuthRevision>(`${authSettingsPath}/${encodeURIComponent(id)}/validate`, 'POST', { expected_generation: expectedGeneration }, signal)
+export const approveAuthRevision = (id: string, expectedGeneration: number, signal?: AbortSignal) =>
+  configurationRequest<AuthRevision>(`${authSettingsPath}/${encodeURIComponent(id)}/approve`, 'POST', { expected_generation: expectedGeneration }, signal)
 
 export type OIDCProviderSetupMetadata = {
   application_name: 'Vopak Enterprise Security'
@@ -71,7 +78,7 @@ export type ActivationStatus = {
   authoritative_generation: number
   authoritative_revision_id?: string
   local_source: 'environment' | 'database'
-  local_provider: AuthProvider
+  local_provider: Identity['provider']
   local_applied_generation: number
   local_desired_generation: number
   local_revision_id?: string
@@ -91,7 +98,7 @@ export type ActivationPreparation = {
   expected_activation_generation: number
   target_activation_generation: number
   expires_at: string
-  current_provider: AuthProvider
+  current_provider: Identity['provider']
   current_source: 'environment' | 'database'
   requires_reauthentication: boolean
   maximum_transition_seconds: number

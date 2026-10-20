@@ -4,13 +4,29 @@ import { useTranslation } from 'react-i18next'
 import { useSession } from '../auth/session'
 import { useMutation, useQuery } from '../api/queries'
 import type { Account, Role, User } from '../api/client'
+import { authStatusPath } from '../api/authConfiguration'
+import type { AuthStatus } from '../api/authConfiguration'
 import { roleKeys } from '../i18n'
 import CompactTable from '../components/CompactTable'
 import { Pager, PageTools } from '../components/PageTools'
 import SectionCard from '../components/common/SectionCard'
 
+const providerLabels: Record<User['provider'], string> = {
+  oidc: 'auth:providerOidc', google_iap: 'auth:providerIap', local_dev: 'auth:providerLocal',
+}
+
+function currentProvider(user: User, status: AuthStatus | null): boolean | null {
+  if (!status || !providerLabels[user.provider]) return null
+  if (user.provider !== status.runtime_provider) return false
+  if (status.runtime_source === 'database') {
+    if (user.provider !== 'oidc' || status.database_active_revision?.provider !== 'oidc') return null
+    return status.database_active_revision.issuer_url === user.issuer
+  }
+  return true
+}
+
 export default function UsersPage() {
-  const { t, i18n } = useTranslation(['admin', 'common'])
+  const { t, i18n } = useTranslation(['admin', 'common', 'auth'])
   const { access } = useSession()
   const actorID = access.user!.id
   const [userPage, setUserPage] = useState(0)
@@ -20,9 +36,11 @@ export default function UsersPage() {
   const userQuery = useQuery<User[]>(`/api/admin/users?offset=${userPage * 100}`)
   const roleQuery = useQuery<Role[]>('/api/admin/roles')
   const accountQuery = useQuery<Account[]>(`/api/admin/accounts?offset=${accountPage * 100}`)
+  const authStatusQuery = useQuery<AuthStatus>(authStatusPath)
   const users = userQuery.data || []
   const roles = roleQuery.data || []
   const accounts = accountQuery.data || []
+  const runtimeStatus = !authStatusQuery.loading && !authStatusQuery.error ? authStatusQuery.data || null : null
   const selected = users.find((user) => user.id === selectedID)
   const mutation = useMutation()
   const { mutate } = mutation
@@ -31,9 +49,11 @@ export default function UsersPage() {
   return <>
     <PageTools busy={busy} error={error} onRefresh={mutation.clearError} />
     <SectionCard title={t('usersRoles')} description={t('usersHelp')} busy={busy}>
-      <CompactTable label={t('common:navUsers')} headers={[t('user'), t('common:navRoles'), t('common:status')]}
+      <CompactTable label={t('common:navUsers')} minWidth={620} headers={[t('user'), t('common:navRoles'), t('userRecordStatus'), t('authenticationProvider')]}
         empty={!userQuery.loading && !userQuery.error && users.length === 0} emptyMessage={t('usersEmpty')}>
-        {users.map((user) => <TableRow key={user.id} selected={selectedID === user.id} hover>
+        {users.map((user) => {
+          const activeProvider = currentProvider(user, runtimeStatus)
+          return <TableRow key={user.id} selected={selectedID === user.id} hover>
           <TableCell component="th" scope="row">
             <Button size="small" aria-label={t('selectUser', { name: user.display_name || user.subject })} disabled={busy} onClick={() => setSelectedID(user.id)} sx={{ textAlign: 'start' }}>
               <bdi>{user.display_name || user.subject}</bdi>
@@ -42,7 +62,15 @@ export default function UsersPage() {
           </TableCell>
           <TableCell>{user.roles.length ? new Intl.ListFormat(i18n.resolvedLanguage || 'en').format(user.roles.map((role) => t(roleKeys[role] || role, { defaultValue: role }))) : t('common:none')}</TableCell>
           <TableCell><Chip size="small" variant="outlined" color={user.active ? 'success' : 'default'} label={t(user.active ? 'common:statusActive' : 'common:statusInactive')} /></TableCell>
-        </TableRow>)}
+          <TableCell>
+            <Stack spacing={0.5} sx={{ alignItems: 'flex-start' }}>
+              <Typography variant="body2">{providerLabels[user.provider] ? t(providerLabels[user.provider]) : t('providerStatusUnknown')}</Typography>
+              <Chip size="small" variant="outlined" color={activeProvider ? 'info' : 'default'}
+                label={t(activeProvider === null ? 'providerStatusUnknown' : activeProvider ? 'providerCurrent' : 'providerUnavailable')} />
+            </Stack>
+          </TableCell>
+        </TableRow>
+        })}
       </CompactTable>
       <Pager label={t('common:navUsers')} page={userPage} count={users.length} busy={busy} onChange={(page) => { setSelectedID(''); setUserPage(page) }} />
       {selected && <Box sx={{ my: 2, overflowWrap: 'anywhere' }}>

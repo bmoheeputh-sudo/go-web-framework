@@ -39,6 +39,7 @@ type User struct {
 	Subject     string   `json:"subject"`
 	Email       string   `json:"email"`
 	DisplayName string   `json:"display_name"`
+	Provider    string   `json:"provider"`
 	Active      bool     `json:"active"`
 	Roles       []string `json:"roles"`
 	Permissions []string `json:"permissions"`
@@ -85,7 +86,7 @@ func (s *Store) Check(ctx context.Context) error {
 	return nil
 }
 
-const userSelect = `SELECT u.id::text, u.issuer, u.subject, u.email, u.display_name, u.active,
+const userSelect = `SELECT u.id::text, u.issuer, u.subject, u.email, u.display_name, u.provider, u.active,
  ARRAY(SELECT role FROM framework.user_roles WHERE user_id=u.id ORDER BY role),
  ARRAY(SELECT DISTINCT rp.permission FROM framework.role_permissions rp JOIN framework.user_roles ur ON ur.role=rp.role WHERE ur.user_id=u.id ORDER BY rp.permission),
  ARRAY(SELECT account_id::text FROM framework.user_accounts WHERE user_id=u.id ORDER BY account_id)
@@ -93,7 +94,7 @@ const userSelect = `SELECT u.id::text, u.issuer, u.subject, u.email, u.display_n
 
 func scanUser(row pgx.Row) (User, error) {
 	var u User
-	err := row.Scan(&u.ID, &u.Issuer, &u.Subject, &u.Email, &u.DisplayName, &u.Active, &u.Roles, &u.Permissions, &u.AccountIDs)
+	err := row.Scan(&u.ID, &u.Issuer, &u.Subject, &u.Email, &u.DisplayName, &u.Provider, &u.Active, &u.Roles, &u.Permissions, &u.AccountIDs)
 	return u, err
 }
 

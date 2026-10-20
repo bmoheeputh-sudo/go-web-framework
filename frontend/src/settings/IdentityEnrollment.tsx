@@ -12,8 +12,8 @@ import type { User } from '../api/client'
 
 const roles = ['Admin', 'User', 'Viewer'] as const
 
-export default function IdentityEnrollment({ revision, result, disabled, onEnrolled }: {
-  revision: AuthRevision; result: ConnectionTest; disabled: boolean; onEnrolled?: (user: User) => void
+export default function IdentityEnrollment({ revision, result, disabled, onEnrolled, inlineConfirmation = false }: {
+  revision: AuthRevision; result: ConnectionTest; disabled: boolean; onEnrolled?: (user: User) => void; inlineConfirmation?: boolean
 }) {
   const { t, i18n } = useTranslation(['auth', 'admin', 'common'])
   const { authentication, access, expire } = useSession()
@@ -63,13 +63,20 @@ export default function IdentityEnrollment({ revision, result, disabled, onEnrol
       {roles.map((value) => <MenuItem key={value} value={value}>{t(`admin:${roleKeys[value]}`)}</MenuItem>)}
     </TextField>
     <Button variant="outlined" disabled={blocked || !role} onClick={() => setConfirm(true)}>{t('enrollIdentity')}</Button>
-    <Dialog open={confirm} onClose={() => { if (!busy) setConfirm(false) }} fullWidth maxWidth="sm" aria-labelledby="enrollment-confirm-title">
+    {inlineConfirmation && confirm && <Stack spacing={1} role="region" aria-label={t('enrollmentConfirm')}>
+      <Alert severity="warning">{t('enrollmentGrant', { role: role ? t(`admin:${roleKeys[role]}`) : '' })}</Alert>
+      <Stack direction="row" sx={{ gap: 1 }}>
+        <Button disabled={busy} onClick={() => setConfirm(false)}>{t('common:cancel')}</Button>
+        <Button variant="contained" disabled={blocked} onClick={() => void enroll()}>{t('enrollIdentity')}</Button>
+      </Stack>
+    </Stack>}
+    {!inlineConfirmation && <Dialog open={confirm} onClose={() => { if (!busy) setConfirm(false) }} fullWidth maxWidth="sm" aria-labelledby="enrollment-confirm-title">
       <DialogTitle id="enrollment-confirm-title">{t('enrollmentConfirm')}</DialogTitle>
       <DialogContent><Stack spacing={2}>{identity}<Alert severity="warning">{t('enrollmentGrant', { role: role ? t(`admin:${roleKeys[role]}`) : '' })}</Alert></Stack></DialogContent>
       <DialogActions>
         <Button disabled={busy} onClick={() => setConfirm(false)}>{t('common:cancel')}</Button>
         <Button disabled={blocked} onClick={() => void enroll()}>{t('enrollIdentity')}</Button>
       </DialogActions>
-    </Dialog>
+    </Dialog>}
   </Stack>
 }

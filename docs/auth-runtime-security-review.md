@@ -1,3 +1,5 @@
+
+> **Phase 10.1 compatibility note:** Google IAP is retired. References below describe the historical design; `AUTH_PROVIDER=google_iap` now fails startup. OIDC and Local DEV remain supported.
 > Startup follow-up: read-only database rehydration now implements committed-head
 > loading, historical-key selection and recorded-deadline restoration. See the
 > [current startup and lifecycle design](auth-controlled-activation.md#read-only-startup-rehydration-and-lifecycle-hardening).

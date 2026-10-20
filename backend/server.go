@@ -36,6 +36,11 @@ func newServer(getenv func(string) string) (*application, error) {
 // The dependency seam is internal and used only by provider unit tests. Production
 // always opens and validates the authoritative policy before preparing a provider.
 func newServerWithPolicy(getenv func(string) string, policy func(func(string) string) (*pgxpool.Pool, error)) (result *application, resultErr error) {
+	// Reject retired providers before policy loading. A database activation head
+	// must not make an obsolete environment configuration appear supported.
+	if getenv("AUTH_PROVIDER") == "google_iap" {
+		return nil, errors.New("AUTH_PROVIDER=google_iap is no longer supported; configure oidc or local_dev explicitly")
+	}
 	rbacEnabled := false
 	if value := getenv("RBAC_ENABLED"); value != "" {
 		var err error
@@ -174,14 +179,8 @@ func newServerWithPolicy(getenv func(string) string, policy func(func(string) st
 			}
 			closeResources = pool.Close
 			provider = oidcProvider
-		case auth.GoogleIAP:
-			iap, err := auth.NewGoogleIAP(getenv("IAP_AUDIENCE"))
-			if err != nil {
-				return nil, err
-			}
-			provider = iap
 		default:
-			return nil, errors.New("unsupported AUTH_PROVIDER; use oidc, google_iap or local_dev, or leave unset for public health only")
+			return nil, errors.New("unsupported AUTH_PROVIDER; use oidc or local_dev, or leave unset for public health only")
 		}
 	}
 	var authorization *access.Store

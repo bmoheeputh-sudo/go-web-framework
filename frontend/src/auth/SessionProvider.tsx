@@ -14,7 +14,7 @@ function isIdentity(value: unknown): value is Identity {
     typeof identity.email === 'string' &&
     typeof identity.email_verified === 'boolean' &&
     typeof identity.display_name === 'string' &&
-    ['oidc', 'google_iap', 'local_dev'].includes(String(identity.provider))
+    ['oidc', 'local_dev'].includes(String(identity.provider))
   )
 }
 

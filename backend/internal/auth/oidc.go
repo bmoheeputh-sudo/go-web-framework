@@ -216,7 +216,14 @@ func (p *OIDCAuthenticator) Callback(w http.ResponseWriter, r *http.Request) {
 	p.clearCookie(w, p.flowCookie)
 	// Reject malformed/ambiguous queries before exchanging a code. Callback errors
 	// redirect to a fixed URL, clearing code/state from the browser address bar.
-	fail := func() { http.Redirect(w, r, p.origin+"/?auth_error=login_failed", http.StatusSeeOther) }
+	testOutcome := "failed"
+	fail := func() {
+		if p.onVerified != nil {
+			http.Redirect(w, r, p.origin+"/auth/verification-result?result="+testOutcome, http.StatusSeeOther)
+			return
+		}
+		http.Redirect(w, r, p.origin+"/?auth_error=login_failed", http.StatusSeeOther)
+	}
 	query, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
 		fail()
@@ -236,6 +243,9 @@ func (p *OIDCAuthenticator) Callback(w http.ResponseWriter, r *http.Request) {
 	flow, err := p.store.takeFlow(r.Context(), cookie.Value, query.Get("state"))
 	if err != nil || query.Get("error") != "" || query.Get("code") == "" ||
 		(query.Get("iss") != "" && query.Get("iss") != p.issuer) {
+		if err == nil && query.Get("error") == "access_denied" {
+			testOutcome = "declined"
+		}
 		fail()
 		return
 	}
@@ -268,7 +278,7 @@ func (p *OIDCAuthenticator) Callback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		succeeded = true
-		http.Redirect(w, r, p.origin+"/?auth_test=completed", http.StatusSeeOther)
+		http.Redirect(w, r, p.origin+"/auth/verification-result?result=success", http.StatusSeeOther)
 		return
 	}
 	expires := time.Now().Add(p.absoluteTimeout)

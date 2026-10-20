@@ -325,7 +325,8 @@ func (c valueContext) Value(key any) any { return c.values.Value(key) }
 func (s *connectionTests) callback(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	defer http.Redirect(w, r, s.origin+"/settings", http.StatusSeeOther)
+	result := "failed"
+	defer func() { http.Redirect(w, r, s.origin+"/auth/verification-result?result="+result, http.StatusSeeOther) }()
 	if len(r.URL.RawQuery) > 8192 {
 		return
 	}
@@ -365,6 +366,9 @@ func (s *connectionTests) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if q.Get("error") != "" || q.Get("code") == "" || (q.Get("iss") != "" && q.Get("iss") != e.metadata.IssuerURL) {
+		if q.Get("error") == "access_denied" {
+			result = "declined"
+		}
 		s.finish(ctx, e, "failed", "handshake_failed", nil)
 		e.mu.Unlock()
 		return
@@ -386,6 +390,9 @@ func (s *connectionTests) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.finish(ctx, e, "succeeded", "", &identity)
+	if e.result.Status == "succeeded" {
+		result = "success"
+	}
 }
 func (s *connectionTests) register(mux *http.ServeMux, route func(string, http.HandlerFunc)) {
 	available := func(handler http.HandlerFunc) http.HandlerFunc {

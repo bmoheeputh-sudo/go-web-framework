@@ -38,7 +38,7 @@ func subscriberFixture(t *testing.T, f *fixture, service *ActivationService, pro
 		t.Fatal(err)
 	}
 	reader, _ := NewActivationReader(f.pool, f.repo.scope)
-	loader, err := NewStartupLoader(reader, f.repo.cipher, service.sessions, service.callback, false)
+	loader, err := NewStartupLoader(reader, f.repo.cipher, service.sessions, service.callback)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,38 +384,6 @@ func TestSynchronizationFailureDoesNotFallback(t *testing.T) {
 	}
 	if syncer.Status().AppliedGeneration != 1 {
 		t.Fatal("DB outage discarded verified snapshot")
-	}
-}
-
-func TestSynchronizerIAPBoundary(t *testing.T) {
-	f, service, _, m := activationServiceFixture(t)
-	if err := activationFixture(t, f, m, 1, "", false); err != nil {
-		t.Fatal(err)
-	}
-	iap, err := auth.NewGoogleIAP("/projects/123/apps/test-app")
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime, err := auth.NewEnvironmentRuntime(iap, f.repo.scope.DeploymentID, f.repo.scope.Environment)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer runtime.Close()
-	reader, _ := NewActivationReader(f.pool, f.repo.scope)
-	syncer, err := NewSynchronizer(reader, runtime, func(context.Context) (*auth.Runtime, error) {
-		t.Error("IAP attempted OIDC preparation")
-		return nil, ErrDenied
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = service
-	if err = syncer.Reconcile(context.Background()); !errors.Is(err, ErrDenied) {
-		t.Fatal("IAP boundary bypass", err)
-	}
-	status, _, _ := runtime.ControlStatus()
-	if status.Provider != auth.GoogleIAP {
-		t.Fatal("IAP provider replaced")
 	}
 }
 

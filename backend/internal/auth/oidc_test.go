@@ -228,6 +228,43 @@ func assertFailedCallback(t *testing.T, response *httptest.ResponseRecorder) {
 	}
 }
 
+func TestOIDCTestCallbackFailureUsesMinimalResult(t *testing.T) {
+	f := newTestIssuer(t)
+	p := f.provider(t)
+	p.onVerified = func(context.Context, Identity) error { return nil }
+	response := finishLogin(p, testOrigin+"/api/auth/callback?error=access_denied")
+	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != testOrigin+"/auth/verification-result?result=failed" {
+		t.Fatal("uncorrelated test callback reported a verified result")
+	}
+	if response.Header().Get("Referrer-Policy") != "no-referrer" {
+		t.Fatal("test callback may leak its URL")
+	}
+}
+
+func TestOIDCTestCallbackDeclineUsesMinimalResult(t *testing.T) {
+	f := newTestIssuer(t)
+	p := f.provider(t)
+	p.onVerified = func(context.Context, Identity) error { return nil }
+	callback, flow := beginLogin(t, f, p)
+	parsed, err := url.Parse(callback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := parsed.Query()
+	query.Del("code")
+	query.Set("error", "access_denied")
+	parsed.RawQuery = query.Encode()
+	response := finishLogin(p, parsed.String(), flow)
+	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != testOrigin+"/auth/verification-result?result=declined" {
+		t.Fatal("correlated decline did not show the minimal result")
+	}
+	for _, cookie := range response.Result().Cookies() {
+		if cookie.Name == sessionCookie && cookie.Value != "" {
+			t.Fatal("declined test created a session")
+		}
+	}
+}
+
 func TestOIDCLoginCallbackMeAndSessionRotation(t *testing.T) {
 	f := newTestIssuer(t)
 	p := f.provider(t)

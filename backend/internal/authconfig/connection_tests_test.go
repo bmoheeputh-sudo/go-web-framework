@@ -173,7 +173,7 @@ func callbackProbe(t *testing.T, h http.Handler, cookie *http.Cookie, state, cod
 	}
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
-	if w.Code != 303 || w.Header().Get("Location") != apiOrigin+"/settings" || w.Header().Get("Referrer-Policy") != "no-referrer" {
+	if w.Code != 303 || !strings.HasPrefix(w.Header().Get("Location"), apiOrigin+"/auth/verification-result?result=") || w.Header().Get("Referrer-Policy") != "no-referrer" {
 		t.Fatal("unsafe callback response")
 	}
 	for _, c := range w.Result().Cookies() {
@@ -210,7 +210,10 @@ func TestConnectionWorkflow(t *testing.T) {
 	if resultProbe(t, h, result.ID).Status != "pending" || p.exchanges != 0 {
 		t.Fatal("uncorrelated callback consumed test")
 	}
-	callbackProbe(t, h, cookie, state, "synthetic-code")
+	verified := callbackProbe(t, h, cookie, state, "synthetic-code")
+	if verified.Header().Get("Location") != apiOrigin+"/auth/verification-result?result=success" {
+		t.Fatal("verified test did not show the minimal success result")
+	}
 	got := resultProbe(t, h, result.ID)
 	if got.Status != "succeeded" || got.Identity == nil || got.Identity.Subject != "tested-subject" || got.RevisionID != m.ID || got.Generation != m.Generation {
 		t.Fatal("invalid successful result")

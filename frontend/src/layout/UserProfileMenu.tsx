@@ -7,7 +7,7 @@ import LogoutRounded from '@mui/icons-material/LogoutRounded'
 import { useTranslation } from 'react-i18next'
 import { useSession } from '../auth/session'
 
-const providers = { oidc: 'OIDC', google_iap: 'Google IAP', local_dev: 'Local DEV' }
+const providers = { oidc: 'OIDC', local_dev: 'Local DEV' }
 
 export default function UserProfileMenu() {
   const { t } = useTranslation(['auth', 'common', 'admin'])
@@ -64,7 +64,7 @@ export default function UserProfileMenu() {
         <ListItemIcon><LogoutRounded fontSize="small" /></ListItemIcon>
         {t(loggingOut ? 'signingOut' : 'signOut')}
       </MenuItem> : <Box component="li" role="presentation" sx={{ px: 2, py: 1 }}>
-        <Typography variant="body2" color="text.secondary">{t(identity.provider === 'google_iap' ? 'iapSignOutManaged' : 'localDevIdentity')}</Typography>
+        <Typography variant="body2" color="text.secondary">{t('localDevIdentity')}</Typography>
       </Box>}
     </Menu>
   </>

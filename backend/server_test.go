@@ -83,42 +83,20 @@ func TestInvalidProviderConfigurationFailsClosed(t *testing.T) {
 	}
 }
 
-func TestIAPStartupAndRoutesWithoutDatabase(t *testing.T) {
+func TestRetiredIAPRejectedBeforeDatabaseActivationLoading(t *testing.T) {
 	for _, environment := range []string{"development", "TEST", "PRD"} {
-		t.Run(environment, func(t *testing.T) {
-			values := map[string]string{
-				"APP_ENV": environment, "AUTH_PROVIDER": "google_iap",
-				"IAP_AUDIENCE": "/projects/123/global/backendServices/456",
-				// IAP must not initialize OIDC sessions or require DB configuration.
-				"DB_HOST": "invalid.example.invalid", "DB_PORT": "invalid",
-			}
-			server, err := newProviderTestServer(envReader(values))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer server.closeResources()
-			for path, status := range map[string]int{
-				"/api/health": http.StatusOK, "/api/auth/config": http.StatusOK,
-				"/api/auth/me": http.StatusUnauthorized, "/api/auth/login": http.StatusNotFound,
-				"/api/auth/callback": http.StatusNotFound, "/api/auth/logout": http.StatusMethodNotAllowed,
-			} {
-				request := httptest.NewRequest("GET", path, nil)
-				request.Header.Set("X-Goog-Authenticated-User-Email", "forged@example.invalid")
-				request.Header.Set("X-Goog-Authenticated-User-Id", "forged")
-				response := httptest.NewRecorder()
-				server.Handler.ServeHTTP(response, request)
-				if response.Code != status || len(response.Result().Cookies()) != 0 {
-					t.Fatalf("%s: unexpected status or session cookie: %d", path, response.Code)
-				}
-				if path == "/api/auth/config" && strings.TrimSpace(response.Body.String()) != `{"provider":"google_iap"}` {
-					t.Fatal("IAP public configuration must contain only provider name")
-				}
-			}
-			delete(values, "IAP_AUDIENCE")
-			if _, err := newProviderTestServer(envReader(values)); err == nil {
-				t.Fatal("IAP started without explicit audience")
-			}
+		values := developmentEnvironment()
+		values["APP_ENV"] = environment
+		values["AUTH_PROVIDER"] = "google_iap"
+		values["IAP_AUDIENCE"] = "/projects/123/apps/retired"
+		called := false
+		server, err := newServerWithPolicy(envReader(values), func(func(string) string) (*pgxpool.Pool, error) {
+			called = true
+			return nil, nil
 		})
+		if server != nil || err == nil || !strings.Contains(err.Error(), "google_iap is no longer supported") || called {
+			t.Fatalf("retired provider reached activation policy or started: %v", err)
+		}
 	}
 }
 

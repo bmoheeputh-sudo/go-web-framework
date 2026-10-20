@@ -246,7 +246,7 @@ func TestActivationHTTPNormalCallbackAndFirstCutover(t *testing.T) {
 	callback.AddCookie(readinessCookie)
 	callbackResponse := httptest.NewRecorder()
 	h.ServeHTTP(callbackResponse, callback)
-	if callbackResponse.Code != http.StatusSeeOther || callbackResponse.Header().Get("Location") != apiOrigin+"/?auth_test=completed" {
+	if callbackResponse.Code != http.StatusSeeOther || callbackResponse.Header().Get("Location") != apiOrigin+"/auth/verification-result?result=success" {
 		t.Fatal("normal callback readiness failed")
 	}
 	var sessionCount int

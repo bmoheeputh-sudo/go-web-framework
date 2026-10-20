@@ -1,10 +1,10 @@
 export type Identity = {
   issuer: string; subject: string; email: string; email_verified: boolean; display_name: string
-  provider: 'oidc' | 'google_iap' | 'local_dev'
+  provider: 'oidc' | 'local_dev'
 }
 export type User = {
   id: string; issuer: string; subject: string; email: string; display_name: string
-  active: boolean; roles: string[]; permissions: string[]; account_ids: string[]
+  provider: Identity['provider'] | 'google_iap'; active: boolean; roles: string[]; permissions: string[]; account_ids: string[]
 }
 export type Account = { id: string; name: string; active: boolean }
 export type Role = { name: string; permissions: string[] }

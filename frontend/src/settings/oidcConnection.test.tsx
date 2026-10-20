@@ -57,6 +57,7 @@ it('starts only on explicit click, binds the generation, and reports verified id
   await tick()
   expect(popup.close).toHaveBeenCalled()
   expect(screen.getByText(en.testIdentity)).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: en.technicalDetails }))
   expect(screen.getByText('test-subject')).toBeTruthy()
   expect(screen.getByText(/Revision 7/)).toBeTruthy()
   const toast = screen.getByRole('status')
@@ -71,11 +72,16 @@ it('does not start a server operation when popups are blocked', async () => {
   const { fetcher } = setup({ blocked: true }); await start()
   expect(fetcher).not.toHaveBeenCalled(); expect(screen.getByText(en.testPopupBlocked)).toBeTruthy()
 })
-it('records cancellation when the popup is closed and stops polling', async () => {
-  const { popup, fetcher } = setup(); await start(); popup.closed = true; await tick()
-  expect(fetcher.mock.calls.at(-1)?.[0]).toBe('/api/admin/auth/tests/test-1/cancel')
-  expect(screen.getAllByRole('alert').some((alert) => alert.textContent?.includes(en.test_cancelled))).toBe(true)
-  const calls = fetcher.mock.calls.length; await tick(10_000); expect(fetcher.mock.calls).toHaveLength(calls)
+it('polls protected status without inspecting a cross-origin popup', async () => {
+  const { popup, result, fetcher } = setup()
+  vi.mocked(window.open).mockReturnValue(popup as unknown as Window)
+  Object.defineProperty(popup, 'closed', { configurable: true, get: () => { throw new Error('COOP blocked inspection') } })
+  await start(); await tick()
+  expect(fetcher.mock.calls.at(-1)?.[0]).toBe('/api/admin/auth/tests/test-1')
+  result.status = 'succeeded'; result.tested_identity = identity
+  await tick()
+  expect(popup.close).toHaveBeenCalled()
+  expect(fetcher.mock.calls.some(([path]) => path.endsWith('/cancel'))).toBe(false)
 })
 it('supports explicit cancellation and cancellation when leaving the panel', async () => {
   const { fetcher, unmount } = setup(); await start()

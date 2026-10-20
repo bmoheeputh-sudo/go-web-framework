@@ -14,7 +14,7 @@ func (m *Runtime) Reconcile(candidate *Runtime, expected int64) error {
 	candidate.mu.Lock()
 	defer candidate.mu.Unlock()
 	old, next := m.current.Load(), candidate.current.Load()
-	if m.closed || m.pending != nil || old == nil || old.status.Provider == GoogleIAP || candidate.closed || next == nil || next.prepared == nil || next.status.Source != "database" || old.status.AppliedGeneration != expected || next.status.AppliedGeneration <= expected || old.status.DeploymentID != next.status.DeploymentID || old.status.Environment != next.status.Environment {
+	if m.closed || m.pending != nil || old == nil || (old.status.Provider != OIDC && old.status.Provider != LocalDev) || candidate.closed || next == nil || next.prepared == nil || next.status.Source != "database" || old.status.AppliedGeneration != expected || next.status.AppliedGeneration <= expected || old.status.DeploymentID != next.status.DeploymentID || old.status.Environment != next.status.Environment {
 		return ErrRuntimeConflict
 	}
 	// References held by captured requests keep their own verifier alive. A

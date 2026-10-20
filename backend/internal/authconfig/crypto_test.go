@@ -82,7 +82,7 @@ func TestEncryption(t *testing.T) {
 		})
 	}
 	for name, modify := range map[string]func(*Metadata){
-		"deployment": func(m *Metadata) { m.DeploymentID = "other" }, "environment": func(m *Metadata) { m.Environment = "production" }, "revision": func(m *Metadata) { m.ID = "33333333-3333-4333-8333-333333333333" }, "version": func(m *Metadata) { m.Version++ }, "creator": func(m *Metadata) { m.CreatedBy = "33333333-3333-4333-8333-333333333333" }, "issuer": func(m *Metadata) { m.IssuerURL += "/other" }, "client": func(m *Metadata) { m.ClientID = "other" }, "redirect": func(m *Metadata) { m.RedirectURI = "https://other.test/api/auth/callback" }, "audience": func(m *Metadata) { m.IAPAudience = "other" }, "provider": func(m *Metadata) { m.Provider = auth.GoogleIAP }, "http": func(m *Metadata) { m.AllowHTTPDevelopment = true },
+		"deployment": func(m *Metadata) { m.DeploymentID = "other" }, "environment": func(m *Metadata) { m.Environment = "production" }, "revision": func(m *Metadata) { m.ID = "33333333-3333-4333-8333-333333333333" }, "version": func(m *Metadata) { m.Version++ }, "creator": func(m *Metadata) { m.CreatedBy = "33333333-3333-4333-8333-333333333333" }, "issuer": func(m *Metadata) { m.IssuerURL += "/other" }, "client": func(m *Metadata) { m.ClientID = "other" }, "redirect": func(m *Metadata) { m.RedirectURI = "https://other.test/api/auth/callback" }, "audience": func(m *Metadata) { m.IAPAudience = "other" }, "provider": func(m *Metadata) { m.Provider = "google_iap" }, "http": func(m *Metadata) { m.AllowHTTPDevelopment = true },
 	} {
 		t.Run("metadata "+name, func(t *testing.T) {
 			copy := m

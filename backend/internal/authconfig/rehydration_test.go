@@ -24,7 +24,7 @@ func startupFixture(t *testing.T) (*fixture, *ActivationService, *StartupLoader,
 		}
 	})
 	reader, _ := NewActivationReader(f.pool, f.repo.scope)
-	l, err := NewStartupLoader(reader, f.repo.cipher, s.sessions, s.callback, false)
+	l, err := NewStartupLoader(reader, f.repo.cipher, s.sessions, s.callback)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,9 +186,6 @@ func TestStartupRehydrationFailsClosed(t *testing.T) {
 				t.Fatal("unsafe startup succeeded")
 			}
 		})
-	}
-	if _, err := NewStartupLoader(l.reader, l.cipher, l.sessions, l.callback, true); !errors.Is(err, ErrDenied) {
-		t.Fatal("IAP replaced")
 	}
 	if before != activationState(t, f) {
 		t.Fatal("failed startup changed database")

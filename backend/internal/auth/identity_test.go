@@ -15,7 +15,7 @@ func TestIdentityValidation(t *testing.T) {
 		{"valid", func(*Identity) {}, false},
 		{"verified email", func(i *Identity) { i.EmailVerified = true }, false},
 		{"optional profile", func(i *Identity) { i.Email = ""; i.DisplayName = "" }, false},
-		{"iap", func(i *Identity) { i.Provider = GoogleIAP }, false},
+		{"retired IAP", func(i *Identity) { i.Provider = "google_iap" }, true},
 		{"local", func(i *Identity) { i.Provider = LocalDev; i.Issuer = LocalDevIssuer }, false},
 		{"no issuer", func(i *Identity) { i.Issuer = "" }, true},
 		{"no subject", func(i *Identity) { i.Subject = "" }, true},

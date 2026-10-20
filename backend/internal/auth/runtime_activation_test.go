@@ -17,6 +17,11 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// runtimeRoundTripper wraps a synthetic provider transport in callback tests.
+type runtimeRoundTripper func(*http.Request) (*http.Response, error)
+
+func (fn runtimeRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return fn(r) }
+
 const revisionOne = "11111111-1111-4111-8111-111111111111"
 const revisionTwo = "22222222-2222-4222-8222-222222222222"
 
@@ -286,17 +291,6 @@ func TestDatabaseRuntimeLeaseCleanupAndPublicationConflict(t *testing.T) {
 		t.Fatal("publication failure fell back to Local DEV")
 	}
 }
-func TestDatabaseRuntimeIAPPinning(t *testing.T) {
-	iap, err := NewGoogleIAP("/projects/123/apps/test-app")
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := runtimeFor(t, iap)
-	if _, err = m.Stage(&PreparedOIDC{binding: Binding{ActivationGeneration: 1}}, 0); !errors.Is(err, ErrRuntimeConflict) {
-		t.Fatal("IAP could be replaced")
-	}
-}
-
 func TestProviderLeaseDeadlineCleanup(t *testing.T) {
 	var closed atomic.Int32
 	lease := &providerLease{cleanup: func() { closed.Add(1) }}
@@ -465,7 +459,7 @@ func TestDatabaseCallbackCrossingRetirementCannotMintSession(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	base := p1.provider.client.Transport
 	// Install the synthetic transport before publication; published configs stay immutable.
-	p1.provider.client.Transport = iapRoundTripper(func(r *http.Request) (*http.Response, error) {
+	p1.provider.client.Transport = runtimeRoundTripper(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path == "/token" {
 			close(entered)
 			select {

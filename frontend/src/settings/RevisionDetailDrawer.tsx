@@ -1,17 +1,13 @@
 import ContentCopy from '@mui/icons-material/ContentCopy'
-import { useRef, useState } from 'react'
 import { Alert, Button, CircularProgress, Divider, IconButton, Stack, Tooltip, Typography } from '@mui/material'
 import { useTranslation } from 'react-i18next'
-import type { AuthRevision, ConnectionTest } from '../api/authConfiguration'
-import type { User } from '../api/client'
+import type { AuthRevision } from '../api/authConfiguration'
 import DetailDrawer from '../components/common/DetailDrawer'
 import TwoColumnKeyValue from '../components/common/TwoColumnKeyValue'
 import StatusBadge from '../components/common/StatusBadge'
 import type { DetailItem } from '../components/common/TwoColumnKeyValue'
 import { formatDate, formatNumber } from '../i18n'
 import { useNotifications } from '../notifications/notifications'
-import OIDCConnectionTest from './OIDCConnectionTest'
-import type { OIDCConnectionTestHandle } from './OIDCConnectionTest'
 
 function TechnicalValue({ label, value }: { label: string; value: string }) {
   const { t } = useTranslation(['auth', 'common'])
@@ -36,7 +32,7 @@ function DetailSection({ title, items }: { title: string; items: DetailItem[] })
   </Stack>
 }
 
-export default function RevisionDetailDrawer({ open, revision, loading, disabled, prepareDisabled = false, onClose, onValidate, onApprove, onPrepare, onRecovery, onTestResult, onEnrolled }: {
+export default function RevisionDetailDrawer({ open, revision, loading, disabled, prepareDisabled = false, onClose, onValidate, onApprove, onTest, onRecovery }: {
   open: boolean
   revision?: AuthRevision
   loading: boolean
@@ -45,14 +41,10 @@ export default function RevisionDetailDrawer({ open, revision, loading, disabled
   onClose: () => void
   onValidate: (revision: AuthRevision) => void
   onApprove: (revision: AuthRevision) => void
-  onPrepare: (revision: AuthRevision) => void
+  onTest: (revision: AuthRevision) => void
   onRecovery: (revision: AuthRevision) => void
-  onTestResult: (result: ConnectionTest | null) => void
-  onEnrolled: (user: User) => void
 }) {
   const { t, i18n } = useTranslation(['auth', 'common'])
-  const testRef = useRef<OIDCConnectionTestHandle>(null)
-  const [testBusy, setTestBusy] = useState(false)
   const language = i18n.resolvedLanguage || 'en'
   const date = (value?: string) => value ? formatDate(value, language) : t('common:none')
   const technical = (label: string, value?: string) => value ? <TechnicalValue label={label} value={value} /> : t('common:none')
@@ -77,12 +69,10 @@ export default function RevisionDetailDrawer({ open, revision, loading, disabled
     { label: t('approvedAt'), value: date(revision.approved_at) },
   ] : []
   const actions = revision && <>
-    {revision.status === 'draft' && <Button variant="contained" disabled={disabled} onClick={() => onValidate(revision)}>{t('validateSettings')}</Button>}
-    {revision.status === 'validated' && <Button variant="contained" disabled={disabled} onClick={() => onApprove(revision)}>{t('approveRevision')}</Button>}
-    {revision.status === 'approved' && revision.provider === 'oidc' && <>
-      <Button variant="outlined" disabled={disabled || testBusy} onClick={() => testRef.current?.start()}>{t('testConnection')}</Button>
-      <Button variant="contained" disabled={disabled || prepareDisabled || testBusy} onClick={() => onPrepare(revision)}>{t('activationPrepare')}</Button>
-    </>}
+    {revision.provider === 'oidc' && ['draft', 'validated', 'approved'].includes(revision.status) &&
+      <Button variant="contained" disabled={disabled || prepareDisabled} onClick={() => onTest(revision)}>{t('testConnection')}</Button>}
+    {revision.provider === 'local_dev' && revision.status === 'draft' && <Button variant="contained" disabled={disabled} onClick={() => onValidate(revision)}>{t('validateSettings')}</Button>}
+    {revision.provider === 'local_dev' && revision.status === 'validated' && <Button variant="contained" disabled={disabled} onClick={() => onApprove(revision)}>{t('approveRevision')}</Button>}
     {revision.status === 'superseded' && revision.provider === 'oidc' && <Button variant="outlined" disabled={disabled} onClick={() => onRecovery(revision)}>{t('recoveryCreateAction')}</Button>}
   </>
   return <DetailDrawer open={open} onClose={onClose} title={revision ? t('revisionLabel', { version: formatNumber(revision.configuration_version, language) }) : t('revisionMetadata')}
@@ -96,11 +86,6 @@ export default function RevisionDetailDrawer({ open, revision, loading, disabled
         <DetailSection title={t('detailIdentityProvider')} items={identity} />
         <Divider />
         <DetailSection title={t('detailAuditHistory')} items={audit} />
-        {revision.status === 'approved' && revision.provider === 'oidc' && <>
-          <Divider />
-          <OIDCConnectionTest key={revision.id} ref={testRef} revision={revision} disabled={disabled} externalTrigger onBusyChange={setTestBusy}
-            onResult={onTestResult} onEnrolled={onEnrolled} />
-        </>}
       </>}
     </Stack>
   </DetailDrawer>

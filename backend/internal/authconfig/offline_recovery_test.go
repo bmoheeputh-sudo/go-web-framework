@@ -77,7 +77,7 @@ func newRecoveryFixture(t *testing.T) *recoveryFixture {
 			}
 		}
 	})
-	service, err := NewRecoveryService(f.repo, activation.store, activation.sessions, activation.callback, false)
+	service, err := NewRecoveryService(f.repo, activation.store, activation.sessions, activation.callback)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestOfflineRecoveryCommitsAttributedHistoryAndRehydrates(t *testing.T) {
 		t.Fatal("recovery changed permissions or resurrected session", err)
 	}
 	reader, _ := NewActivationReader(r.f.pool, r.f.repo.scope)
-	loader, _ := NewStartupLoader(reader, r.f.repo.cipher, r.activation.sessions, r.activation.callback, false)
+	loader, _ := NewStartupLoader(reader, r.f.repo.cipher, r.activation.sessions, r.activation.callback)
 	loader.client = func(context.Context, string) (*http.Client, error) { return r.provider.client(), nil }
 	runtime, err := loader.Load(context.Background())
 	if err != nil {
@@ -214,7 +214,7 @@ func TestOfflineRecoveryRejectsUnsafeInputsAndRollsBack(t *testing.T) {
 		r := newRecoveryFixture(t)
 		repo := *r.f.repo
 		repo.cipher = testCipher(t, "missing-key")
-		service, _ := NewRecoveryService(&repo, r.activation.store, r.activation.sessions, r.activation.callback, false)
+		service, _ := NewRecoveryService(&repo, r.activation.store, r.activation.sessions, r.activation.callback)
 		service.client = r.service.client
 		if _, err := service.Prepare(context.Background(), r.operator, r.target.ID, 2, "Emergency incident INC-1"); !errors.Is(err, ErrSecret) {
 			t.Fatal("missing key accepted", err)

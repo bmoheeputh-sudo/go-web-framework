@@ -88,7 +88,7 @@ describe('appearance preferences', () => {
 })
 
 describe('profile menu', () => {
-  it.each(['oidc', 'google_iap', 'local_dev'] as const)('displays only identity fields and appropriate %s actions', async (provider) => {
+  it.each(['oidc', 'local_dev'] as const)('displays only identity fields and appropriate %s actions', async (provider) => {
     const { fetcher } = mockAPI({ provider })
     const original = fetcher.getMockImplementation()!
     fetcher.mockImplementation((path, options) => path === '/api/auth/me'
@@ -101,14 +101,14 @@ describe('profile menu', () => {
     await userEvent.click(button)
     const menu = await screen.findByRole('menu', { name: 'User profile' })
     expect(button.getAttribute('aria-expanded')).toBe('true')
-    for (const value of ['Alice', 'alice@example.test', identity.issuer, identity.subject, { oidc: 'OIDC', google_iap: 'Google IAP', local_dev: 'Local DEV' }[provider]]) {
+    for (const value of ['Alice', 'alice@example.test', identity.issuer, identity.subject, { oidc: 'OIDC', local_dev: 'Local DEV' }[provider]]) {
       expect(within(menu).getByText(value)).toBeTruthy()
     }
     expect(document.body.textContent).not.toMatch(/SECRET_ACCESS|SECRET_ID|SECRET_CLIENT/)
     if (provider === 'oidc') expect(within(menu).getByRole('menuitem', { name: 'Sign out' })).toBeTruthy()
     else {
       expect(within(menu).queryByRole('menuitem')).toBeNull()
-      expect(within(menu).getByText(resources.en.auth[provider === 'google_iap' ? 'iapSignOutManaged' : 'localDevIdentity'])).toBeTruthy()
+      expect(within(menu).getByText(resources.en.auth.localDevIdentity)).toBeTruthy()
     }
     await userEvent.keyboard('{Escape}')
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())

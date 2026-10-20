@@ -86,8 +86,8 @@ type RecoveryService struct {
 	client   func(context.Context, string) (*http.Client, error)
 }
 
-func NewRecoveryService(repo *Repository, store *auth.PostgresStore, sessions auth.SessionConfig, callback string, iapPinned bool) (*RecoveryService, error) {
-	if repo == nil || store == nil || callback == "" || iapPinned {
+func NewRecoveryService(repo *Repository, store *auth.PostgresStore, sessions auth.SessionConfig, callback string) (*RecoveryService, error) {
+	if repo == nil || store == nil || callback == "" {
 		return nil, ErrDenied
 	}
 	return &RecoveryService{repo: repo, store: store, sessions: sessions, callback: callback, client: newTestClient}, nil

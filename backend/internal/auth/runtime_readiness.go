@@ -38,7 +38,7 @@ func (m *Runtime) BeginReadiness(p *PreparedOIDC, w http.ResponseWriter, r *http
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	current := m.current.Load()
-	if m.closed || m.mismatch || m.pending != nil || current == nil || current.status.Provider == GoogleIAP || current.status.DeploymentID != p.binding.DeploymentID || current.status.Environment != p.binding.Environment || len(m.readiness) >= 16 {
+	if m.closed || m.mismatch || m.pending != nil || current == nil || (current.status.Provider != OIDC && current.status.Provider != LocalDev) || current.status.DeploymentID != p.binding.DeploymentID || current.status.Environment != p.binding.Environment || len(m.readiness) >= 16 {
 		return ErrRuntimeConflict
 	}
 	p.lease.mu.Lock()
