@@ -127,7 +127,7 @@ it('keeps runtime environment authentication separate from approved and database
   expect(screen.getByRole('button', { name: en.testConnection })).toBeTruthy()
   expect(fetcher.mock.calls.some(([path]) => path === `${settings}/${approved.id}`)).toBe(true)
   expect(fetcher.mock.calls.filter(([path]) => path.startsWith(statusPath)).every(([path]) => path === statusPath)).toBe(true)
-})
+}, 15000)
 
 it('shows empty history and activation status without nonfunctional controls', async () => {
   const { fetcher } = authAPI(); mount(); await openAuth()

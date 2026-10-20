@@ -9,6 +9,7 @@ import { canAccess } from '../navigation/authorization'
 import { useSession } from '../auth/session'
 import Sidebar from './Sidebar'
 import TopBar from './TopBar'
+import { designTokens } from '../design/theme'
 
 const drawerPreferenceKey = 'gwf.sidebar.expanded'
 function initialExpanded() {
@@ -39,7 +40,7 @@ export default function AdminLayout({ items, moduleWarning = false }: { items: r
     <Sidebar items={visible} desktop={desktop} expanded={expanded} mobileOpen={mobileOpen} onToggle={toggleExpanded} onClose={() => setMenu({ key: location.key, open: false })} />
     <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
       <TopBar titleKey={titleKey} desktop={desktop} mobileOpen={mobileOpen} onMenu={() => setMenu({ key: location.key, open: !mobileOpen })} />
-      <Box component="main" sx={{ flex: 1, width: '100%', p: { xs: 2, sm: 3, xl: 4 }, maxWidth: 1600, mx: 'auto', overflowWrap: 'anywhere' }}>
+      <Box component="main" sx={{ flex: 1, width: '100%', p: { xs: 2, sm: 3, xl: 4 }, maxWidth: designTokens.contentMaxWidth, mx: 'auto', overflowWrap: 'anywhere' }}>
         <Stack spacing={2} sx={{ mb: loginFailed || logoutFailed || moduleWarning ? 2 : 0 }}>
           {loginFailed && authentication.status !== 'authenticated' && <Alert severity="error">{t('auth:loginFailed')}</Alert>}
           {logoutFailed && <Alert severity="error">{t('auth:logoutFailed')}</Alert>}

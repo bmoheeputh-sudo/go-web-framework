@@ -9,14 +9,15 @@ import ShieldOutlined from '@mui/icons-material/ShieldOutlined'
 import { NavLink, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import type { NavItem } from '../navigation/NavigationRegistry'
+import { designTokens } from '../design/theme'
 
 const MiniDrawer = styled(MuiDrawer, { shouldForwardProp: (prop) => prop !== 'expanded' })<{ expanded: boolean }>(({ theme, expanded, variant }) => ({
-  width: variant === 'temporary' ? undefined : expanded ? 260 : 68,
+  width: variant === 'temporary' ? undefined : expanded ? designTokens.sidebarExpanded : designTokens.sidebarCollapsed,
   flexShrink: 0,
   overflowX: 'hidden',
   transition: theme.transitions.create('width', { duration: theme.transitions.duration.standard }),
   '& .MuiDrawer-paper': {
-    width: expanded ? 260 : 68,
+    width: expanded ? designTokens.sidebarExpanded : designTokens.sidebarCollapsed,
     maxWidth: 'calc(100vw - 24px)',
     boxSizing: 'border-box',
     overflowX: 'hidden',
@@ -48,7 +49,7 @@ export default function Sidebar({ items, desktop, expanded, mobileOpen, onToggle
   const toggleLabel = t(expanded ? 'collapseSidebar' : 'expandSidebar')
   return <>
     {desktop && <Box data-testid="sidebar-edge" style={{ left: rtl ? 'auto' : 0, right: rtl ? 0 : 'auto' }}
-      sx={{ position: 'fixed', top: 0, height: 80, width: expanded ? 260 : 68, overflow: 'visible', pointerEvents: 'none',
+      sx={{ position: 'fixed', top: 0, height: designTokens.toolbarHeight, width: expanded ? designTokens.sidebarExpanded : designTokens.sidebarCollapsed, overflow: 'visible', pointerEvents: 'none',
         zIndex: theme.zIndex.drawer + 1, transition: theme.transitions.create('width', { duration: theme.transitions.duration.standard }),
         '@media (prefers-reduced-motion: reduce)': { transition: 'none' } }}>
       {/* Outside the scrolling/clipped drawer paper; absolute positioning adds no layout width. */}
@@ -71,7 +72,7 @@ export default function Sidebar({ items, desktop, expanded, mobileOpen, onToggle
       paper: { style: { left: rtl ? 'auto' : 0, right: rtl ? 0 : 'auto', borderLeft: 'none', borderRight: 'none' }, sx: { borderInlineEnd: '1px solid', borderColor: 'divider', borderRadius: 0 } },
       transition: transitionProps,
     }}>
-    <Toolbar sx={{ px: '12px !important', gap: 1, minHeight: '80px !important', height: 80, flexShrink: 0,
+    <Toolbar sx={{ px: '12px !important', gap: 1, minHeight: `${designTokens.toolbarHeight}px !important`, height: designTokens.toolbarHeight, flexShrink: 0,
       flexWrap: 'nowrap', justifyContent: showLabels ? 'space-between' : 'center' }}>
       <Box aria-label={t('appName')} sx={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 0.5,
         alignItems: showLabels ? 'flex-start' : 'center' }}>
