@@ -2063,6 +2063,10 @@ API calls, or writing state:
 .venv/bin/python scripts/drive_sync.py
 ```
 
+Uploads use five workers by default, with an allowed range of 1–8. Set
+`DRIVE_SYNC_WORKERS=3 ./backup.sh` to configure the single backup command without
+changing its Git behavior, or pass `--workers 3` directly to the Drive script.
+
 To retry just Drive after a successful Git push, run the following and approve its
 prompt. Direct Drive runs do not push or verify GitHub:
 
@@ -2074,26 +2078,61 @@ Drive synchronization uses `git diff` from the last successful checkpoint. The
 first run considers every tracked file in the current commit, even when the
 repository already has commit history, and adopts existing uniquely named Drive
 files by ID. Folder structure is preserved. Detected renames retain the file ID;
-deleted files remain in Drive. Git renames are detected heuristically: a heavily
-rewritten file may be treated as a deletion plus an addition, retaining the old copy.
+eligible Git-deleted files move to **Trash**, under the approved mirror policy.
+This includes previously adopted files explicitly recorded by this backup, after
+verifying their recorded ID, exact name, parent hierarchy, regular-file type and
+last synchronized content. A file ID alone is insufficient. Files discovered only
+by filename, unrecorded files, folders and excluded files are never trashed.
+Missing, replaced, externally renamed/moved, edited or unverifiable resources are
+reported as conflicts. Nothing is permanently deleted.
+
+Git renames are detected heuristically: a heavily rewritten file may be treated
+as deletion plus addition, creating a new file and trashing the old managed file.
+Overlapping rename chains are refused for manual reconciliation rather than
+risking their recorded identities. Renames to excluded destinations retain the
+old backup. A recreated Git path receives a new ID; its old trashed ID is never
+restored or reused.
 Unchanged files are not uploaded. Uploads read committed Git blobs, so uncommitted
 working tree content is never uploaded by the Drive script.
 
 State is stored at `~/.config/go-web-framework/drive-sync-state.json` with owner-only
 permissions. It contains the successful commit, pending commit, Drive IDs, and
-completed blob IDs. State updates are atomic and a lock prevents concurrent Drive
-runs. The checkpoint advances only when all eligible files succeed. On failure,
+completed blob IDs. Version 2 adds per-operation intents, creation/write markers,
+location metadata, and completed deletion tombstones. Version-1 state is read
+without changes in preview and upgraded only during an approved synchronization.
+Newly created resources have matching creation markers in Drive and the journal;
+adopted resources keep their provenance and are not falsely marked as script-created.
+Legacy deletion records must also match the saved Git blob and expected MIME
+type; incomplete records require manual review. Keep the state file, and do not
+downgrade to the old script after the state upgrade.
+
+State updates are serialized, atomically replaced and fsynced. A process lock
+prevents concurrent Drive runs. Each worker has its own Drive client, credentials
+object and HTTP transport; parent folders are established serially before file
+uploads start. The checkpoint advances only when all eligible files succeed. On failure,
 rerun the backup or the Drive command: completed uploads are skipped and pending
 ones are retried. An interrupted snapshot finishes before newer commits are synced.
 Keep this state file during retries; reserved IDs prevent duplicate creates even
-when an upload succeeds remotely but its response is lost.
+when an upload succeeds remotely but its response is lost. The full pending-to-HEAD
+ancestry is checked before writes, and newer journaled resources cannot be overwritten
+by replaying an older commit.
 
 API requests have a 120-second HTTP timeout and up to five attempts with exponential
 backoff (1, 2, 4, and 8 seconds) for transient network errors and HTTP 429/5xx.
+Timed-out mutations are reconciled with authoritative ID lookups, operation markers
+and content checks before retrying. Updates and Trash requests use an HTTP ETag
+precondition; a missing ETag or a concurrent change causes a conflict instead of
+an unguarded write. Already-trashed files are accepted only after the same identity,
+hierarchy, type and content checks; inherited Trash from a parent is a conflict.
 Ambiguous names, incompatible Drive file types, and unexpected ID conflicts fail
 without advancing the checkpoint. Resolve duplicate names in Drive before retrying.
-The script never calls Drive's delete API. Each snapshot prints created, updated,
-skipped, and failed file counts; folder creation is not included in the file counts.
+The script never calls Drive's delete API. Preview shows create, update, unchanged,
+rename, Trash and blocked candidates without Google packages, credentials, API
+calls or state writes. Remote conflicts are checked only during an approved sync.
+Each synchronized snapshot prints created, updated, renamed, trashed, skipped,
+blocked and failed counts; folder creation is not included in the file counts.
+Deletions already retained by the old script before its successful checkpoint
+are not swept retroactively; review those historical copies manually.
 
 Only regular Git-tracked source files are eligible. `.env*`, private keys,
 credential/secret paths, virtual environments, dependencies, build outputs, common
@@ -2109,7 +2148,9 @@ Run the offline tests (temporary Git repositories and mocked Drive responses):
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python -m py_compile scripts/drive_sync.py tests/test_drive_sync.py
 bash -n backup.sh
+git diff --check
 ```
 
 These tests do not use credentials, contact Google Drive, or push to GitHub.
