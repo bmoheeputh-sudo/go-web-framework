@@ -243,7 +243,7 @@ func (s *ActivationService) Activate(ctx context.Context, p *PreparedActivation,
 			}
 		}
 		if previous != "" {
-			tag, err := tx.Exec(ctx, `UPDATE framework.auth_config_lifecycle SET status='superseded',generation=generation+1,updated_by=$2 WHERE revision_id=$1 AND deployment_id=$3 AND environment=$4 AND status='active'`, previous, actor.ID, m.DeploymentID, m.Environment)
+			tag, err := tx.Exec(ctx, `UPDATE framework.auth_config_lifecycle SET status='superseded',generation=generation+1,updated_by=$2,updated_by_recovery_audit=NULL WHERE revision_id=$1 AND deployment_id=$3 AND environment=$4 AND status='active'`, previous, actor.ID, m.DeploymentID, m.Environment)
 			if err != nil {
 				return err
 			}

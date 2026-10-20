@@ -303,6 +303,13 @@ and shutdown cancels the listener and joins its goroutine before runtime/pool cl
 Silent network failure detection depends on PostgreSQL/TCP error detection; a cached
 `Connected` flag is not an authentication trust signal.
 
+Production must provide a session-affine PostgreSQL connection for LISTEN. On every
+subscription the listener compares `pg_backend_pid()` before and after LISTEN and
+confirms that `pg_listening_channels()` still contains the fixed channel. An obvious
+transaction-pooling proxy therefore fails startup/reconnection visibly. This check
+cannot prove that an intermediary will preserve affinity forever; configure a direct
+or documented session-pooling endpoint and monitor degraded synchronization state.
+
 Every environment authentication/login/callback/logout operation checks scoped
 policy. Missing database authority or a database-required cutover denies the affected
 operation; Local DEV cannot continue after a missed notification. Database session
@@ -349,6 +356,11 @@ added. Configuration keys and callback/listener settings are captured at process
 startup. Provision historical keys on every instance before a new revision needs
 them; changing process secrets requires restarting that instance.
 
+Hardened discovery and JWKS GET requests retry HTTP 429 and 503 only. They make at
+most three total attempts, using 100–200 ms and 200–400 ms jittered delays inside
+the existing request deadline. Redirect, DNS, address and response-size checks run
+on every attempt. Token exchange and other non-idempotent requests are never retried.
+
 ## Deployment blockers
 
 Do **not** wire these methods to the live deployment yet:
@@ -358,9 +370,11 @@ Do **not** wire these methods to the live deployment yet:
   desired/applied status and retain a reviewed rollout/recovery procedure.
 - There is no public normal-readiness start/result workflow or activation/recovery
   UI. The current portal's isolated test cannot activate a configuration by itself.
-- Offline emergency recovery and operator-facing synchronization diagnostics still
-  require implementation and review. Never reset a head to environment mode as a
-  workaround, disable verification, or use Local DEV after activation.
+- Offline emergency recovery is available only through the separately authorized
+  command documented in [offline-auth-recovery.md](offline-auth-recovery.md).
+  Operator-facing synchronization diagnostics still require implementation. Never
+  reset a head to environment mode, disable verification, or use Local DEV after
+  activation.
 - The application/migration role remains the single schema owner `go_web_app`.
   Trusted code and that database owner can change the database; no least-privilege
   separation is claimed. Enrollment/recovery provenance currently uses retained

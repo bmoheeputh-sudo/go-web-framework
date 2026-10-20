@@ -28,6 +28,12 @@ func TestAuthActivationMigrationRollbackPolicy(t *testing.T) {
 	}
 }
 
+func TestOfflineRecoveryMigrationRollbackPolicy(t *testing.T) {
+	for _, name := range []string{"empty", "populated"} {
+		t.Run(name, func(t *testing.T) { testAuthConfigurationRollbackPolicy(t, name == "populated", 7) })
+	}
+}
+
 func testAuthConfigurationRollbackPolicy(t *testing.T, populated bool, targetVersion int) {
 	t.Helper()
 	cli, err := exec.LookPath("migrate")
@@ -128,7 +134,7 @@ func testAuthConfigurationRollbackPolicy(t *testing.T, populated bool, targetVer
 		var data string
 		err := pool.QueryRow(ctx, `SELECT jsonb_build_array(
 			(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM framework.auth_config_revisions r),
-			(SELECT jsonb_agg(to_jsonb(l) ORDER BY revision_id) FROM framework.auth_config_lifecycle l),
+			(SELECT jsonb_agg(to_jsonb(l)-'updated_by_recovery_audit' ORDER BY revision_id) FROM framework.auth_config_lifecycle l),
 			(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM framework.audit_log a),
 			'framework.auth_config_revisions'::regclass::oid,
 			'framework.auth_config_lifecycle'::regclass::oid)::text`).Scan(&data)
@@ -137,7 +143,7 @@ func testAuthConfigurationRollbackPolicy(t *testing.T, populated bool, targetVer
 		}
 		return data
 	}
-	if targetVersion == 6 {
+	if targetVersion >= 6 {
 		oldSnapshot := snapshot()
 		if err := run("up", "1"); err != nil {
 			t.Fatal("isolated version 6 migration failed")
@@ -151,6 +157,22 @@ func testAuthConfigurationRollbackPolicy(t *testing.T, populated bool, targetVer
 		var heads, events, evidence int
 		if err := pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM framework.auth_activation_heads),(SELECT count(*) FROM framework.auth_activation_history),(SELECT count(*) FROM framework.auth_test_evidence)`).Scan(&heads, &events, &evidence); err != nil || heads != 0 || events != 0 || evidence != 0 {
 			t.Fatal("persistence migration enrolled or activated a deployment")
+		}
+	}
+	if targetVersion == 7 {
+		oldSnapshot := snapshot()
+		if err := run("up", "1"); err != nil {
+			t.Fatal("isolated version 7 migration failed")
+		}
+		if snapshot() != oldSnapshot {
+			t.Fatal("migration 7 changed existing configuration history or credentials")
+		}
+		if err := pool.QueryRow(ctx, `SELECT version,dirty,'public.schema_migrations'::regclass::oid FROM public.schema_migrations`).Scan(&version, &dirty, &after); err != nil || version != 7 || dirty || after != journal {
+			t.Fatal("recovery migration changed or corrupted migration history")
+		}
+		var recovery int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM framework.auth_recovery_audit`).Scan(&recovery); err != nil || recovery != 0 {
+			t.Fatal("recovery migration created operator audit data")
 		}
 	}
 	before := snapshot()

@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/netip"
@@ -99,6 +100,49 @@ type testTransport struct {
 	origin string
 }
 
+// discoveryRetryTransport retries only idempotent metadata/JWKS reads and only
+// for provider throttling/unavailability. Three total attempts keep preparation
+// bounded; token exchange and other writes are never retried.
+type discoveryRetryTransport struct {
+	base  http.RoundTripper
+	delay func(int) time.Duration
+}
+
+func (t discoveryRetryTransport) CloseIdleConnections() {
+	if closer, ok := t.base.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
+}
+func discoveryRetryDelay(attempt int) time.Duration {
+	base := time.Duration(1<<attempt) * 100 * time.Millisecond
+	return base + time.Duration(rand.Int64N(int64(base)+1))
+}
+func (t discoveryRetryTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if request.Method != http.MethodGet || request.Body != nil {
+		return t.base.RoundTrip(request)
+	}
+	for attempt := 0; ; attempt++ {
+		response, err := t.base.RoundTrip(request.Clone(request.Context()))
+		if err != nil || (response.StatusCode != http.StatusTooManyRequests && response.StatusCode != http.StatusServiceUnavailable) || attempt == 2 {
+			return response, err
+		}
+		if response.Body != nil {
+			response.Body.Close()
+		}
+		delay := discoveryRetryDelay(attempt)
+		if t.delay != nil {
+			delay = t.delay(attempt)
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-request.Context().Done():
+			timer.Stop()
+			return nil, request.Context().Err()
+		case <-timer.C:
+		}
+	}
+}
+
 // Forward cleanup to the owned transport; no shared default transport is closed.
 func (t testTransport) CloseIdleConnections() {
 	if c, ok := t.base.(interface{ CloseIdleConnections() }); ok {
@@ -127,5 +171,6 @@ func newTestClient(ctx context.Context, issuer string) (*http.Client, error) {
 		return nil, err
 	}
 	transport := &http.Transport{Proxy: nil, DialContext: n.dialContext, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 5 * time.Second, MaxResponseHeaderBytes: 64 << 10, DisableKeepAlives: true}
-	return &http.Client{Transport: testTransport{transport, u.Scheme + "://" + u.Host}, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errTestNetwork }}, nil
+	secured := testTransport{transport, u.Scheme + "://" + u.Host}
+	return &http.Client{Transport: discoveryRetryTransport{base: secured}, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errTestNetwork }}, nil
 }

@@ -101,6 +101,22 @@ func TestNotificationPayloadIsOnlyAScopedHint(t *testing.T) {
 	}
 }
 
+func TestListenerRejectsObviousLossOfSessionAffinity(t *testing.T) {
+	for _, candidate := range []struct {
+		before, after int32
+		listening     bool
+	}{
+		{0, 0, true}, {41, 42, true}, {41, 41, false},
+	} {
+		if listenerSessionValid(candidate.before, candidate.after, candidate.listening) {
+			t.Fatal("non-session-affine listener accepted", candidate)
+		}
+	}
+	if !listenerSessionValid(41, 41, true) {
+		t.Fatal("session-affine listener rejected")
+	}
+}
+
 func TestTwoInstancesObserveCommittedActivation(t *testing.T) {
 	f, service, provider, m := activationServiceFixture(t)
 	a, ar := subscriberFixture(t, f, service, provider)
@@ -253,7 +269,7 @@ func TestSubscribeBeforeReadAndMissedNotificationRecovery(t *testing.T) {
 	load := syncer.load
 	syncer.load = func(ctx context.Context) (*auth.Runtime, error) {
 		var subscribed bool
-		if err := f.owner.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name='go-web-framework-auth-listener' AND query='LISTEN framework_auth_activation')`).Scan(&subscribed); err != nil || !subscribed {
+		if err := f.owner.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name='go-web-framework-auth-listener')`).Scan(&subscribed); err != nil || !subscribed {
 			return nil, ErrUnavailable
 		}
 		return load(ctx)

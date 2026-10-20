@@ -192,15 +192,27 @@ func closeListener(conn *pgx.Conn) {
 	defer cancel()
 	_ = conn.Close(ctx)
 }
+func listenerSessionValid(before, after int32, listening bool) bool {
+	return before > 0 && before == after && listening
+}
 func (s *Synchronizer) subscribe(ctx context.Context) (*pgx.Conn, error) {
 	conn, err := s.connect(ctx)
 	if err != nil {
 		return nil, ErrUnavailable
 	}
 	bounded, cancel := context.WithTimeout(ctx, 5*time.Second)
-	_, err = conn.Exec(bounded, `LISTEN framework_auth_activation`)
+	var before int32
+	err = conn.QueryRow(bounded, `SELECT pg_backend_pid()`).Scan(&before)
+	if err == nil {
+		_, err = conn.Exec(bounded, `LISTEN framework_auth_activation`)
+	}
+	var after int32
+	var listening bool
+	if err == nil {
+		err = conn.QueryRow(bounded, `SELECT pg_backend_pid(),EXISTS(SELECT 1 FROM pg_listening_channels() AS channels(channel) WHERE channel='framework_auth_activation')`).Scan(&after, &listening)
+	}
 	cancel()
-	if err != nil {
+	if err != nil || !listenerSessionValid(before, after, listening) {
 		closeListener(conn)
 		return nil, ErrUnavailable
 	}

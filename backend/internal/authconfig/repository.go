@@ -205,7 +205,7 @@ func record(ctx context.Context, tx pgx.Tx, actor access.User, action string, m 
 }
 
 const metadataSelect = `SELECT r.id::text,r.deployment_id,r.environment,r.configuration_version,r.provider,r.issuer_url,r.client_id,r.redirect_uri,r.iap_audience,r.allow_http_development,
- l.status,l.generation,r.created_by::text,r.created_at,l.updated_by::text,l.updated_at,l.validation,l.validated_at,l.approved_at,l.activated_at,l.superseded_at,
+ l.status,l.generation,r.created_by::text,r.created_at,COALESCE(l.updated_by::text,''),l.updated_at,l.validation,l.validated_at,l.approved_at,l.activated_at,l.superseded_at,
  r.secret_ciphertext IS NOT NULL,COALESCE(r.encryption_format,0),COALESCE(r.encryption_key_id,'')
  FROM framework.auth_config_revisions r JOIN framework.auth_config_lifecycle l ON l.revision_id=r.id
  WHERE r.deployment_id=$1 AND r.environment=$2 `

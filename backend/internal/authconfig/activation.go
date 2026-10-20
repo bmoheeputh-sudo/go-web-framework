@@ -41,6 +41,8 @@ type ActivationEvent struct {
 	ActivatedAt        time.Time
 	TransitionDeadline time.Time
 	ActorUserID        string
+	RecoveryAuditID    string
+	RecoveryOperatorID string
 	Reason             string
 }
 
@@ -99,10 +101,12 @@ func (r *ActivationReader) History(ctx context.Context, before int64, limit int)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	rows, err := r.pool.Query(ctx, `SELECT generation,COALESCE(previous_revision_id::text,''),target_revision_id::text,
-      COALESCE(recovery_revision_id::text,''),activated_at,transition_deadline,actor_user_id::text,reason
-      FROM framework.auth_activation_history WHERE deployment_id=$1 AND environment=$2 AND ($3::bigint=0 OR generation<$3)
-      ORDER BY generation DESC LIMIT $4`, r.scope.DeploymentID, r.scope.Environment, before, limit)
+	rows, err := r.pool.Query(ctx, `SELECT h.generation,COALESCE(h.previous_revision_id::text,''),h.target_revision_id::text,
+		COALESCE(h.recovery_revision_id::text,''),h.activated_at,h.transition_deadline,COALESCE(h.actor_user_id::text,''),
+		COALESCE(h.recovery_audit_id::text,''),COALESCE(a.operator_id,''),h.reason
+		FROM framework.auth_activation_history h LEFT JOIN framework.auth_recovery_audit a ON a.id=h.recovery_audit_id
+		WHERE h.deployment_id=$1 AND h.environment=$2 AND ($3::bigint=0 OR h.generation<$3)
+		ORDER BY h.generation DESC LIMIT $4`, r.scope.DeploymentID, r.scope.Environment, before, limit)
 	if err != nil {
 		return nil, readError(ctx, err)
 	}
@@ -110,7 +114,7 @@ func (r *ActivationReader) History(ctx context.Context, before int64, limit int)
 	events := []ActivationEvent{}
 	for rows.Next() {
 		e := ActivationEvent{Scope: r.scope}
-		if err = rows.Scan(&e.Generation, &e.PreviousRevisionID, &e.TargetRevisionID, &e.RecoveryRevisionID, &e.ActivatedAt, &e.TransitionDeadline, &e.ActorUserID, &e.Reason); err != nil {
+		if err = rows.Scan(&e.Generation, &e.PreviousRevisionID, &e.TargetRevisionID, &e.RecoveryRevisionID, &e.ActivatedAt, &e.TransitionDeadline, &e.ActorUserID, &e.RecoveryAuditID, &e.RecoveryOperatorID, &e.Reason); err != nil {
 			return nil, readError(ctx, err)
 		}
 		events = append(events, e)

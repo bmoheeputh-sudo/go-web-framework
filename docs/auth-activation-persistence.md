@@ -30,7 +30,9 @@ references. Deferred checks allow lifecycle, history and head updates in either
 order in one transaction while requiring a consistent final state. Head generations
 advance by exactly one; deletion, truncation and resetting to environment mode are
 refused. History and evidence cannot be edited, deleted or truncated through normal
-SQL operations. No production Go method writes activation heads/history yet.
+SQL operations. Later controlled-activation and offline-recovery services write
+heads/history only through their reviewed advisory-locked transactions; neither is
+exposed as a public activation endpoint.
 
 Existing lifecycle rules still require a **new immutable recovery revision** to
 restore old settings. Superseded revisions are not reactivated. Activation history
@@ -163,10 +165,12 @@ prevents ordinary package/HTTP callers from submitting success, not a malicious
 server or database owner. Secure evidence is a verifier trust boundary, not database
 cryptographic attestation.
 
-The dispatcher and explicit identity enrollment were added after Phase B, but no
-activation API, listener, provider switching, retention worker or operator recovery
-tool exists. No API can activate a provider. Evidence/history retention is immutable;
-a future reviewed retention policy must preserve required recovery/audit records.
+The dispatcher, explicit identity enrollment, controlled activation foundation,
+LISTEN/NOTIFY reconciliation and offline recovery CLI were added after Phase B.
+No HTTP API can activate or recover a provider. Evidence/history/recovery attribution
+is immutable; a future reviewed retention policy must preserve required records.
+See [offline-auth-recovery.md](offline-auth-recovery.md) for migration 000007 and
+the separate break-glass authorization model.
 
 Tests use `internal/testdb` disposable PostgreSQL clusters with private Unix sockets,
 never application `DB_*` values. CLI migration tests require `migrate` with PostgreSQL

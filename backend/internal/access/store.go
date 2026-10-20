@@ -28,6 +28,9 @@ var (
 	ErrInvalid     = errors.New("invalid request")
 	ErrConflict    = errors.New("change conflicts with current state")
 	ErrUnavailable = errors.New("authorization temporarily unavailable")
+	// ErrCommitUncertain is reserved for the offline recovery control plane.
+	// Callers must inspect authoritative state and must not retry blindly.
+	ErrCommitUncertain = errors.New("transaction commit outcome is uncertain")
 )
 
 type User struct {
@@ -210,6 +213,67 @@ func (s *Store) withMutation(ctx context.Context, authorize func(pgx.Tx) error, 
 		return err
 	}
 	return dbError(tx.Commit(ctx))
+}
+
+// AuthRecoveryRead is a narrowly named trusted control-plane primitive. It does
+// not manufacture a framework principal and must never be exposed through HTTP.
+func (s *Store) AuthRecoveryRead(ctx context.Context, fn func(pgx.Tx) error) error {
+	if s == nil || s.pool == nil || fn == nil {
+		return ErrUnavailable
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return ErrUnavailable
+	}
+	defer func() {
+		cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		_ = tx.Rollback(cleanup)
+	}()
+	if err = fn(tx); err != nil {
+		return err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ErrUnavailable
+	}
+	return nil
+}
+
+// AuthRecoveryTransaction shares the framework advisory lock but deliberately
+// does not impersonate an authenticated user. The authconfig recovery service
+// must first verify its separate offline operator capability and records that
+// attribution in the same transaction.
+func (s *Store) AuthRecoveryTransaction(ctx context.Context, fn func(pgx.Tx) error) error {
+	if s == nil || s.pool == nil || fn == nil {
+		return ErrUnavailable
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ErrUnavailable
+	}
+	defer func() {
+		cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		_ = tx.Rollback(cleanup)
+	}()
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, mutationLock); err != nil {
+		return ErrUnavailable
+	}
+	if err = fn(tx); err != nil {
+		return err
+	}
+	err = tx.Commit(ctx)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, pgx.ErrTxCommitRollback) {
+		return ErrUnavailable
+	}
+	return ErrCommitUncertain
 }
 func audit(ctx context.Context, tx pgx.Tx, actor, action, target string, details any) error {
 	data, err := json.Marshal(details)

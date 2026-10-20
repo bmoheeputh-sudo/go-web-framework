@@ -2080,8 +2080,8 @@ HTTP endpoints, and the existing portal cannot switch providers. No new migratio
 is needed. Startup restores the committed generation and any still-permitted
 draining provider without extending deadlines or modifying history. PostgreSQL
 LISTEN/NOTIFY now reconciles committed changes across instances, with authoritative
-SQL admission checks during synchronization failures. Offline recovery and the
-operator rollout workflow remain blockers before live activation.
+SQL admission checks during synchronization failures. The public operator activation
+workflow remains a blocker before live activation.
 See the guide for startup limits and the optional `AUTH_ENCRYPTION_KEYS_JSON` keyring.
 
 ## Authentication synchronization (Phase 9.2.5F)
@@ -2098,6 +2098,18 @@ maximum thirty-minute deadline. IAP remains infrastructure-controlled. See the
 [listener, failure policy, internal status and clock requirements](docs/auth-controlled-activation.md#event-driven-multi-instance-synchronization-phase-925f).
 Allow one additional session-affine PostgreSQL connection per instance. There are
 still no public activation or rollback endpoints, and no migration is needed.
+
+## Offline emergency authentication recovery (Phase 9.2.5G)
+
+Migration 000007 and the dedicated `backend/cmd/auth-recovery` command provide an
+offline, explicitly authorized OIDC recovery path without fabricating a framework
+user. Recovery accepts only a separately prepared, validated and approved immutable
+recovery revision, performs hardened OIDC preparation, records operator evidence,
+history and lifecycle changes atomically, and emits the existing transaction-scoped
+notification. It gives the retired provider no additional session grace.
+
+See [the recovery authorization, migration and command procedure](docs/offline-auth-recovery.md).
+No HTTP recovery endpoint or Local DEV fallback is introduced.
 
 ## Backup to GitHub and Google Drive
 
