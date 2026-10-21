@@ -57,7 +57,7 @@ func RegisterAccessPolicy(mux *http.ServeMux, provider auth.Authenticator, store
 				accessPolicyError(w, ErrUnavailable)
 				return
 			}
-			if pattern != "GET "+accessPolicyPath+"/approvals" && r.URL.RawQuery != "" {
+			if pattern != "GET "+accessPolicyPath+"/approvals" && pattern != "GET "+accessPolicyPath+"/invitations" && r.URL.RawQuery != "" {
 				accessPolicyError(w, ErrInvalid)
 				return
 			}
@@ -68,6 +68,7 @@ func RegisterAccessPolicy(mux *http.ServeMux, provider auth.Authenticator, store
 			handler.ServeHTTP(w, r)
 		}))
 	}
+	registerInvitationRoutes(route, repo)
 	route("GET "+accessPolicyPath, func(w http.ResponseWriter, r *http.Request) {
 		s, err := repo.Snapshot(r.Context())
 		if err != nil {

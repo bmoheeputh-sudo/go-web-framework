@@ -156,6 +156,10 @@ func TestIndependentModuleMigrations(t *testing.T) {
 		return value
 	}
 	coreBefore := journalSnapshot("schema_migrations")
+	var initialCoreVersion int64
+	if err := owner.QueryRow(ctx, `SELECT version FROM public.schema_migrations`).Scan(&initialCoreVersion); err != nil {
+		t.Fatal(err)
+	}
 	registry, err := New([]module.Module{example.Module{}}, "example")
 	if err != nil {
 		t.Fatal(err)
@@ -194,7 +198,7 @@ func TestIndependentModuleMigrations(t *testing.T) {
 		if err := owner.QueryRow(ctx, `SELECT (SELECT version FROM public.schema_migrations),(SELECT version FROM public.schema_migrations_example),(SELECT version FROM public.schema_migrations_reporting)`).Scan(&core, &example, &reporting); err != nil {
 			t.Fatal(err)
 		}
-		if core != 8 || example != 1 || reporting != 1 {
+		if core != initialCoreVersion || example != 1 || reporting != 1 {
 			t.Fatal("migration numbering interfered", core, example, reporting)
 		}
 	})

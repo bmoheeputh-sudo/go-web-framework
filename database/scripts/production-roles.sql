@@ -76,6 +76,10 @@ BEGIN
     GRANT SELECT,INSERT,UPDATE ON framework.oidc_access_policies,framework.oidc_identity_approvals TO go_web_app_runtime;
     GRANT EXECUTE ON FUNCTION framework.valid_access_domains(TEXT[]) TO go_web_app_runtime;
   END IF;
+  IF to_regclass('framework.oidc_invitations') IS NOT NULL THEN
+    GRANT SELECT,INSERT,UPDATE ON framework.oidc_invitations TO go_web_app_runtime;
+    GRANT EXECUTE ON FUNCTION framework.invitation_email_key(TEXT) TO go_web_app_runtime;
+  END IF;
 END $$;
 -- admin_bootstrap is deliberately excluded: its one-time command uses an
 -- operator/migrator credential, not the ordinary HTTP runtime credential.

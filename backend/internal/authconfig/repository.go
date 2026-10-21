@@ -170,6 +170,12 @@ func repositoryError(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
 	}
+	// A cancelled/deadline context cannot establish whether COMMIT persisted.
+	// Preserve uncertainty before translating context errors into retryable-looking
+	// availability failures, including for invitation administration.
+	if errors.Is(err, access.ErrCommitUncertain) {
+		return ErrCommitUncertain
+	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return ErrTimeout
 	}
@@ -179,8 +185,6 @@ func repositoryError(ctx context.Context, err error) error {
 	switch {
 	case errors.Is(err, access.ErrDenied):
 		return ErrDenied
-	case errors.Is(err, access.ErrCommitUncertain):
-		return ErrCommitUncertain
 	case errors.Is(err, pgx.ErrNoRows):
 		return ErrNotFound
 	}

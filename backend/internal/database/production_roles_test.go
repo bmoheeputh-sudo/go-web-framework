@@ -52,7 +52,8 @@ func TestProposedProductionRolesInDisposableCluster(t *testing.T) {
 		"auth_activation_heads": "SELECT,INSERT,UPDATE", "auth_activation_history": "SELECT,INSERT",
 		"auth_test_evidence": "SELECT,INSERT", "auth_recovery_audit": "SELECT,INSERT",
 		"oidc_access_policies": "SELECT,INSERT,UPDATE", "oidc_identity_approvals": "SELECT,INSERT,UPDATE",
-		"admin_bootstrap": "",
+		"oidc_invitations": "SELECT,INSERT,UPDATE",
+		"admin_bootstrap":  "",
 	}
 	rows, err := owner.Query(ctx, `SELECT relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='framework' AND c.relkind IN ('r','p')`)
 	if err != nil {
@@ -121,7 +122,7 @@ func TestProposedProductionRolesInDisposableCluster(t *testing.T) {
  (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='framework' AND c.relkind='S')`).Scan(&functionCount, &triggerCount, &sequenceCount); err != nil {
 		t.Fatal(err)
 	}
-	if functionCount != 9 || triggerCount != 23 || sequenceCount != 1 {
+	if functionCount != 11 || triggerCount != 25 || sequenceCount != 1 {
 		t.Fatalf("review framework functions/triggers/sequences: %d/%d/%d", functionCount, triggerCount, sequenceCount)
 	}
 	var actor string
