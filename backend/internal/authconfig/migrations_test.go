@@ -58,6 +58,12 @@ func TestOIDCInvitationImportMigrationRollbackPolicy(t *testing.T) {
 	}
 }
 
+func TestEmailNotificationMigrationRollbackPolicy(t *testing.T) {
+	for _, name := range []string{"empty", "populated"} {
+		t.Run(name, func(t *testing.T) { testAuthConfigurationRollbackPolicy(t, name == "populated", 12) })
+	}
+}
+
 func testAuthConfigurationRollbackPolicy(t *testing.T, populated bool, targetVersion int) {
 	t.Helper()
 	cli, err := exec.LookPath("migrate")
@@ -244,6 +250,16 @@ func testAuthConfigurationRollbackPolicy(t *testing.T, populated bool, targetVer
 		}
 	}
 
+	if targetVersion >= 12 {
+		oldSnapshot := snapshot()
+		if err := run("up", "1"); err != nil {
+			t.Fatal("isolated notification migration failed", err)
+		}
+		var observed, requests, connectors int
+		if err := pool.QueryRow(ctx, `SELECT version,dirty,(SELECT count(*) FROM framework.users WHERE first_successful_oidc_login_at IS NOT NULL OR last_successful_oidc_login_at IS NOT NULL),(SELECT count(*) FROM framework.notification_requests),(SELECT count(*) FROM framework.notification_connectors) FROM public.schema_migrations`).Scan(&version, &dirty, &observed, &requests, &connectors); err != nil || version != 12 || dirty || observed != 0 || requests != 0 || connectors != 0 || snapshot() != oldSnapshot {
+			t.Fatal("notification migration backfilled history or changed existing state", err)
+		}
+	}
 	before := snapshot()
 	for _, args := range [][]string{{"down", "1"}, {"down"}, {"goto", "4"}, {"force", "4"}, {"drop", "-f"}, {"up", "-1"}} {
 		if err = run(args...); err == nil {

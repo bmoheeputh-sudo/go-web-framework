@@ -227,7 +227,7 @@ func TestOIDCAdmissionAtomicProvisioning(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results <- admission.Login(context.Background(), identity, auth.Binding{}, func(context.Context, pgx.Tx) error { return nil })
+			results <- admission.Login(context.Background(), identity, auth.Binding{}, normalSessionWrite(identity))
 		}()
 	}
 	wg.Wait()

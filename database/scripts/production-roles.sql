@@ -11,17 +11,21 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='go_web_app_runtime') THEN
     CREATE ROLE go_web_app_runtime LOGIN NOINHERIT;
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='go_web_notification_worker') THEN
+    CREATE ROLE go_web_notification_worker LOGIN NOINHERIT;
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='go_web_app') THEN
     RAISE EXCEPTION 'historical migrations require the existing go_web_app role';
   END IF;
   IF EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.member
-             WHERE r.rolname='go_web_app_runtime') THEN
-    RAISE EXCEPTION 'runtime role must not be a member of another role';
+             WHERE r.rolname IN ('go_web_app_runtime','go_web_notification_worker')) THEN
+    RAISE EXCEPTION 'runtime and notification worker roles must not be members of another role';
   END IF;
 END;
 $$;
 ALTER ROLE go_web_app_migrator NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
 ALTER ROLE go_web_app_runtime NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
+ALTER ROLE go_web_notification_worker NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
 
 -- Transfer only known framework objects. Indexes/triggers belong to tables;
 -- sequences and trigger functions are transferred separately.
@@ -47,13 +51,13 @@ END;
 $$;
 ALTER SCHEMA framework OWNER TO go_web_app_migrator;
 
-REVOKE ALL ON SCHEMA framework FROM PUBLIC,go_web_app,go_web_app_runtime;
-REVOKE ALL ON ALL TABLES IN SCHEMA framework FROM PUBLIC,go_web_app,go_web_app_runtime;
-REVOKE ALL ON ALL SEQUENCES IN SCHEMA framework FROM PUBLIC,go_web_app,go_web_app_runtime;
-REVOKE ALL ON ALL FUNCTIONS IN SCHEMA framework FROM PUBLIC,go_web_app,go_web_app_runtime;
+REVOKE ALL ON SCHEMA framework FROM PUBLIC,go_web_app,go_web_app_runtime,go_web_notification_worker;
+REVOKE ALL ON ALL TABLES IN SCHEMA framework FROM PUBLIC,go_web_app,go_web_app_runtime,go_web_notification_worker;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA framework FROM PUBLIC,go_web_app,go_web_app_runtime,go_web_notification_worker;
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA framework FROM PUBLIC,go_web_app,go_web_app_runtime,go_web_notification_worker;
 -- PostgreSQL 14 grants CREATE on public to PUBLIC by default. A dedicated
 -- database must remove it or the runtime can create unrelated objects there.
-REVOKE CREATE ON SCHEMA public FROM PUBLIC,go_web_app_runtime;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC,go_web_app_runtime,go_web_notification_worker;
 GRANT USAGE,CREATE ON SCHEMA public TO go_web_app_migrator;
 GRANT USAGE ON SCHEMA framework TO go_web_app_runtime;
 
@@ -83,6 +87,24 @@ BEGIN
   IF to_regclass('framework.oidc_invitation_imports') IS NOT NULL THEN
     GRANT SELECT,INSERT ON framework.oidc_invitation_imports TO go_web_app_runtime;
     GRANT SELECT ON framework.oidc_invitation_import_keys TO go_web_app_runtime;
+  END IF;
+  IF to_regclass('framework.notification_jobs') IS NOT NULL THEN
+    GRANT SELECT,INSERT ON framework.notification_requests TO go_web_app_runtime;
+    GRANT SELECT,INSERT,UPDATE ON framework.notification_connectors,framework.notification_jobs,framework.notification_attempts,framework.notification_suppressions TO go_web_app_runtime;
+    -- Optional future worker login. No credentials are provisioned or worker started.
+    GRANT USAGE ON SCHEMA framework TO go_web_notification_worker;
+    GRANT SELECT ON framework.notification_requests,framework.notification_jobs,framework.notification_attempts,framework.notification_connectors,framework.notification_suppressions,
+      framework.users,framework.user_roles,framework.role_permissions,framework.roles,framework.oidc_access_policies,framework.oidc_identity_approvals,framework.oidc_invitations,
+      framework.auth_activation_heads,framework.auth_config_lifecycle TO go_web_notification_worker;
+    GRANT SELECT(id,deployment_id,environment,issuer_url,client_id,provider) ON framework.auth_config_revisions TO go_web_notification_worker;
+    GRANT UPDATE(status,generation,lease_owner,lease_expires_at,attempt_count,disposition_code,updated_by,updated_at) ON framework.notification_jobs TO go_web_notification_worker;
+    GRANT UPDATE(generation,failure_count,last_error_code,last_accepted_at,updated_by,updated_at) ON framework.notification_connectors TO go_web_notification_worker;
+    GRANT INSERT ON framework.notification_attempts TO go_web_notification_worker;
+    GRANT UPDATE(outcome,completed_at,provider_message_id,error_code) ON framework.notification_attempts TO go_web_notification_worker;
+    GRANT INSERT ON framework.audit_log TO go_web_notification_worker;
+    GRANT USAGE ON SEQUENCE framework.audit_log_id_seq TO go_web_notification_worker;
+    GRANT EXECUTE ON FUNCTION framework.invitation_email_key(TEXT) TO go_web_notification_worker;
+    GRANT EXECUTE ON FUNCTION framework.valid_access_domains(TEXT[]) TO go_web_notification_worker;
   END IF;
 END $$;
 -- admin_bootstrap is deliberately excluded: its one-time command uses an

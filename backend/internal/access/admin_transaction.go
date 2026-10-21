@@ -39,3 +39,16 @@ func (s *Store) AdminTransaction(ctx context.Context, fn func(context.Context, p
 func RecordAudit(ctx context.Context, tx pgx.Tx, actor, action, target string, details any) error {
 	return audit(ctx, tx, actor, action, target, details)
 }
+
+// NotificationWorkerTransaction is a trusted notification-repository primitive.
+// It has no HTTP registration and does not manufacture an administrator context.
+// Its caller exposes only queue/attempt operations, never users, roles or approvals.
+// Provider I/O must occur after this transaction has definitively committed.
+func (s *Store) NotificationWorkerTransaction(ctx context.Context, fn func(context.Context, pgx.Tx) error) error {
+	if s == nil || s.pool == nil || fn == nil {
+		return ErrUnavailable
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return s.withMutation(ctx, func(pgx.Tx) error { return nil }, func(tx pgx.Tx) error { return fn(ctx, tx) })
+}

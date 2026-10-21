@@ -55,6 +55,11 @@ func TestProposedProductionRolesInDisposableCluster(t *testing.T) {
 		"oidc_invitations":            "SELECT,INSERT,UPDATE",
 		"oidc_invitation_imports":     "SELECT,INSERT",
 		"oidc_invitation_import_keys": "SELECT",
+		"notification_connectors":     "SELECT,INSERT,UPDATE",
+		"notification_requests":       "SELECT,INSERT",
+		"notification_jobs":           "SELECT,INSERT,UPDATE",
+		"notification_attempts":       "SELECT,INSERT,UPDATE",
+		"notification_suppressions":   "SELECT,INSERT,UPDATE",
 		"admin_bootstrap":             "",
 	}
 	rows, err := owner.Query(ctx, `SELECT relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='framework' AND c.relkind IN ('r','p')`)
@@ -110,6 +115,24 @@ func TestProposedProductionRolesInDisposableCluster(t *testing.T) {
 	if !schemaUse || schemaCreate || !seqUse || functionExec || member || definer {
 		t.Fatal("schema, sequence, function, membership or SECURITY DEFINER boundary is wrong")
 	}
+	for _, table := range []string{"users", "user_roles", "role_permissions", "oidc_identity_approvals", "oidc_invitations", "auth_config_revisions", "notification_requests", "notification_suppressions"} {
+		for _, privilege := range []string{"INSERT", "UPDATE", "DELETE", "TRUNCATE"} {
+			var granted bool
+			if err := owner.QueryRow(ctx, `SELECT has_table_privilege('go_web_notification_worker',$1,$2)`, "framework."+table, privilege).Scan(&granted); err != nil || granted {
+				t.Fatalf("worker gained %s on %s: %v", privilege, table, err)
+			}
+		}
+	}
+	for _, column := range []string{"enabled", "is_default", "sender_email", "credential_reference", "region", "per_day", "per_minute"} {
+		var granted bool
+		if err := owner.QueryRow(ctx, `SELECT has_column_privilege('go_web_notification_worker','framework.notification_connectors',$1,'UPDATE')`, column).Scan(&granted); err != nil || granted {
+			t.Fatal("worker can configure connector", column, err)
+		}
+	}
+	var workerSecret bool
+	if err := owner.QueryRow(ctx, `SELECT has_column_privilege('go_web_notification_worker','framework.auth_config_revisions','secret_ciphertext','SELECT')`).Scan(&workerSecret); err != nil || workerSecret {
+		t.Fatal("worker can read OIDC secrets", err)
+	}
 	var oldRoleUse, oldRoleAuditInsert bool
 	if err := owner.QueryRow(ctx, `SELECT has_schema_privilege('go_web_app','framework','USAGE'),has_table_privilege('go_web_app','framework.audit_log','INSERT')`).Scan(&oldRoleUse, &oldRoleAuditInsert); err != nil {
 		t.Fatal(err)
@@ -124,7 +147,7 @@ func TestProposedProductionRolesInDisposableCluster(t *testing.T) {
  (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='framework' AND c.relkind='S')`).Scan(&functionCount, &triggerCount, &sequenceCount); err != nil {
 		t.Fatal(err)
 	}
-	if functionCount != 15 || triggerCount != 32 || sequenceCount != 1 {
+	if functionCount != 19 || triggerCount != 46 || sequenceCount != 1 {
 		t.Fatalf("review framework functions/triggers/sequences: %d/%d/%d", functionCount, triggerCount, sequenceCount)
 	}
 	var actor string

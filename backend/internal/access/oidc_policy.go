@@ -308,7 +308,16 @@ func (p *OIDCAdmission) Login(ctx context.Context, identity auth.Identity, bindi
 				return err
 			}
 		}
-		return write(ctx, tx)
+		if err := write(ctx, tx); err != nil {
+			return err
+		}
+		// Observe only normal admitted logins after the exact-identity session
+		// insert. The database guard supplies its own clock and requires that
+		// session in this transaction. Any later failure rolls both back.
+		_, err = tx.Exec(ctx, `UPDATE framework.users SET
+ first_successful_oidc_login_at=COALESCE(first_successful_oidc_login_at,clock_timestamp()),
+ last_successful_oidc_login_at=clock_timestamp() WHERE id=$1`, id)
+		return err
 	})
 	return admissionError(err)
 }
