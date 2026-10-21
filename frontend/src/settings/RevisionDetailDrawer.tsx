@@ -1,5 +1,4 @@
-import ContentCopy from '@mui/icons-material/ContentCopy'
-import { Alert, Button, CircularProgress, Divider, IconButton, Stack, Tooltip, Typography } from '@mui/material'
+import { Alert, Button, CircularProgress, Divider, Stack, Typography } from '@mui/material'
 import { useTranslation } from 'react-i18next'
 import type { AuthRevision } from '../api/authConfiguration'
 import DetailDrawer from '../components/common/DetailDrawer'
@@ -7,23 +6,8 @@ import TwoColumnKeyValue from '../components/common/TwoColumnKeyValue'
 import StatusBadge from '../components/common/StatusBadge'
 import type { DetailItem } from '../components/common/TwoColumnKeyValue'
 import { formatDate, formatNumber } from '../i18n'
-import { useNotifications } from '../notifications/notifications'
+import TechnicalValue from '../components/common/TechnicalValue'
 
-function TechnicalValue({ label, value }: { label: string; value: string }) {
-  const { t } = useTranslation(['auth', 'common'])
-  const notify = useNotifications()
-  async function copy() {
-    try {
-      if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable')
-      await navigator.clipboard.writeText(value)
-      notify({ severity: 'success', messageKey: 'auth:setupCopied', values: { field: label } })
-    } catch { notify({ severity: 'error', messageKey: 'auth:setupCopyFailed', values: { field: label } }) }
-  }
-  return <Stack direction="row" sx={{ minWidth: 0, alignItems: 'flex-start', gap: 0.5 }}>
-    <Typography component="span" variant="body2" sx={{ minWidth: 0, flex: 1, fontFamily: 'monospace', overflowWrap: 'anywhere' }}><bdi>{value}</bdi></Typography>
-    <Tooltip title={t('copySetupValue', { field: label })}><IconButton size="small" aria-label={t('copySetupValue', { field: label })} onClick={() => void copy()}><ContentCopy fontSize="small" /></IconButton></Tooltip>
-  </Stack>
-}
 
 function DetailSection({ title, items }: { title: string; items: DetailItem[] }) {
   return <Stack component="section" spacing={1.5} aria-label={title}>

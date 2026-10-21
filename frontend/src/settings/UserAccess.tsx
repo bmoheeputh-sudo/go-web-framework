@@ -7,6 +7,10 @@ import type { AccessIdentity, AccessPolicySettings, IdentityPage, PolicyExpectat
 import { useQueryCache } from '../api/queries'
 import { useSession } from '../auth/session'
 import CompactTable from '../components/CompactTable'
+import { PageTools } from '../components/PageTools'
+import TechnicalValue from '../components/common/TechnicalValue'
+import { typographyRoles } from '../design/theme'
+import InvitationManagement from './InvitationManagement'
 import DetailDrawer from '../components/common/DetailDrawer'
 import SectionCard from '../components/common/SectionCard'
 import StatusBadge from '../components/common/StatusBadge'
@@ -112,21 +116,20 @@ export default function UserAccess() {
   const selfLoss = confirmation?.kind === 'policy' ? confirmation.preview.current_administrator_loses_access
     : confirmation?.kind === 'approval' && confirmation.status === 'revoked' && confirmation.identity.user_id === session.access.user?.id
   return <Stack spacing={2} sx={{ minWidth: 0 }}>
-    <Stack direction="row" sx={{ justifyContent: 'flex-end' }}><Button disabled={busy || loading} onClick={() => { setError(''); requestRefresh() }}>{t('accessReload')}</Button></Stack>
+    <PageTools busy={busy || loading} error="" onRefresh={() => { setError(''); requestRefresh() }} />
     {error && <Alert severity={uncertain ? 'warning' : 'error'} role="alert">{t(error)}</Alert>}
     {setup ? <SectionCard title={t('accessSetupTitle')}><Alert severity="info">{t('accessSetupHelp')}</Alert></SectionCard> : <>
     {loading && !snapshot && <Typography role="status">{t('common:loading')}</Typography>}
-    {snapshot && <SectionCard title={t('accessOverview')} busy={loading}>
+    {values && <SectionCard title={t('accessPolicyTitle')} busy={busy}>
       <TwoColumnKeyValue items={[
         { label: t('accessWho'), value: t(policy?.mode === 'allow_all' ? 'accessAllowAll' : 'accessApprovedOnly') },
-        { label: t('accessApprovedCount'), value: formatNumber(snapshot.overview.approved, language) },
-        { label: t('accessRevokedCount'), value: formatNumber(snapshot.overview.revoked, language) },
-        { label: t('accessActiveCount'), value: formatNumber(snapshot.overview.active_oidc_users, language) },
+        { label: t('accessApprovedCount'), value: formatNumber(snapshot!.overview.approved, language) },
+        { label: t('accessRevokedCount'), value: formatNumber(snapshot!.overview.revoked, language) },
+        { label: t('accessActiveCount'), value: formatNumber(snapshot!.overview.active_oidc_users, language) },
         { label: t('accessDomains'), value: <bdi>{policy?.allowed_email_domains.join(', ') || t('accessNoDomains')}</bdi> },
         { label: t('accessDefaultRole'), value: t(`admin:${roleKeys[policy?.default_role || 'Viewer']}`) },
       ]} />
-    </SectionCard>}
-    {values && <SectionCard title={t('accessPolicyTitle')} busy={busy}>
+      <Box sx={{ mt: 3 }} />
       <Box component="form" onSubmit={(event) => { event.preventDefault(); void review() }}>
       <Stack spacing={2}>
         <TextField select fullWidth label={t('accessWho')} value={values.mode} disabled={blocked} onChange={(event) => edit({ mode: event.target.value as AccessPolicySettings['mode'] })}>
@@ -140,6 +143,7 @@ export default function UserAccess() {
         <Stack direction="row" spacing={1}><Button type="submit" variant="contained" disabled={blocked || !draft}>{t('accessSave')}</Button><Button disabled={busy || !draft} onClick={() => { setDraft(null); setError('') }}>{t('common:cancel')}</Button></Stack>
       </Stack></Box>
     </SectionCard>}
+    <InvitationManagement mode={policy?.mode} refresh={refresh} disabled={blocked} onChanged={requestRefresh} onViewUser={(id) => void run(async () => { try { setDetail(await readAccessIdentity(id)) } catch (failure) { report(failure, false) } })} />
     <SectionCard title={t('accessIdentities')} description={t('accessIdentitiesHelp')} busy={loading}>
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ mb: 2 }}>
         <TextField fullWidth label={t('accessSearch')} value={search} onChange={(event) => { setLoading(true); setError(''); setSearch(event.target.value); setOffset(0) }} slotProps={{ htmlInput: { maxLength: 200 } }} />
@@ -147,23 +151,24 @@ export default function UserAccess() {
           <MenuItem value="">{t('accessAllStatuses')}</MenuItem>{(['approved', 'revoked', 'not_approved'] as const).map((value) => <MenuItem key={value} value={value}>{t(value === 'approved' ? 'accessApproved' : value === 'revoked' ? 'accessRevoked' : 'accessNotApproved')}</MenuItem>)}
         </TextField>
       </Stack>
-      <CompactTable label={t('accessIdentities')} headers={[t('accessIssuer'), t('accessSubject'), t('email'), t('accessFilter'), t('admin:userRecordStatus'), t('common:navRoles'), t('accessModified'), t('actions')]}
-        minWidth={900} empty={!loading && !page?.items.length} emptyMessage={t('admin:usersEmpty')}>
+      <CompactTable label={t('accessIdentities')} headers={[t('invitationUser'), t('accessFilter'), t('admin:userRecordStatus'), t('common:navRoles'), t('invitationProviderStatus'), t('accessModified'), t('actions')]}
+        minWidth={760} stickyActions empty={!loading && !page?.items.length} emptyMessage={t('admin:usersEmpty')}>
         {page?.items.map((identity) => <TableRow key={JSON.stringify([identity.issuer, identity.subject])}>
-          <TableCell sx={{ maxWidth: 220 }}><bdi>{identity.issuer}</bdi><Typography component="div" variant="caption" color="text.secondary">{t(identity.provider_current ? 'admin:providerCurrent' : 'admin:providerUnavailable')}</Typography></TableCell>
-          <TableCell sx={{ maxWidth: 180 }}><bdi>{identity.subject}</bdi></TableCell><TableCell><bdi>{identity.email || t('common:none')}</bdi></TableCell>
-          <TableCell><StatusBadge label={t(identity.approval_status === 'approved' ? 'accessApproved' : identity.approval_status === 'revoked' ? 'accessRevoked' : 'accessNotApproved')} tone={identity.approval_status === 'approved' ? 'success' : 'neutral'} /></TableCell>
+          <TableCell sx={{ maxWidth: 230 }}><Typography variant={typographyRoles.primaryValue} noWrap sx={{ fontWeight: 600 }} title={identity.display_name || identity.email || t('accessNoUser')}><bdi>{identity.display_name || identity.email || t('accessNoUser')}</bdi></Typography>
+            <Typography variant={typographyRoles.supportingText} color="text.secondary" noWrap title={identity.email}><bdi>{identity.email || t('common:none')}</bdi></Typography></TableCell>
+          <TableCell><StatusBadge label={t(identity.approval_status === 'approved' ? 'accessApproved' : identity.approval_status === 'revoked' ? 'accessRevoked' : 'accessNotApproved')} tone={identity.approval_status === 'approved' ? 'success' : identity.approval_status === 'revoked' ? 'error' : 'neutral'} /></TableCell>
           <TableCell>{identity.user_id ? t(identity.user_active ? 'common:statusActive' : 'common:statusInactive') : t('accessNoUser')}</TableCell>
           <TableCell>{identity.roles.map((role) => t(`admin:${roleKeys[role] || role}`)).join(', ') || t('common:none')}</TableCell>
-          <TableCell>{formatDate(identity.updated_at, language)}</TableCell>
+          <TableCell>{t(identity.provider_current ? 'admin:providerCurrent' : 'admin:providerUnavailable')}</TableCell>
+          <TableCell sx={{ whiteSpace: 'nowrap' }}>{formatDate(identity.updated_at, language)}</TableCell>
           <TableCell sx={{ minWidth: 150 }}><Stack spacing={0.5}>
             <Button size="small" disabled={blocked || !identity.user_id} onClick={() => { setReason(''); setConfirmLoss(false); setConfirmation({ kind: 'approval', identity, status: identity.approval_status === 'approved' ? 'revoked' : 'approved', expected: { expected_policy_generation: page!.policy_generation, expected_activation_generation: page!.activation_generation } }) }}>{t(identity.approval_status === 'approved' ? 'accessRevoke' : 'accessApprove')}</Button>
             {policy?.mode === 'allow_all' && identity.approval_status === 'not_approved' && <Button size="small" disabled={blocked || !identity.user_id} onClick={() => { setReason(''); setConfirmLoss(false); setConfirmation({ kind: 'approval', identity, status: 'revoked', expected: { expected_policy_generation: page!.policy_generation, expected_activation_generation: page!.activation_generation } }) }}>{t('accessRevoke')}</Button>}
-            <Button size="small" disabled={busy || !identity.user_id} onClick={() => void run(async () => { try { setDetail(await readAccessIdentity(identity.user_id)) } catch (failure) { report(failure, false) } })}>{t('accessDetails')}</Button>
+            <Button size="small" disabled={busy} onClick={() => void run(async () => { try { setDetail(identity.user_id ? await readAccessIdentity(identity.user_id) : identity) } catch (failure) { report(failure, false) } })}>{t('accessDetails')}</Button>
           </Stack></TableCell>
         </TableRow>)}
       </CompactTable>
-      <Stack direction="row" spacing={1} sx={{ mt: 2 }}><Button disabled={loading || offset === 0} onClick={() => { setLoading(true); setOffset(Math.max(0, offset - 20)) }}>{t('common:previousPage')}</Button><Button disabled={loading || !page || offset + 20 >= page.total} onClick={() => { setLoading(true); setOffset(offset + 20) }}>{t('common:nextPage')}</Button></Stack>
+      <Stack direction="row" role="group" aria-label={t('accessIdentities')} spacing={1} sx={{ mt: 2 }}><Button disabled={loading || offset === 0} onClick={() => { setLoading(true); setOffset(Math.max(0, offset - 20)) }}>{t('common:previousPage')}</Button><Button disabled={loading || !page || offset + 20 >= page.total} onClick={() => { setLoading(true); setOffset(offset + 20) }}>{t('common:nextPage')}</Button></Stack>
       <Typography variant="caption" color="text.secondary">{t('accessProviderHelp')}</Typography>
     </SectionCard>
     </>}
@@ -188,9 +193,12 @@ export default function UserAccess() {
     </Dialog>
     <DetailDrawer open={Boolean(detail)} onClose={() => setDetail(null)} title={t('accessDetails')}>
       {detail && <TwoColumnKeyValue items={[
-        { label: t('accessIssuer'), value: <bdi>{detail.issuer}</bdi> }, { label: t('accessSubject'), value: <bdi>{detail.subject}</bdi> },
+        { label: t('displayName'), value: <bdi>{detail.display_name || t('common:none')}</bdi> },
+        { label: t('accessIssuer'), value: <TechnicalValue label={t('accessIssuer')} value={detail.issuer} /> }, { label: t('accessSubject'), value: <TechnicalValue label={t('accessSubject')} value={detail.subject} /> },
         { label: t('email'), value: <bdi>{detail.email || t('common:none')}</bdi> },
-        { label: t('admin:userRecordStatus'), value: t(detail.user_active ? 'common:statusActive' : 'common:statusInactive') },
+        { label: t('invitationProviderStatus'), value: t(detail.provider_current ? 'admin:providerCurrent' : 'admin:providerUnavailable') },
+        { label: t('accessModified'), value: formatDate(detail.updated_at, language) },
+        { label: t('admin:userRecordStatus'), value: detail.user_id ? t(detail.user_active ? 'common:statusActive' : 'common:statusInactive') : t('accessNoUser') },
         { label: t('accessFilter'), value: t(detail.approval_status === 'approved' ? 'accessApproved' : detail.approval_status === 'revoked' ? 'accessRevoked' : 'accessNotApproved') },
         { label: t('common:navRoles'), value: detail.roles.map((role) => t(`admin:${roleKeys[role] || role}`)).join(', ') || t('common:none') },
       ]} />}

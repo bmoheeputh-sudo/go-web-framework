@@ -24,6 +24,7 @@ function setup(options: { missing?: boolean; user?: typeof admin; language?: Lan
     const method = init?.method || 'GET'
     if (options.missing) return Response.json({ error: 'access_policy_setup_required' }, { status: 404 })
     if (path === accessPolicyPath && method === 'GET') return Response.json(snapshot)
+    if (path.startsWith(accessPolicyPath + '/invitations?')) return Response.json({ items: [], total: 0, offset: 0, limit: 20, policy_generation: 1, activation_generation: 3, revision_id: 'revision-1', revision_generation: 4 })
     if (path.startsWith(accessPolicyPath + '/approvals?')) {
       const params = new URL(path, 'https://app.test').searchParams
       const items = params.get('search') === 'absent' ? [] : [{ ...row, subject: params.get('offset') === '20' ? 'second-page' : row.subject }]
@@ -51,7 +52,7 @@ function setup(options: { missing?: boolean; user?: typeof admin; language?: Lan
 beforeEach(() => { mockMedia(); localStorage.clear(); sessionStorage.clear() })
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 const policySection = () => screen.getByRole('region', { name: en.accessPolicyTitle })
-async function loaded() { await screen.findByText(bob.email); await waitFor(() => expect((screen.getByRole('button', { name: en.accessReload }) as HTMLButtonElement).disabled).toBe(false)) }
+async function loaded() { await screen.findByText(bob.email); await waitFor(() => expect((screen.getByRole('button', { name: resources.en.admin.refresh }) as HTMLButtonElement).disabled).toBe(false)) }
 async function select(label: string, option: string) { fireEvent.mouseDown(within(policySection()).getByLabelText(label)); fireEvent.click(await screen.findByRole('option', { name: option })) }
 async function review() { await userEvent.click(within(policySection()).getByRole('button', { name: en.accessSave })); return screen.findByRole('dialog', { name: en.accessConfirm }) }
 async function reason() { fireEvent.change(within(screen.getByRole('dialog')).getByLabelText(en.accessReason + ' *'), { target: { value: 'Approved access policy change' } }) }
@@ -136,8 +137,8 @@ it.each([409, 503])('never retries a rejected or uncertain %s mutation and prese
 })
 it('searches and paginates with direct no-store requests', async () => {
   const { fetcher } = setup(); await loaded()
-  await userEvent.click(screen.getByRole('button', { name: common.nextPage }))
-  await screen.findByText('second-page')
+  await userEvent.click(within(screen.getByRole('group', { name: en.accessIdentities })).getByRole('button', { name: common.nextPage }))
+  await waitFor(() => expect(fetcher.mock.calls.some(([path]) => path.includes('/approvals?') && path.includes('offset=20'))).toBe(true))
   fireEvent.change(screen.getByLabelText(en.accessSearch), { target: { value: 'absent' } })
   await screen.findByText(resources.en.admin.usersEmpty)
   expect(fetcher.mock.calls.some(([path]) => path.includes('search=absent') && path.includes('offset=0'))).toBe(true)
@@ -159,7 +160,7 @@ it('keeps existing table data during background refresh and persists no security
   let release!: () => void
   const pending = new Promise<void>((resolve) => { release = resolve })
   fetcher.mockImplementation(async (path, init) => { if (path === accessPolicyPath) await pending; return original(path, init) })
-  await userEvent.click(screen.getByRole('button', { name: en.accessReload }))
+  await userEvent.click(screen.getByRole('button', { name: resources.en.admin.refresh }))
   expect(screen.getByText(bob.email)).toBeTruthy()
   await act(async () => { release() })
   expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0)

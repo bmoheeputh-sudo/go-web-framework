@@ -2,9 +2,35 @@
 
 Phase 10.3B provides storage and administrator-only manual-invitation APIs.
 Phase 10.3C claims eligible invitations during verified normal OIDC login, inside
-the existing admission/provisioning/session transaction. There is no public claim
-endpoint, frontend, CSV import, email delivery or SCIM integration. The supported
+the existing admission/provisioning/session transaction. Phase 10.3D adds manual
+invitation management in Settings → Authentication → User Access. There is no public
+claim endpoint, CSV import, email delivery or SCIM integration. The supported
 topology remains one security deployment per database because users/RBAC are global.
+
+## Manual administration UI
+
+User Access groups the access policy, invitations and exact-identity approvals
+into three sections. Add User requires an email and audit reason; display name
+is optional. The default expiration uses the server's seven-day deadline. Custom
+expirations allow 1–30 whole days and remain subject to server validation.
+Creating an invitation sends no email and does not prove identity or grant roles.
+
+Administrators can search, filter, page and inspect invitation history. Technical
+configuration and claimed-identity identifiers live in the detail drawer, with
+copy controls and an action to inspect a linked user. Only pending, current-bound,
+unexpired invitations can be revoked. Revocation requires its own audit reason;
+under Allow All it does not independently deny login. Use the existing account
+deactivation or exact-identity approval controls to remove access.
+
+Writes capture expectations from protected reads. Conflicts preserve form input
+and require an explicit refresh and review before another submission. Uncertain
+writes block further invitation mutations in the current view and provide a
+read-only inspection action; inspect both authoritative invitation records and
+the audit history before deciding on any further write. No write is retried
+automatically. Closing an edited form requires an explicit discard decision.
+Unsent drafts survive internal navigation in identity-scoped memory, without browser
+storage. Leaving during a pending write preserves the inspection-required block.
+The interface supports all twelve locales, Arabic RTL, and both appearance modes.
 
 ## Storage and lifecycle
 
@@ -223,7 +249,7 @@ last-administrator eligibility.
 Invitations retain personal data for auditability. Establish a reviewed retention
 and redaction policy before a broad rollout; this phase deliberately supplies no
 history-deletion endpoint. Future CSV import needs bounded authoritative parsing,
-preview, idempotency receipts and atomic batch auditing. No frontend or CSV
-workflow is included here. This implementation does not prove the live Auth0
+preview, idempotency receipts and atomic batch auditing. CSV import, email delivery
+and targeted reminders are not included. This implementation does not prove the live Auth0
 tenant's upstream-email trust configuration or automatically approve a deployment
 for production onboarding.

@@ -489,7 +489,8 @@ it('navigates to User Access with SPA history and shows operator setup guidance 
   fixture.fetcher.mockImplementation(async (path, init) => path.startsWith('/api/admin/auth/access-policy')
     ? Response.json({ error: 'access_policy_setup_required' }, { status: 404 }) : original(path, init))
   mount('/settings?tab=authentication&auth_section=user-access')
-  await screen.findByRole('heading', { name: en.accessSetupTitle })
+  // This route loads User Access as a separate chunk before reading its policy.
+  await screen.findByRole('heading', { name: en.accessSetupTitle }, { timeout: 5000 })
   await userEvent.click(screen.getByRole('tab', { name: en.accessConfiguration }))
   await screen.findByRole('heading', { name: en.history })
   expect(screen.getByTestId('settings-location').textContent).toBe('/settings?tab=authentication')
