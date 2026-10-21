@@ -35,9 +35,12 @@ func connectorError(w http.ResponseWriter, err error) {
 	reply(w, status, map[string]any{"error": code, "inspection_required": errors.Is(err, ErrCommitUncertain), "automatic_retry_allowed": false})
 }
 func decodeConnector(w http.ResponseWriter, r *http.Request, out any) bool {
+	return decodeNotificationAdminJSON(w, r, out, connectorError)
+}
+func decodeNotificationAdminJSON(w http.ResponseWriter, r *http.Request, out any, failure func(http.ResponseWriter, error)) bool {
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 16<<10))
 	if err != nil || !validJSONUnicode(data) {
-		connectorError(w, ErrInvalid)
+		failure(w, ErrInvalid)
 		return false
 	}
 	allowed := map[string]bool{}
@@ -48,7 +51,7 @@ func decodeConnector(w http.ResponseWriter, r *http.Request, out any) bool {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	token, err := decoder.Token()
 	if err != nil || token != json.Delim('{') {
-		connectorError(w, ErrInvalid)
+		failure(w, ErrInvalid)
 		return false
 	}
 	seen := map[string]bool{}
@@ -56,25 +59,64 @@ func decodeConnector(w http.ResponseWriter, r *http.Request, out any) bool {
 		token, err = decoder.Token()
 		key, ok := token.(string)
 		if err != nil || !ok || seen[key] || !allowed[key] {
-			connectorError(w, ErrInvalid)
+			failure(w, ErrInvalid)
 			return false
 		}
 		seen[key] = true
 		var raw json.RawMessage
 		if decoder.Decode(&raw) != nil {
-			connectorError(w, ErrInvalid)
+			failure(w, ErrInvalid)
 			return false
 		}
 	}
 	if _, err = decoder.Token(); err != nil || decoder.Decode(new(any)) != io.EOF {
-		connectorError(w, ErrInvalid)
+		failure(w, ErrInvalid)
+		return false
+	}
+	if !uniqueJSONKeys(json.NewDecoder(bytes.NewReader(data))) {
+		failure(w, ErrInvalid)
 		return false
 	}
 	decoder = json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(out) != nil {
-		connectorError(w, ErrInvalid)
+		failure(w, ErrInvalid)
 		return false
+	}
+	return true
+}
+
+// DisallowUnknownFields handles schemas; this walk also rejects ambiguous keys
+// inside nested preview/input/expectation objects, not only at the top level.
+func uniqueJSONKeys(d *json.Decoder) bool {
+	token, err := d.Token()
+	if err != nil {
+		return false
+	}
+	switch token {
+	case json.Delim('{'):
+		seen := map[string]bool{}
+		for d.More() {
+			key, err := d.Token()
+			name, ok := key.(string)
+			if err != nil || !ok || seen[name] {
+				return false
+			}
+			seen[name] = true
+			if !uniqueJSONKeys(d) {
+				return false
+			}
+		}
+		end, err := d.Token()
+		return err == nil && end == json.Delim('}')
+	case json.Delim('['):
+		for d.More() {
+			if !uniqueJSONKeys(d) {
+				return false
+			}
+		}
+		end, err := d.Token()
+		return err == nil && end == json.Delim(']')
 	}
 	return true
 }

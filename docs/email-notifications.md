@@ -1,8 +1,10 @@
-# Email notification foundation (Phases 10.4B–10.4C)
+# Email notification foundation (Phases 10.4B–10.4D)
 
 The foundation starts no production worker and sends no email. Phase 10.4C adds
 administrator configuration, OAuth and readiness endpoints and a localized UI;
 credentials are resolved only during explicit authorization/tests, never at startup.
+Phase 10.4D adds administrator preview, queue confirmation, receipts, history,
+suppression and onboarding overview. See [notification management and rollout](notification-management.md).
 There are no automatic reminder schedules. See [email connector setup and permissions](email-connectors.md). Existing manual/CSV invitation creation
 continues to send nothing. Authentication, approval, role and claiming decisions
 remain in the existing OIDC admission implementation.

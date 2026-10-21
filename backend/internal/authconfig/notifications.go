@@ -75,6 +75,17 @@ func (r *NotificationRepository) admin(ctx context.Context, fn func(context.Cont
 		if err := r.isolated(ctx, tx); err != nil {
 			return err
 		}
+		b, err := r.policy.invitationContext(ctx, tx, nil)
+		if err != nil {
+			return err
+		}
+		allowed, err := r.administratorEligible(ctx, tx, actor.ID, b)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return ErrDenied
+		}
 		return fn(ctx, tx, actor)
 	})
 }
@@ -111,6 +122,8 @@ type NotificationInput struct {
 	DueAt                                                          time.Time
 	Reason                                                         string
 	Confirm                                                        bool
+	// Omitted for legacy internal requests, preserving their persisted digest.
+	PreviewBinding string `json:"preview_binding,omitempty"`
 }
 type NotificationRequest struct {
 	ID, ActorID, Type, TemplateVersion, Locale, ConnectorID, Sender, Outcome string
@@ -179,6 +192,12 @@ func (r *NotificationRepository) ReadRequest(ctx context.Context, id string) (No
 }
 
 func (r *NotificationRepository) Enqueue(ctx context.Context, input NotificationInput) (NotificationRequest, error) {
+	return r.enqueue(ctx, input, nil)
+}
+
+// The management preflight runs after idempotency inspection, inside the same
+// security transaction as eligibility, job creation and auditing.
+func (r *NotificationRepository) enqueue(ctx context.Context, input NotificationInput, preflight func(context.Context, pgx.Tx, access.User) error) (NotificationRequest, error) {
 	if !validID(input.ID) || !validID(input.IdempotencyKey) || !input.Confirm || !validPolicyReason(input.Reason) || !input.Expected.valid() || input.ConnectorGeneration < 1 || (input.ConnectorID != "" && !validID(input.ConnectorID)) || len(input.Targets) < 1 || len(input.Targets) > NotificationMaxJobs || (input.Type != "invitation" && input.Type != "reminder") || input.TemplateVersion != notifications.TemplateVersion || !notifications.Locale(input.Locale) {
 		return NotificationRequest{}, ErrInvalid
 	}
@@ -211,6 +230,11 @@ func (r *NotificationRepository) Enqueue(ctx context.Context, input Notification
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return err
+		}
+		if preflight != nil {
+			if err = preflight(ctx, tx, actor); err != nil {
+				return err
+			}
 		}
 		b, err := r.policy.invitationContext(ctx, tx, &input.Expected)
 		if err != nil {

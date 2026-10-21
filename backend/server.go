@@ -276,6 +276,8 @@ func newServerWithPolicy(getenv func(string) string, policy func(func(string) st
 		SecretDirectory: getenv("NOTIFICATION_SECRET_DIRECTORY"), SecretKeyFile: getenv("NOTIFICATION_SECRET_KEY_FILE"),
 	})
 	authconfig.RegisterEmailConnectors(handler.ServeMux, runtime, authorization, origin, connectors)
+	notificationManagement := authconfig.NewNotificationManagement(accessPolicy, connectors, authconfig.NotificationCommunicationFromEnv(origin, getenv))
+	authconfig.RegisterNotificationManagement(handler.ServeMux, runtime, authorization, origin, notificationManagement)
 	configRepository, _ := authconfig.RepositoryFromEnv(authorization, getenv)
 	var activationService *authconfig.ActivationService
 	if configRepository != nil && pool != nil {

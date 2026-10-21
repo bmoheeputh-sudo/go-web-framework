@@ -6,7 +6,7 @@ import RolePermissions from '../settings/RolePermissions'
 import PageHeader from '../components/common/PageHeader'
 
 const AuthenticationSettings = lazy(() => import('../settings/AuthenticationSettings'))
-const EmailConnectors = lazy(() => import('../settings/EmailConnectors'))
+const NotificationSettings = lazy(() => import('../settings/NotificationSettings'))
 
 export default function SettingsPage() {
   const { t } = useTranslation(['admin', 'auth', 'common'])
@@ -30,7 +30,7 @@ export default function SettingsPage() {
       <RolePermissions />
     </Box>
     <Box role="tabpanel" id="settings-notifications-panel" aria-labelledby="settings-notifications-tab" hidden={tab !== 2} sx={{ minWidth: 0 }}>
-      {tab === 2 && <Suspense fallback={<Typography>{t('common:loading')}</Typography>}><EmailConnectors /></Suspense>}
+      {tab === 2 && <Suspense fallback={<Typography>{t('common:loading')}</Typography>}><NotificationSettings /></Suspense>}
     </Box>
     <Box role="tabpanel" id="settings-auth-panel" aria-labelledby="settings-auth-tab" hidden={tab !== 1} sx={{ minWidth: 0 }}>
       {/* Unmount to discard entered secrets on leaving this tab. Role edits above remain intact. */}
