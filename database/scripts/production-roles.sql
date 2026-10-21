@@ -106,6 +106,10 @@ BEGIN
     GRANT EXECUTE ON FUNCTION framework.invitation_email_key(TEXT) TO go_web_notification_worker;
     GRANT EXECUTE ON FUNCTION framework.valid_access_domains(TEXT[]) TO go_web_notification_worker;
   END IF;
+  IF to_regclass('framework.notification_connector_readiness') IS NOT NULL THEN
+    GRANT SELECT,INSERT,UPDATE ON framework.notification_connector_readiness,framework.notification_connector_oauth_flows TO go_web_app_runtime;
+    GRANT SELECT ON framework.notification_connector_readiness TO go_web_notification_worker;
+  END IF;
 END $$;
 -- admin_bootstrap is deliberately excluded: its one-time command uses an
 -- operator/migrator credential, not the ordinary HTTP runtime credential.

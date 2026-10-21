@@ -107,10 +107,8 @@ func (w *NotificationWorker) Begin(ctx context.Context, l notifications.Lease) (
 			}
 			return err
 		}
-		var authorized bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM framework.users u JOIN framework.user_roles ur ON ur.user_id=u.id JOIN framework.role_permissions rp ON rp.role=ur.role
- WHERE u.id=$1 AND u.active AND u.issuer=$2 COLLATE "C" AND u.provider='oidc' AND rp.permission='admin.manage'
- AND NOT EXISTS(SELECT 1 FROM framework.oidc_identity_approvals a WHERE a.deployment_id=$3 AND a.environment=$4 AND a.issuer=u.issuer COLLATE "C" AND a.subject=u.subject COLLATE "C" AND a.status='revoked'))`, n.ActorID, b.issuer, r.policy.scope.DeploymentID, r.policy.scope.Environment).Scan(&authorized); err != nil {
+		authorized, err := r.administratorEligible(ctx, tx, n.ActorID, b)
+		if err != nil {
 			return err
 		}
 		if !authorized {

@@ -64,6 +64,12 @@ func TestEmailNotificationMigrationRollbackPolicy(t *testing.T) {
 	}
 }
 
+func TestEmailConnectorMigrationRollbackPolicy(t *testing.T) {
+	for _, name := range []string{"empty", "populated"} {
+		t.Run(name, func(t *testing.T) { testAuthConfigurationRollbackPolicy(t, name == "populated", 13) })
+	}
+}
+
 func testAuthConfigurationRollbackPolicy(t *testing.T, populated bool, targetVersion int) {
 	t.Helper()
 	cli, err := exec.LookPath("migrate")
@@ -258,6 +264,16 @@ func testAuthConfigurationRollbackPolicy(t *testing.T, populated bool, targetVer
 		var observed, requests, connectors int
 		if err := pool.QueryRow(ctx, `SELECT version,dirty,(SELECT count(*) FROM framework.users WHERE first_successful_oidc_login_at IS NOT NULL OR last_successful_oidc_login_at IS NOT NULL),(SELECT count(*) FROM framework.notification_requests),(SELECT count(*) FROM framework.notification_connectors) FROM public.schema_migrations`).Scan(&version, &dirty, &observed, &requests, &connectors); err != nil || version != 12 || dirty || observed != 0 || requests != 0 || connectors != 0 || snapshot() != oldSnapshot {
 			t.Fatal("notification migration backfilled history or changed existing state", err)
+		}
+	}
+	if targetVersion >= 13 {
+		oldSnapshot := snapshot()
+		if err := run("up", "1"); err != nil {
+			t.Fatal("isolated connector migration failed", err)
+		}
+		var observations, flows int
+		if err := pool.QueryRow(ctx, `SELECT version,dirty,(SELECT count(*) FROM framework.notification_connector_readiness),(SELECT count(*) FROM framework.notification_connector_oauth_flows) FROM public.schema_migrations`).Scan(&version, &dirty, &observations, &flows); err != nil || version != 13 || dirty || observations != 0 || flows != 0 || snapshot() != oldSnapshot {
+			t.Fatal("connector migration changed existing authentication state", err)
 		}
 	}
 	before := snapshot()

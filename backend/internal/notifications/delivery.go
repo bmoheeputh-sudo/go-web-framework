@@ -1,5 +1,5 @@
-// Package notifications defines delivery contracts, not authentication policy.
-// It contains no real provider transport and is not started by the server.
+// Package notifications defines delivery contracts and isolated provider adapters,
+// not authentication policy. No delivery worker is started by the server.
 package notifications
 
 import (

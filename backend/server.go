@@ -271,6 +271,11 @@ func newServerWithPolicy(getenv func(string) string, policy func(func(string) st
 		accessPolicy, _ = authconfig.NewAccessPolicyRepository(authorization, policyScope)
 	}
 	authconfig.RegisterAccessPolicy(handler.ServeMux, runtime, authorization, origin, accessPolicy)
+	connectors, _ := authconfig.NewEmailConnectorService(accessPolicy, authconfig.EmailConnectorOptions{
+		Origin: origin, GmailClientID: getenv("NOTIFICATION_GMAIL_CLIENT_ID"), GmailClientSecretFile: getenv("NOTIFICATION_GMAIL_CLIENT_SECRET_FILE"),
+		SecretDirectory: getenv("NOTIFICATION_SECRET_DIRECTORY"), SecretKeyFile: getenv("NOTIFICATION_SECRET_KEY_FILE"),
+	})
+	authconfig.RegisterEmailConnectors(handler.ServeMux, runtime, authorization, origin, connectors)
 	configRepository, _ := authconfig.RepositoryFromEnv(authorization, getenv)
 	var activationService *authconfig.ActivationService
 	if configRepository != nil && pool != nil {

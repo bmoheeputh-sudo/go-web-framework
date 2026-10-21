@@ -52,15 +52,17 @@ func TestProposedProductionRolesInDisposableCluster(t *testing.T) {
 		"auth_activation_heads": "SELECT,INSERT,UPDATE", "auth_activation_history": "SELECT,INSERT",
 		"auth_test_evidence": "SELECT,INSERT", "auth_recovery_audit": "SELECT,INSERT",
 		"oidc_access_policies": "SELECT,INSERT,UPDATE", "oidc_identity_approvals": "SELECT,INSERT,UPDATE",
-		"oidc_invitations":            "SELECT,INSERT,UPDATE",
-		"oidc_invitation_imports":     "SELECT,INSERT",
-		"oidc_invitation_import_keys": "SELECT",
-		"notification_connectors":     "SELECT,INSERT,UPDATE",
-		"notification_requests":       "SELECT,INSERT",
-		"notification_jobs":           "SELECT,INSERT,UPDATE",
-		"notification_attempts":       "SELECT,INSERT,UPDATE",
-		"notification_suppressions":   "SELECT,INSERT,UPDATE",
-		"admin_bootstrap":             "",
+		"oidc_invitations":                   "SELECT,INSERT,UPDATE",
+		"oidc_invitation_imports":            "SELECT,INSERT",
+		"oidc_invitation_import_keys":        "SELECT",
+		"notification_connectors":            "SELECT,INSERT,UPDATE",
+		"notification_requests":              "SELECT,INSERT",
+		"notification_jobs":                  "SELECT,INSERT,UPDATE",
+		"notification_attempts":              "SELECT,INSERT,UPDATE",
+		"notification_suppressions":          "SELECT,INSERT,UPDATE",
+		"notification_connector_readiness":   "SELECT,INSERT,UPDATE",
+		"notification_connector_oauth_flows": "SELECT,INSERT,UPDATE",
+		"admin_bootstrap":                    "",
 	}
 	rows, err := owner.Query(ctx, `SELECT relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='framework' AND c.relkind IN ('r','p')`)
 	if err != nil {
@@ -147,7 +149,7 @@ func TestProposedProductionRolesInDisposableCluster(t *testing.T) {
  (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='framework' AND c.relkind='S')`).Scan(&functionCount, &triggerCount, &sequenceCount); err != nil {
 		t.Fatal(err)
 	}
-	if functionCount != 19 || triggerCount != 46 || sequenceCount != 1 {
+	if functionCount != 20 || triggerCount != 50 || sequenceCount != 1 {
 		t.Fatalf("review framework functions/triggers/sequences: %d/%d/%d", functionCount, triggerCount, sequenceCount)
 	}
 	var actor string

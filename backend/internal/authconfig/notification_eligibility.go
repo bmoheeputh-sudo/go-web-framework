@@ -10,6 +10,24 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// Revalidate the real initiating administrator using current persisted OIDC
+// eligibility, independently of the permission observed when a job was queued.
+func (r *NotificationRepository) administratorEligible(ctx context.Context, tx pgx.Tx, id string, b invitationBinding) (bool, error) {
+	var email, approval string
+	var active, verified, permission bool
+	err := tx.QueryRow(ctx, `SELECT u.email,u.email_verified,u.active,
+ EXISTS(SELECT 1 FROM framework.user_roles ur JOIN framework.role_permissions rp ON rp.role=ur.role WHERE ur.user_id=u.id AND rp.permission='admin.manage'),
+ COALESCE((SELECT a.status FROM framework.oidc_identity_approvals a WHERE a.deployment_id=$2 AND a.environment=$3 AND a.issuer=u.issuer COLLATE "C" AND a.subject=u.subject COLLATE "C"),'')
+ FROM framework.users u WHERE u.id=$1 AND u.provider='oidc' AND u.issuer=$4 COLLATE "C"`, id, r.policy.scope.DeploymentID, r.policy.scope.Environment, b.issuer).Scan(&email, &verified, &active, &permission, &approval)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return active && permission && approval != "revoked" && (b.policy.Mode == "allow_all" || approval == "approved") && policyEmailAllowed(b.policy.AllowedEmailDomains, email, verified), nil
+}
+
 // eligible never binds an identity by mailbox equality. A mailbox collision is
 // review-only. Existing claim bindings and exact user IDs provide positive proof.
 func (r *NotificationRepository) eligible(ctx context.Context, tx pgx.Tx, b invitationBinding, j *NotificationJob, snapshot bool) (string, error) {

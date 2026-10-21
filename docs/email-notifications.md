@@ -1,8 +1,9 @@
-# Email notification foundation (Phase 10.4B)
+# Email notification foundation (Phases 10.4B–10.4C)
 
-This is an internal backend foundation. It registers no HTTP endpoints, starts no
-production worker, sends no email, and loads no Gmail or AWS credentials. It adds
-no UI or automatic reminder schedules. Existing manual/CSV invitation creation
+The foundation starts no production worker and sends no email. Phase 10.4C adds
+administrator configuration, OAuth and readiness endpoints and a localized UI;
+credentials are resolved only during explicit authorization/tests, never at startup.
+There are no automatic reminder schedules. See [email connector setup and permissions](email-connectors.md). Existing manual/CSV invitation creation
 continues to send nothing. Authentication, approval, role and claiming decisions
 remain in the existing OIDC admission implementation.
 
@@ -67,22 +68,23 @@ connector UUID and sender in the request and every job. Later default changes do
 not rebind pending jobs. Sender/configuration identity changes require a new UUID;
 enabled/default flags and per-minute/per-day budgets use generation checks.
 
-| Connector | Foundation contract | Next adapter work |
+| Connector | Current contract | Remaining delivery work |
 | --- | --- | --- |
-| Gmail | Dedicated sender mailbox, offline delegated OAuth, exactly `gmail.send`; only an opaque `notifications/...` credential reference is stored. | Approved Cloud project/OAuth consent and Workspace policy; secure offline authorization, refresh/revocation handling, sender-alias checks, safe API error mapping and quota integration. Domain-wide delegation is not assumed. |
-| SES | Explicit AWS region and approved sender; credential mode is the AWS SDK default credential chain. No access-key fields or stored credential reference. | AWS SDK v2 adapter, workload/IAM role and sender-scoped permissions, production access and regional verified-identity checks, regional quotas, safe API errors and authenticated bounce/complaint ingestion. |
+| Gmail | Dedicated mailbox, offline OAuth with `gmail.send` and explicitly acknowledged `gmail.settings.basic` for send-as checks; encrypted external token store, separate notification credentials. | Approved Cloud project/Workspace policy, production token operations, dispatch wiring and quota coordination. Domain-wide delegation is not assumed. |
+| SES | AWS SDK v2, explicit region/fixed sender, default credential chain, no stored access keys. Account, identity and quota checks with safe errors. | Approved IAM role and production identity/quota setup, dispatch wiring and authenticated bounce/complaint ingestion. |
 
 `sender_approved` records operator/administrator attestation; it does not claim that
-provider identity verification or authorization has occurred. Connector status is
-`disabled`, `configured` or `degraded`, not proof of working credentials. Rate limits
+provider identity verification or authorization has occurred. Configuration enablement and delivery failure counters are separate from the seven
+short-lived readiness statuses. Ready is not proof of delivery. Rate limits
 are separately configurable per connector (1–60 attempts/minute, 1–100,000/rolling
 24 hours). Counted attempts reserve capacity at dispatch, including uncertain or
 rejected attempts. Gmail's quota and SES's account/region limits must also be enforced
-by the future adapters; configured values are not claims about provider quotas.
+at dispatch; configured values are not claims about provider quotas. SES readiness
+checks observed quota; Gmail remaining mailbox quota is unavailable under the requested scopes.
 
 Credentials must use a notification-specific secret store/access policy. Do not
 reuse OIDC client-secret rows, the OIDC ciphertext envelope or Auth0 credentials.
-No credentials are required to construct or test this foundation.
+No credentials are required to construct the services or run automated fake-provider tests.
 
 Reference contracts: [Gmail send scope](https://developers.google.com/workspace/gmail/api/auth/scopes),
 [offline OAuth](https://developers.google.com/identity/protocols/oauth2/web-server),
@@ -107,7 +109,8 @@ operation. No repository operation retries uncertain commits.
 `ResolveExpired`. It accepts no fabricated administrator authentication context.
 Work is attributed to the original administrator; dispatch/result audits explicitly
 identify worker execution, and attempts record the executor UUID. The initiating
-administrator must remain active with `admin.manage` before a provider call begins.
+administrator must remain active with `admin.manage`, current exact-identity approval
+when required, and current allowed-domain eligibility before a provider call begins.
 
 The optional production-role proposal grants a separate
 `go_web_notification_worker` role queue/attempt/health/audit capabilities and the
@@ -157,8 +160,9 @@ observations or existing permanent claim evidence, not email opens or clicks.
 PostgreSQL and an external email service cannot share one atomic commit. If a
 provider accepted but storing its result/audit fails, retain the dispatch intent
 and resolve it to Needs Inspection; do not send again or fail over to another
-connector. An operator inspection/evidence workflow is a release requirement for
-10.4C. It must preserve historical attempts rather than reset/retry an uncertain job.
+connector. An operator inspection/evidence workflow is required before real delivery
+is activated. It must preserve historical attempts rather than reset/retry an
+uncertain job.
 
 ## Eligibility, templates and reminders
 
@@ -185,8 +189,9 @@ invitation jobs and stop when positive onboarding evidence is present.
 The immutable message contract contains approved sender, one recipient, fixed
 subject, plain text, escaped optional HTML and deterministic `vgca.<job UUID>`
 reference. The versioned `onboarding.v1` contract accepts all 12 application locales;
-editorial translations are intentionally deferred to 10.4C and English foundation
-copy is the fallback. Only display name is personalized. Header controls and unknown
+editorial email translations remain delivery work and English foundation copy is
+the fallback. The connector administration UI is translated in all 12 locales.
+Only display name is personalized. Header controls and unknown
 template/locale values are rejected. The fixed application link is derived from
 the deployment-owned HTTPS origin and always `/api/auth/login`, without tokens,
 credentials, arbitrary redirects or access grants. Message formatting is redacted.
@@ -200,10 +205,12 @@ leases/crashes/fencing, all outcomes, uncertain commits and result-audit failure
 suppression/cancellation, revoked/inactive/onboarded targets, scope isolation,
 default/explicit connectors, cooldown, role restrictions and calls outside transactions.
 
-Before enabling real delivery, implement and review both actual adapters, secure
-credential resolution, provider identity/readiness checks, production timeout and
-quota policies, explicit uncertainty inspection, authenticated SES event validation
-and replay protection, localized editorial content and administrator preview/send/
-history UI. Automatic scheduling and an authoritative employee inventory remain
+Before enabling real delivery, approve provider setup and review explicit worker
+wiring/current readiness, production timeout and quota policies, uncertainty
+inspection, authenticated SES event validation and replay protection, localized
+editorial email content and administrator preview/send/history UI. Connector
+adapters and secure credential/readiness handling are implemented in Phase 10.4C
+and remain isolated from production dispatch. Automatic scheduling and an
+authoritative employee inventory remain
 separate later work. No real delivery should be enabled merely because a connector
 record is configured.
