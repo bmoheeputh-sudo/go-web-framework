@@ -24,6 +24,28 @@ export const typographyRoles = {
   tableHeader: 'subtitle2',
 } as const
 
+// Opt-in administration forms keep translated labels above their controls.
+// Floating outlined labels otherwise ellipsize in narrow filter/limit rows.
+export const administrationFieldSx = {
+  width: '100%', minWidth: 0,
+  '& .MuiInputLabel-root': {
+    position: 'static', transform: 'none', maxWidth: '100%', whiteSpace: 'normal',
+    overflow: 'visible', pointerEvents: 'auto', typography: typographyRoles.detailLabel, mb: 0.75,
+  },
+  '& .MuiOutlinedInput-notchedOutline': { top: 0 },
+  '& .MuiOutlinedInput-notchedOutline legend': { display: 'none' },
+} as const
+
+export const administrationFilterSx = {
+  display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', md: 'repeat(2, minmax(0, 1fr))' },
+  gap: 2, alignItems: 'end', minWidth: 0,
+  '& > .MuiButton-root': { justifySelf: { xs: 'stretch', md: 'start' } },
+} as const
+
+export const administrationEmailSx = {
+  display: 'block', whiteSpace: 'nowrap', overflowWrap: 'normal', wordBreak: 'normal',
+} as const
+
 const muiLocales = { en: enUS, nl: nlNL, fr: frFR, es: esES, 'pt-BR': ptBR, 'zh-CN': zhCN, id: idID, ms: msMS, th: thTH, vi: viVN, hi: hiIN, ar: arEG }
 
 export function createAppTheme(mode: PaletteMode, dir: 'ltr' | 'rtl', language: Language) {

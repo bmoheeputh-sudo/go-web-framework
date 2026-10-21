@@ -275,5 +275,16 @@
   "nmCode_lease_expired": "Sewa pekerja berakhir; periksa kemungkinan pengiriman",
   "nmCode_adapter_unavailable": "Adaptor pengiriman tidak tersedia",
   "nmCode_invalid_result": "Hasil penyedia tidak valid; perlu pemeriksaan",
-  "nmEmpty": "Tidak ada catatan"
+  "nmEmpty": "Tidak ada catatan",
+  "nmPagination": "Paginasi notifikasi",
+  "emailEmptyHelp": "Tambahkan konektor Gmail atau Amazon SES untuk mengonfigurasi pengirim. Pengujian koneksi tidak mengirim email.",
+  "nmWorkflowStep": "Langkah {{current}} dari {{total}} · {{title}}",
+  "nmRecipientsEmpty": "Tidak ada penerima yang cocok. Sesuaikan filter atau kelola undangan di Akses Pengguna.",
+  "nmSelectionLimit": "Batas batch tercapai. Batalkan satu pilihan sebelum menambahkan penerima lain.",
+  "nmHistoryEmpty": "Tidak ada notifikasi yang cocok. Batch yang dikonfirmasi muncul di sini sebagai antrean; pengiriman nyata dinonaktifkan.",
+  "nmOnboardingEmpty": "Tidak ada target yang diketahui cocok dengan tampilan ini. Coba grup lain atau sesuaikan pencarian.",
+  "nmFirstLoginLabel": "Login pertama yang teramati",
+  "nmLastLoginLabel": "Login terakhir yang teramati",
+  "emailConnectorActions": "Tindakan untuk {{sender}}",
+  "nmManage": "Kelola"
 }

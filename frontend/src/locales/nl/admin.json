@@ -275,5 +275,16 @@
   "nmCode_lease_expired": "Workerlease verlopen; inspecteer mogelijke verzending",
   "nmCode_adapter_unavailable": "Verzendadapter niet beschikbaar",
   "nmCode_invalid_result": "Ongeldig providerresultaat; inspectie nodig",
-  "nmEmpty": "Geen records gevonden"
+  "nmEmpty": "Geen records gevonden",
+  "nmPagination": "Paginering van meldingen",
+  "emailEmptyHelp": "Voeg een Gmail- of Amazon SES-connector toe om een afzender in te stellen. Verbindingstests verzenden geen e-mail.",
+  "nmWorkflowStep": "Stap {{current}} van {{total}} · {{title}}",
+  "nmRecipientsEmpty": "Geen overeenkomende ontvangers. Pas de filters aan of beheer uitnodigingen bij Gebruikerstoegang.",
+  "nmSelectionLimit": "Batchlimiet bereikt. Deselecteer een ontvanger voordat u een andere toevoegt.",
+  "nmHistoryEmpty": "Geen overeenkomende meldingen. Bevestigde batches verschijnen hier als in de wachtrij; echte verzending is uitgeschakeld.",
+  "nmOnboardingEmpty": "Geen bekende doelen voor deze weergave. Probeer een andere groep of pas de zoekopdracht aan.",
+  "nmFirstLoginLabel": "Eerste waargenomen aanmelding",
+  "nmLastLoginLabel": "Laatste waargenomen aanmelding",
+  "emailConnectorActions": "Acties voor {{sender}}",
+  "nmManage": "Beheren"
 }

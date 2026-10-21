@@ -275,5 +275,16 @@
   "nmCode_lease_expired": "Bail du worker expiré ; inspecter un éventuel envoi",
   "nmCode_adapter_unavailable": "Adaptateur d’envoi indisponible",
   "nmCode_invalid_result": "Résultat fournisseur invalide ; inspection requise",
-  "nmEmpty": "Aucun enregistrement"
+  "nmEmpty": "Aucun enregistrement",
+  "nmPagination": "Pagination des notifications",
+  "emailEmptyHelp": "Ajoutez un connecteur Gmail ou Amazon SES pour configurer un expéditeur. Les tests de connexion n’envoient aucun e-mail.",
+  "nmWorkflowStep": "Étape {{current}} sur {{total}} · {{title}}",
+  "nmRecipientsEmpty": "Aucun destinataire correspondant. Ajustez les filtres ou gérez les invitations dans Accès utilisateurs.",
+  "nmSelectionLimit": "Limite du lot atteinte. Désélectionnez un destinataire avant d’en ajouter un autre.",
+  "nmHistoryEmpty": "Aucune notification correspondante. Les lots confirmés apparaissent ici en attente ; l’envoi réel est désactivé.",
+  "nmOnboardingEmpty": "Aucune cible connue ne correspond à cette vue. Essayez un autre groupe ou modifiez la recherche.",
+  "nmFirstLoginLabel": "Première connexion observée",
+  "nmLastLoginLabel": "Dernière connexion observée",
+  "emailConnectorActions": "Actions pour {{sender}}",
+  "nmManage": "Gérer"
 }

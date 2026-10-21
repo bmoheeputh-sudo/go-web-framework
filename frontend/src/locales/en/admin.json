@@ -275,5 +275,16 @@
   "nmCode_lease_expired": "Worker lease expired; inspect possible dispatch",
   "nmCode_adapter_unavailable": "Delivery adapter unavailable",
   "nmCode_invalid_result": "Invalid provider result; inspection required",
-  "nmEmpty": "No records found"
+  "nmEmpty": "No records found",
+  "nmPagination": "Notification pagination",
+  "emailEmptyHelp": "Add a Gmail or Amazon SES connector to configure a sender. Connection tests do not send email.",
+  "nmWorkflowStep": "Step {{current}} of {{total}} · {{title}}",
+  "nmRecipientsEmpty": "No matching recipients. Adjust the filters or manage invitations in User Access.",
+  "nmSelectionLimit": "Batch limit reached. Clear a selection before adding another recipient.",
+  "nmHistoryEmpty": "No notifications match. Confirmed batches appear here as queued; real delivery is disabled.",
+  "nmOnboardingEmpty": "No known targets match this view. Try another group or adjust the search.",
+  "nmFirstLoginLabel": "First observed sign-in",
+  "nmLastLoginLabel": "Last observed sign-in",
+  "emailConnectorActions": "Actions for {{sender}}",
+  "nmManage": "Manage"
 }

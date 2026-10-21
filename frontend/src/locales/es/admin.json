@@ -275,5 +275,16 @@
   "nmCode_lease_expired": "Reserva del trabajador vencida; inspeccione un posible envío",
   "nmCode_adapter_unavailable": "Adaptador de envío no disponible",
   "nmCode_invalid_result": "Resultado inválido del proveedor; requiere inspección",
-  "nmEmpty": "No se encontraron registros"
+  "nmEmpty": "No se encontraron registros",
+  "nmPagination": "Paginación de notificaciones",
+  "emailEmptyHelp": "Añada un conector de Gmail o Amazon SES para configurar un remitente. Las pruebas de conexión no envían correos.",
+  "nmWorkflowStep": "Paso {{current}} de {{total}} · {{title}}",
+  "nmRecipientsEmpty": "No hay destinatarios coincidentes. Ajuste los filtros o gestione las invitaciones en Acceso de usuarios.",
+  "nmSelectionLimit": "Se alcanzó el límite del lote. Quite una selección antes de añadir otro destinatario.",
+  "nmHistoryEmpty": "No hay notificaciones coincidentes. Los lotes confirmados aparecen aquí en cola; el envío real está desactivado.",
+  "nmOnboardingEmpty": "Ningún destinatario conocido coincide con esta vista. Pruebe otro grupo o ajuste la búsqueda.",
+  "nmFirstLoginLabel": "Primer inicio de sesión observado",
+  "nmLastLoginLabel": "Último inicio de sesión observado",
+  "emailConnectorActions": "Acciones para {{sender}}",
+  "nmManage": "Gestionar"
 }

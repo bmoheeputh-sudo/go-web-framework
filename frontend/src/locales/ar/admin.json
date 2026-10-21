@@ -275,5 +275,16 @@
   "nmCode_lease_expired": "انتهى حجز العامل؛ افحص احتمال الإرسال",
   "nmCode_adapter_unavailable": "محوّل الإرسال غير متاح",
   "nmCode_invalid_result": "نتيجة المزوّد غير صالحة؛ يلزم الفحص",
-  "nmEmpty": "لا توجد سجلات"
+  "nmEmpty": "لا توجد سجلات",
+  "nmPagination": "ترقيم صفحات الإشعارات",
+  "emailEmptyHelp": "أضف موصل Gmail أو Amazon SES لإعداد المرسل. لا ترسل اختبارات الاتصال أي بريد إلكتروني.",
+  "nmWorkflowStep": "الخطوة {{current}} من {{total}} · {{title}}",
+  "nmRecipientsEmpty": "لا يوجد مستلمون مطابقون. عدّل عوامل التصفية أو أدر الدعوات في وصول المستخدمين.",
+  "nmSelectionLimit": "تم بلوغ حد الدفعة. ألغِ تحديد مستلم قبل إضافة مستلم آخر.",
+  "nmHistoryEmpty": "لا توجد إشعارات مطابقة. تظهر الدفعات المؤكدة هنا في قائمة الانتظار؛ الإرسال الفعلي معطّل.",
+  "nmOnboardingEmpty": "لا توجد جهات معروفة تطابق هذا العرض. جرّب مجموعة أخرى أو عدّل البحث.",
+  "nmFirstLoginLabel": "أول تسجيل دخول مرصود",
+  "nmLastLoginLabel": "آخر تسجيل دخول مرصود",
+  "emailConnectorActions": "إجراءات {{sender}}",
+  "nmManage": "إدارة"
 }

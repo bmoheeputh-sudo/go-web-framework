@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { I18nextProvider } from 'react-i18next'
-import { Button, TableCell, TableRow } from '@mui/material'
+import { Button, TableCell, TableRow, TextField } from '@mui/material'
 import LanguageProvider from '../../LanguageProvider'
 import { createI18n, resources } from '../../i18n'
 import { mockMedia } from '../../test/fixtures'
@@ -12,7 +12,7 @@ import TwoColumnKeyValue from './TwoColumnKeyValue'
 import DetailDrawer from './DetailDrawer'
 import PageHeader from './PageHeader'
 import CompactTable from '../CompactTable'
-import { createAppTheme, typographyRoles } from '../../design/theme'
+import { administrationFieldSx, createAppTheme, typographyRoles } from '../../design/theme'
 
 beforeEach(() => { mockMedia(); localStorage.clear() })
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
@@ -84,4 +84,22 @@ it('keeps the shared page heading and details semantic in Arabic RTL', () => {
   const details = screen.getByRole('region', { name: 'Security overview' })
   expect(details.querySelectorAll('dt')).toHaveLength(2)
   expect(details.querySelectorAll('dd')).toHaveLength(2)
+})
+
+it('opts into readable column headers, wrapping status labels and nested section headings', () => {
+  render(<I18nextProvider i18n={createI18n('en')}><LanguageProvider>
+    <SectionCard title="Workflow"><SectionCard title="Confirmation" headingLevel="h3">
+      <StatusBadge label="Needs inspection after an uncertain outcome" tone="warning" wrap />
+      <TextField label="CSV import receipt ID" sx={administrationFieldSx} />
+    </SectionCard></SectionCard>
+    <CompactTable label="Notifications" headers={['Queue status', 'Actions']} minColumnWidths={[180, 112]} empty={false} emptyMessage="Empty" stickyActions>
+      <TableRow><TableCell>Queued</TableCell><TableCell><Button>Inspect</Button></TableCell></TableRow>
+    </CompactTable>
+  </LanguageProvider></I18nextProvider>)
+  expect(screen.getByRole('heading', { level: 3, name: 'Confirmation' })).toBeTruthy()
+  expect(getComputedStyle(screen.getByText('Needs inspection after an uncertain outcome')).whiteSpace).toBe('normal')
+  expect(getComputedStyle(screen.getByRole('columnheader', { name: 'Queue status' })).overflowWrap).toBe('normal')
+  expect(getComputedStyle(screen.getByRole('columnheader', { name: 'Queue status' })).minWidth).toBe('180px')
+  expect(screen.getByRole('region', { name: 'Notifications' }).tabIndex).toBe(0)
+  expect(screen.getByLabelText('CSV import receipt ID')).toBeTruthy()
 })

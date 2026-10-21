@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { Alert, Box, Button, Checkbox, FormControlLabel, MenuItem, Stack, Step, StepLabel, Stepper, TableCell, TableRow, TextField, Typography } from '@mui/material'
 import { useBeforeUnload, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
@@ -17,7 +17,8 @@ import SectionCard from '../components/common/SectionCard'
 import TechnicalValue from '../components/common/TechnicalValue'
 import TwoColumnKeyValue from '../components/common/TwoColumnKeyValue'
 import { formatDate, formatNumber } from '../i18n'
-import { typographyRoles } from '../design/theme'
+import { administrationEmailSx, administrationFieldSx, administrationFilterSx, typographyRoles } from '../design/theme'
+import StatusBadge from '../components/common/StatusBadge'
 import { notificationDiagnostic, notificationErrorKey, validNotificationReason } from './notificationManagementState'
 import { NotificationPager } from './NotificationControls'
 
@@ -34,9 +35,10 @@ export default function NotificationSend({ kind }: { kind: NotificationKind }) {
   const [offset, setOffset] = useState(0), [connectorOffset, setConnectorOffset] = useState(0), [revision, setRevision] = useState(0)
   const [search, setSearch] = useState(draft.search), [importID, setImportID] = useState(draft.importID)
   const [loading, setLoading] = useState(true), [busy, setBusy] = useState(false), [error, setError] = useState(''), [discard, setDiscard] = useState(false)
-  const [sample, setSample] = useState(''), [now, setNow] = useState(Date.now()), [receipt, setReceipt] = useState<NotificationReceipt | null>(null)
+  const [sample, setSample] = useState(draft.preview?.selected_targets[0] || ''), [now, setNow] = useState(Date.now()), [receipt, setReceipt] = useState<NotificationReceipt | null>(null)
   const mounted = useRef(false), inFlight = useRef(false), attempted = useRef('')
   const language = i18n.resolvedLanguage || 'en'
+  const selectionID = useId()
   function patch(value: Partial<Draft>) { setDraft((old) => ({ ...old, ...value })) }
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   useEffect(() => { drafts.set(cache, { ...drafts.get(cache), [kind]: { ...draft, uncertain: draft.uncertain || (busy && Boolean(attempted.current)) } }) }, [cache, draft, kind, busy])
@@ -67,7 +69,7 @@ export default function NotificationSend({ kind }: { kind: NotificationKind }) {
     if (mutation && key === 'nmUncertain') patch({ uncertain: true, step: 3 })
     else if (mutation) { patch({ preview: null, confirmed: false, attempt: '', key: '', step: 0 }); attempted.current = '' }
   }
-  function select(ref: string, checked: boolean) { patch({ selected: checked ? [...draft.selected, ref] : draft.selected.filter((value) => value !== ref), preview: null, confirmed: false }) }
+  function select(ref: string, checked: boolean) { if (checked && (!page?.items.some((row) => row.target === ref && !row.code) || draft.selected.length >= 100)) return; patch({ selected: checked ? [...draft.selected, ref] : draft.selected.filter((value) => value !== ref), preview: null, confirmed: false }) }
   async function preview() {
     if (inFlight.current || !draft.selected.length || !draft.connector || draft.uncertain || !page?.communication_configured) return
     inFlight.current = true; setBusy(true); setError('')
@@ -105,46 +107,53 @@ export default function NotificationSend({ kind }: { kind: NotificationKind }) {
   return <Stack spacing={2}>
     <PageTools busy={loading || busy} error={error} onRefresh={refresh} />
     <SectionCard title={t(kind === 'invitation' ? 'nmInvitations' : 'nmReminders')} description={t('nmIndependentInvitations')}>
-      <Stepper activeStep={draft.step} alternativeLabel sx={{ mb: 3 }}>{['nmSelect', 'nmPreview', 'nmConfirm', 'nmResult'].map((key) => <Step key={key}><StepLabel>{t(key)}</StepLabel></Step>)}</Stepper>
+      <Typography role="status" variant={typographyRoles.supportingText} sx={{ display: { xs: 'block', sm: 'none' }, mb: 2 }}>{t('nmWorkflowStep', { current: draft.step + 1, total: 4, title: t(['nmSelect', 'nmPreview', 'nmConfirm', 'nmResult'][draft.step]) })}</Typography>
+      <Stepper component="ol" activeStep={draft.step} alternativeLabel sx={{ display: { xs: 'none', sm: 'flex' }, mb: 3, p: 0, listStyle: 'none' }}>{['nmSelect', 'nmPreview', 'nmConfirm', 'nmResult'].map((key, index) => <Step component="li" key={key} aria-current={draft.step === index ? 'step' : undefined}><StepLabel>{t(key)}</StepLabel></Step>)}</Stepper>
       <Stack spacing={2}>
-        {page && <Alert severity="info">{t(page.access_mode === 'allow_all' ? 'nmAllowAll' : 'nmApprovedOnly')}</Alert>}
+        {page && <Typography variant={typographyRoles.supportingText} color="text.secondary">{t(page.access_mode === 'allow_all' ? 'nmAllowAll' : 'nmApprovedOnly')}</Typography>}
         {page && !page.communication_configured && <Alert severity="warning">{t('nmCommunicationSetup')}</Alert>}
         {draft.step === 0 && <>
-          <Stack component="form" direction={{ xs: 'column', md: 'row' }} spacing={2} onSubmit={(event) => { event.preventDefault(); if (importID && !notificationUUID.test(importID)) { setError('nmInvalidReceipt'); return } setLoading(true); patch({ search, importID, preview: null }); setOffset(0); setRevision((n) => n + 1) }}>
-            {kind === 'reminder' && <TextField select label={t('nmTargetGroup')} value={draft.category} onChange={(event) => { setLoading(true); patch({ category: event.target.value as Draft['category'] }); setOffset(0) }}><MenuItem value="pending">{t('nmCategory_pending')}</MenuItem><MenuItem value="unobserved">{t('nmCategory_unobserved')}</MenuItem></TextField>}
-            <TextField label={t('nmSearch')} value={search} onChange={(event) => setSearch(event.target.value)} />
-            {draft.category === 'pending' && <TextField label={t('nmImportReceipt')} value={importID} onChange={(event) => setImportID(event.target.value)} />}
-            <Button type="submit" disabled={busy || loading}>{t('nmApplyFilters')}</Button>
+          <Box component="form" sx={administrationFilterSx} onSubmit={(event) => { event.preventDefault(); if (importID && !notificationUUID.test(importID)) { setError('nmInvalidReceipt'); return } setLoading(true); patch({ search, importID, preview: null }); setOffset(0); setRevision((n) => n + 1) }}>
+            {kind === 'reminder' && <TextField sx={administrationFieldSx} select label={t('nmTargetGroup')} value={draft.category} onChange={(event) => { setLoading(true); patch({ category: event.target.value as Draft['category'] }); setOffset(0) }}><MenuItem value="pending">{t('nmCategory_pending')}</MenuItem><MenuItem value="unobserved">{t('nmCategory_unobserved')}</MenuItem></TextField>}
+            <TextField sx={administrationFieldSx} label={t('nmSearch')} value={search} onChange={(event) => setSearch(event.target.value)} />
+            {draft.category === 'pending' && <TextField sx={administrationFieldSx} label={t('nmImportReceipt')} value={importID} onChange={(event) => setImportID(event.target.value)} />}
+            <TextField sx={administrationFieldSx} select label={t('nmConnector')} value={readyConnectors.some((c) => c.id === draft.connector) ? draft.connector : ''} onChange={(event) => patch({ connector: event.target.value, preview: null })}>{readyConnectors.map((c) => <MenuItem key={c.id} value={c.id}>{c.provider === 'gmail' ? 'Gmail' : 'Amazon SES'} · {c.sender}</MenuItem>)}</TextField>
+            <Button type="submit" variant="outlined" disabled={busy || loading}>{t('nmApplyFilters')}</Button>
+          </Box>
+          {!readyConnectors.length && !loading && <Alert severity="warning">{t('nmReadyConnectorRequired')}</Alert>}
+          <NotificationPager offset={connectorOffset} total={connectors?.total || 0} busy={busy || loading} label={t('nmConnector')} onChange={(value) => { setLoading(true); setConnectorOffset(value) }} />
+          <Stack direction={{ xs: 'column', sm: 'row' }} sx={{ gap: 1, justifyContent: 'space-between', alignItems: { sm: 'center' } }}>
+            <Typography variant={typographyRoles.supportingText}>{t('nmSelectionCount', { count: draft.selected.length, max: 100 })}</Typography>
+            <Stack direction="row" sx={{ gap: 1, flexWrap: 'wrap' }}><Button size="small" disabled={busy || !page?.items.some((row) => !row.code) || draft.selected.length >= 100} onClick={() => patch({ selected: [...new Set([...draft.selected, ...page!.items.filter((row) => !row.code).map((row) => row.target)])].slice(0, 100), preview: null })}>{t('nmSelectPage')}</Button><Button size="small" disabled={busy || !draft.selected.length} onClick={() => patch({ selected: [], preview: null })}>{t('nmClearSelection')}</Button></Stack>
           </Stack>
-          <Typography variant={typographyRoles.supportingText}>{t('nmSelectionCount', { count: draft.selected.length, max: 100 })}</Typography>
-          <CompactTable label={t('nmRecipients')} headers={[t('nmSelect'), t('nmEmployee'), t('nmEligibility')]} empty={!page?.items.length} emptyMessage={t('nmEmpty')} minWidth={480}>
-            {page?.items.map((row) => <TableRow key={row.target}><TableCell><Checkbox checked={draft.selected.includes(row.target)} disabled={busy || draft.selected.length >= 100 && !draft.selected.includes(row.target)} onChange={(_, value) => select(row.target, value)} slotProps={{ input: { 'aria-label': t('nmSelectRecipient', { email: row.email }) } }} /></TableCell><TableCell><Typography variant={typographyRoles.primaryValue}>{row.display_name}</Typography><bdi>{row.email}</bdi></TableCell><TableCell>{t(notificationDiagnostic(row.code))}</TableCell></TableRow>)}
+          <CompactTable label={t('nmRecipients')} headers={[t('nmSelect'), t('nmEmployee'), t('nmEligibility')]} empty={!page?.items.length && !loading} emptyMessage={t('nmRecipientsEmpty')} minWidth={660} minColumnWidths={[72, 240, 300]}>
+            {page?.items.map((row) => {
+              const explanation = row.code ? t(notificationDiagnostic(row.code)) : draft.selected.length >= 100 && !draft.selected.includes(row.target) ? t('nmSelectionLimit') : t('nmEligible')
+              const descriptionID = `${selectionID}-${row.target}`
+              return <TableRow key={row.target}><TableCell><Checkbox checked={draft.selected.includes(row.target)} disabled={busy || Boolean(row.code) || draft.selected.length >= 100 && !draft.selected.includes(row.target)} onChange={(_, value) => select(row.target, value)} slotProps={{ input: { 'aria-label': t('nmSelectRecipient', { email: row.email }), 'aria-describedby': descriptionID } }} /></TableCell><TableCell><Typography variant={typographyRoles.primaryValue}>{row.display_name}</Typography><Typography component="bdi" variant={typographyRoles.supportingText} sx={administrationEmailSx}>{row.email}</Typography></TableCell><TableCell><Typography id={descriptionID} variant={typographyRoles.supportingText} color={row.code ? 'text.secondary' : 'text.primary'} sx={{ overflowWrap: 'normal' }}>{explanation}</Typography></TableCell></TableRow>
+            })}
           </CompactTable>
-          <NotificationPager offset={offset} total={page?.total || 0} busy={loading || busy} onChange={(value) => { setLoading(true); setOffset(value) }} />
-          <Stack direction="row" sx={{ gap: 1, flexWrap: 'wrap' }}><Button disabled={busy || !page?.items.length || draft.selected.length >= 100} onClick={() => patch({ selected: [...new Set([...draft.selected, ...page!.items.filter((row) => !row.code).map((row) => row.target)])].slice(0, 100), preview: null })}>{t('nmSelectPage')}</Button><Button disabled={busy || !draft.selected.length} onClick={() => patch({ selected: [], preview: null })}>{t('nmClearSelection')}</Button></Stack>
-          <TextField select required label={t('nmConnector')} value={readyConnectors.some((c) => c.id === draft.connector) ? draft.connector : ''} onChange={(event) => patch({ connector: event.target.value, preview: null })}>{readyConnectors.map((c) => <MenuItem key={c.id} value={c.id}>{c.provider === 'gmail' ? 'Gmail' : 'Amazon SES'} · {c.sender}</MenuItem>)}</TextField>
-          {!readyConnectors.length && <Alert severity="warning">{t('nmReadyConnectorRequired')}</Alert>}
-          <NotificationPager offset={connectorOffset} total={connectors?.total || 0} busy={busy || loading} onChange={(value) => { setLoading(true); setConnectorOffset(value) }} />
+          <NotificationPager offset={offset} total={page?.total || 0} busy={loading || busy} label={t('nmRecipients')} onChange={(value) => { setLoading(true); setOffset(value) }} />
         </>}
         {(draft.step === 1 || draft.step === 2) && p && <>
-          <Alert severity={p.ready_count ? 'info' : 'warning'}>{t('nmPreviewSummary', { ready: p.ready_count, skipped: p.skipped_count })}</Alert>
+          <Typography role="status" variant={typographyRoles.primaryValue}>{t('nmPreviewSummary', { ready: p.ready_count, skipped: p.skipped_count })}</Typography>
           <Typography variant={typographyRoles.supportingText}>{t('nmTemplateLanguage')}</Typography>
           <Typography variant={typographyRoles.supportingText}>{t('nmPreviewExpires', { date: formatDate(p.preview_expires_at, language) })}</Typography>
           {expired && <Alert severity="warning" action={<Button disabled={busy} onClick={() => void preview()}>{t('nmRefreshPreview')}</Button>}>{t('nmPreviewExpired')}</Alert>}
-          <Box sx={{ maxHeight: 320, overflowY: 'auto' }}><CompactTable label={t('nmPreviewRecipients')} headers={[t('nmEmployee'), t('nmEligibility'), t('nmPreview')]} empty={!p.rows.length} emptyMessage={t('nmEmpty')} stickyActions>
-            {p.rows.map((row) => <TableRow key={row.target}><TableCell><Typography>{row.display_name}</Typography><bdi>{row.email}</bdi></TableCell><TableCell>{t(notificationDiagnostic(row.code))}</TableCell><TableCell><Button disabled={Boolean(row.code)} onClick={() => setSample(row.target)} aria-label={t('nmPreviewRecipient', { email: row.email })}>{t('nmPreview')}</Button></TableCell></TableRow>)}
+          <Box sx={{ maxHeight: 320, overflowY: 'auto' }}><CompactTable label={t('nmPreviewRecipients')} headers={[t('nmEmployee'), t('nmEligibility'), t('nmPreview')]} empty={!p.rows.length} emptyMessage={t('nmRecipientsEmpty')} stickyActions minWidth={660} minColumnWidths={[240, 280, 120]}>
+            {p.rows.map((row) => <TableRow key={row.target}><TableCell><Typography variant={typographyRoles.primaryValue}>{row.display_name}</Typography><Typography component="bdi" variant={typographyRoles.supportingText} sx={administrationEmailSx}>{row.email}</Typography></TableCell><TableCell><Typography variant={typographyRoles.supportingText} sx={{ overflowWrap: 'normal' }}>{t(notificationDiagnostic(row.code))}</Typography></TableCell><TableCell><Button disabled={Boolean(row.code)} onClick={() => setSample(row.target)} aria-label={t('nmPreviewRecipient', { email: row.email })}>{t('nmPreview')}</Button></TableCell></TableRow>)}
           </CompactTable></Box>
-          {currentSample && !currentSample.code && <SectionCard title={t('nmEmailPreview')}><TwoColumnKeyValue items={[{ label: t('nmFrom'), value: <bdi>{p.sender}</bdi> }, { label: t('nmTo'), value: <bdi>{currentSample.email}</bdi> }, { label: t('nmSubject'), value: currentSample.subject }]} /><Typography component="p" variant="body2" dir="auto" sx={{ whiteSpace: 'pre-wrap', mt: 2 }}>{currentSample.text}</Typography></SectionCard>}
-          {draft.step === 2 && <Box component="form" id="notification-enqueue-form" onSubmit={(event) => { event.preventDefault(); void enqueue() }}><Stack spacing={2}><TextField label={t('nmReason')} required multiline minRows={2} value={draft.reason} onChange={(event) => patch({ reason: event.target.value })} /><FormControlLabel control={<Checkbox checked={draft.confirmed} onChange={(_, value) => patch({ confirmed: value })} />} label={t('nmConfirmQueue', { count: p.ready_count })} /></Stack></Box>}
+          {currentSample && !currentSample.code && <SectionCard title={t('nmEmailPreview')} headingLevel="h3"><TwoColumnKeyValue items={[{ label: t('nmFrom'), value: <TechnicalValue label={t('nmFrom')} value={p.sender} /> }, { label: t('nmTo'), value: <TechnicalValue label={t('nmTo')} value={currentSample.email} /> }, { label: t('nmSubject'), value: currentSample.subject }]} /><Typography component="p" variant="body2" dir="auto" sx={{ whiteSpace: 'pre-wrap', mt: 2 }}>{currentSample.text}</Typography></SectionCard>}
+          {draft.step === 2 && <SectionCard title={t('nmConfirm')} headingLevel="h3"><Box component="form" id="notification-enqueue-form" onSubmit={(event) => { event.preventDefault(); void enqueue() }}><Stack spacing={2}><TextField sx={administrationFieldSx} label={t('nmReason')} required multiline minRows={2} value={draft.reason} onChange={(event) => patch({ reason: event.target.value })} /><FormControlLabel control={<Checkbox checked={draft.confirmed} onChange={(_, value) => patch({ confirmed: value })} />} label={t('nmConfirmQueue', { count: p.ready_count })} /></Stack></Box></SectionCard>}
         </>}
-        {draft.step === 3 && <>
-          <Alert severity={draft.uncertain ? 'warning' : 'info'}>{t(draft.uncertain ? 'nmUncertain' : 'nmQueuedResult', { count: draft.queued })}</Alert>
+        {draft.step === 3 && <SectionCard title={t('nmResult')} headingLevel="h3"><Stack spacing={2}>
+          {draft.uncertain ? <Alert severity="warning">{t('nmUncertain')}</Alert> : <><StatusBadge label={t('nmState_queued')} tone="info" wrap /><Typography role="status" variant={typographyRoles.primaryValue}>{t('nmQueuedResult', { count: draft.queued })}</Typography></>}
           {draft.attempt && <TechnicalValue label={t('nmRequestID')} value={draft.attempt} />}
           {receipt && <Typography>{t('nmReceiptConfirmed', { count: receipt.job_count, date: formatDate(receipt.created_at, language) })}</Typography>}
           <Stack direction="row" sx={{ gap: 1, flexWrap: 'wrap' }}><Button disabled={busy || !draft.attempt} onClick={() => void inspect()}>{t('nmInspectResult')}</Button><Button disabled={!draft.attempt || busy} onClick={() => setParams((old) => { const next = new URLSearchParams(old); next.set('notification_view', 'history'); next.set('notification_request', draft.attempt); return next }, { preventScrollReset: true })}>{t('nmViewHistory')}</Button></Stack>
-        </>}
+        </Stack></SectionCard>}
         {discard && <Alert severity="warning" action={<Button disabled={busy} onClick={reset}>{t('nmDiscard')}</Button>}>{t('nmUnsaved')}</Alert>}
-        <Stack direction="row" sx={{ gap: 1, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+        <Stack direction="row" sx={{ gap: 1, flexWrap: 'wrap', justifyContent: 'flex-end', borderTop: 1, borderColor: 'divider', pt: 2 }}>
           {draft.step < 3 && <Button disabled={busy} onClick={() => setDiscard(true)}>{t('common:cancel')}</Button>}
           {(draft.step === 1 || draft.step === 2) && <Button disabled={busy} onClick={() => patch({ step: draft.step - 1, confirmed: false })}>{t('nmBack')}</Button>}
           {draft.step === 0 && <Button variant="contained" disabled={busy || loading || !draft.selected.length || !readyConnectors.some((c) => c.id === draft.connector) || !page?.communication_configured} onClick={() => void preview()}>{t('nmPreview')}</Button>}

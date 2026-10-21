@@ -275,5 +275,16 @@
   "nmCode_lease_expired": "工作租约已过期，请检查可能的发送",
   "nmCode_adapter_unavailable": "发送适配器不可用",
   "nmCode_invalid_result": "提供商结果无效，需要检查",
-  "nmEmpty": "未找到记录"
+  "nmEmpty": "未找到记录",
+  "nmPagination": "通知分页",
+  "emailEmptyHelp": "添加 Gmail 或 Amazon SES 连接器以配置发件人。连接测试不会发送电子邮件。",
+  "nmWorkflowStep": "第 {{current}} 步，共 {{total}} 步 · {{title}}",
+  "nmRecipientsEmpty": "没有匹配的收件人。请调整筛选条件，或在“用户访问”中管理邀请。",
+  "nmSelectionLimit": "已达到批次上限。请先取消选择一位收件人，再添加其他收件人。",
+  "nmHistoryEmpty": "没有匹配的通知。已确认的批次会在此显示为已排队；实际发送已禁用。",
+  "nmOnboardingEmpty": "此视图中没有匹配的已知对象。请尝试其他分组或调整搜索条件。",
+  "nmFirstLoginLabel": "首次观察到的登录",
+  "nmLastLoginLabel": "最近观察到的登录",
+  "emailConnectorActions": "{{sender}} 的操作",
+  "nmManage": "管理"
 }

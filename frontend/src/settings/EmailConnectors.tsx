@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
-import { Alert, Box, Button, Checkbox, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, Stack, TableCell, TableRow, TextField, Typography } from '@mui/material'
+import { useEffect, useId, useRef, useState } from 'react'
+import { Alert, Box, Button, Checkbox, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, Menu, MenuItem, Stack, TableCell, TableRow, TextField, Typography } from '@mui/material'
+import useMediaQuery from '@mui/material/useMediaQuery'
+import { useTheme } from '@mui/material/styles'
 import { useBeforeUnload, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { AuthConfigurationError } from '../api/authConfiguration'
@@ -15,8 +17,9 @@ import SectionCard from '../components/common/SectionCard'
 import StatusBadge from '../components/common/StatusBadge'
 import TechnicalValue from '../components/common/TechnicalValue'
 import TwoColumnKeyValue from '../components/common/TwoColumnKeyValue'
-import { typographyRoles } from '../design/theme'
+import { administrationEmailSx, administrationFieldSx, typographyRoles } from '../design/theme'
 import { formatDate, formatNumber } from '../i18n'
+import { NotificationPager } from './NotificationControls'
 
 type Workflow = { kind: 'add' | 'configure' | 'test' | 'authorize'; id: string; provider: 'gmail' | 'ses'; current?: EmailConnector }
 type Draft = { workflow: Workflow | null; sender: string; region: string; perMinute: string; perDay: string; enabled: boolean; defaultConnector: boolean; reason: string; mailbox: string; consent: boolean; uncertain: boolean; conflict: boolean }
@@ -39,8 +42,8 @@ const email = (value: string) => /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/u.test(value)
 const noControls = (value: string) => [...value].every((char) => { const code = char.codePointAt(0)!; return code >= 32 && (code < 127 || code > 159) })
 const reasonValid = (value: string) => value.trim().length >= 8 && new TextEncoder().encode(value).length <= 512 && noControls(value)
 
-export default function EmailConnectors() {
-  const { t, i18n } = useTranslation(['admin', 'common'])
+export default function EmailConnectors({ embedded = false }: { embedded?: boolean }) {
+  const { t, i18n } = useTranslation(['admin', 'common', 'auth'])
   const session = useSession(), cache = useQueryCache(), notify = useNotifications()
   const authorized = session.authentication.status === 'authenticated' && session.access.user?.active && session.access.user.permissions.includes('admin.manage')
   const [params] = useSearchParams()
@@ -48,6 +51,9 @@ export default function EmailConnectors() {
   const [page, setPage] = useState<ConnectorPage | null>(null), [offset, setOffset] = useState(0), [revision, setRevision] = useState(0)
   const [loading, setLoading] = useState(true), [busy, setBusy] = useState(false), [error, setError] = useState(''), [discard, setDiscard] = useState(false)
   const [authorizationURL, setAuthorizationURL] = useState('')
+  const [actionMenu, setActionMenu] = useState<{ anchor: HTMLElement; connector: EmailConnector } | null>(null)
+  const theme = useTheme(), compactActions = useMediaQuery(theme.breakpoints.down('sm'))
+  const menuID = useId()
   const mounted = useRef(false), inFlight = useRef(false)
   const language = i18n.resolvedLanguage || 'en'
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
@@ -106,36 +112,43 @@ export default function EmailConnectors() {
   return <Stack spacing={2}>
     <PageTools busy={loading || busy} error={error} onRefresh={refresh} />
     {params.has('gmail_result') && <Alert severity={params.get('gmail_result') === 'completed' ? 'info' : 'warning'}>{t('emailOAuthReturn')}</Alert>}
-    <SectionCard title={t('emailConnectorsTitle')} description={t('emailNoDelivery')} busy={loading || busy} actions={<Stack direction="row" sx={{ gap: 1, flexWrap: 'wrap' }}><Button variant="contained" disabled={busy || Boolean(workflow)} onClick={() => begin('add', 'gmail')}>{t('emailAddGmail')}</Button><Button variant="outlined" disabled={busy || Boolean(workflow)} onClick={() => begin('add', 'ses')}>{t('emailAddSES')}</Button></Stack>}>
-      {!page?.gmail_authorization_available && <Alert severity="info" sx={{ mb: 2 }}>{t('emailGmailSetup')}</Alert>}
-      <CompactTable label={t('emailConnectorsTitle')} headers={[t('emailProvider'), t('emailSender'), t('emailReadiness'), t('emailConfiguration'), t('emailLimits'), t('actions')]} empty={!page?.items.length} emptyMessage={t('emailEmpty')} stickyActions minWidth={640}>
+    <SectionCard title={t('emailConnectorsTitle')} description={embedded ? undefined : t('emailNoDelivery')} busy={loading || busy} actions={<Stack direction="row" sx={{ gap: 1, flexWrap: 'wrap' }}><Button variant="contained" disabled={busy || Boolean(workflow)} onClick={() => begin('add', 'gmail')}>{t('emailAddGmail')}</Button><Button variant="outlined" disabled={busy || Boolean(workflow)} onClick={() => begin('add', 'ses')}>{t('emailAddSES')}</Button></Stack>}>
+      {page && !page.gmail_authorization_available && <Alert severity="info" sx={{ mb: 2 }}>{t('emailGmailSetup')}</Alert>}
+      <CompactTable label={t('emailConnectorsTitle')} headers={[t('nmConnector'), t('emailReadiness'), t('emailLimits'), t('auth:actions')]} empty={!page?.items.length && !loading} emptyMessage={t('emailEmptyHelp')} stickyActions minWidth={compactActions ? 704 : 840} minColumnWidths={[240, 200, 160, compactActions ? 104 : 224]}>
         {page?.items.map((row) => <TableRow key={row.id}>
-          <TableCell>{row.provider === 'gmail' ? 'Google Workspace Gmail API' : 'Amazon SES'}{row.region && <Typography variant={typographyRoles.supportingText}>{row.region}</Typography>}</TableCell>
-          <TableCell><bdi>{row.sender}</bdi></TableCell>
-          <TableCell><StatusBadge label={t(statusKeys[row.readiness.status])} tone={tones[row.readiness.status]} />{row.tested_at && <Typography variant={typographyRoles.supportingText}>{formatDate(row.tested_at, language)}</Typography>}</TableCell>
-          <TableCell>{t(row.enabled ? 'emailEnabled' : 'emailDisabled')}{row.default && <Typography variant={typographyRoles.supportingText}>{t('emailDefault')}</Typography>}</TableCell>
+          <TableCell><Typography variant={typographyRoles.primaryValue}>{row.provider === 'gmail' ? 'Google Workspace Gmail API' : 'Amazon SES'}</Typography><Typography component="bdi" variant={typographyRoles.supportingText} sx={administrationEmailSx}>{row.sender}</Typography>{row.region && <Typography variant={typographyRoles.detailLabel} color="text.secondary">{row.region}</Typography>}</TableCell>
+          <TableCell><Stack spacing={0.75}><Stack direction="row" sx={{ gap: 0.75, flexWrap: 'wrap' }}><StatusBadge label={t(['configured', 'ready'].includes(row.readiness.status) ? statusKeys[row.readiness.status] : 'nmState_failed')} tone={tones[row.readiness.status]} wrap /><StatusBadge label={t(row.enabled ? 'emailEnabled' : 'emailDisabled')} tone={row.enabled ? 'info' : 'neutral'} wrap />{row.default && <StatusBadge label={t('emailDefault')} tone="info" wrap />}</Stack>{!['configured', 'ready'].includes(row.readiness.status) && <Typography variant={typographyRoles.supportingText}>{t(statusKeys[row.readiness.status])}</Typography>}{row.tested_at && <Typography variant={typographyRoles.detailLabel} color="text.secondary">{formatDate(row.tested_at, language)}</Typography>}</Stack></TableCell>
           <TableCell>{t('emailLimitSummary', { minute: formatNumber(row.per_minute, language), day: formatNumber(row.per_day, language) })}</TableCell>
-          <TableCell><Stack direction="row" sx={{ gap: 0.5, flexWrap: 'wrap' }}><Button disabled={busy || Boolean(workflow)} onClick={() => begin('configure', row.provider, row)}>{t('emailConfigure')}</Button><Button disabled={busy || Boolean(workflow)} onClick={() => begin('test', row.provider, row)}>{t('emailTest')}</Button>{row.provider === 'gmail' && <Button disabled={busy || Boolean(workflow) || !page.gmail_authorization_available} onClick={() => begin('authorize', row.provider, row)}>{t('emailAuthorize')}</Button>}</Stack></TableCell>
+          <TableCell>{compactActions ? <Button size="small" variant="outlined" disabled={busy || Boolean(workflow)} aria-label={t('emailConnectorActions', { sender: row.sender })} aria-haspopup="menu" aria-controls={actionMenu?.connector.id === row.id ? menuID : undefined} aria-expanded={actionMenu?.connector.id === row.id} onClick={(event) => setActionMenu({ anchor: event.currentTarget, connector: row })}>{t('auth:actions')}</Button> : <Stack direction="row" sx={{ gap: 0.75, flexWrap: 'wrap', alignItems: 'center' }}><Button size="small" variant="outlined" disabled={busy || Boolean(workflow)} onClick={() => begin('configure', row.provider, row)}>{t('emailConfigure')}</Button><Button size="small" disabled={busy || Boolean(workflow)} onClick={() => begin('test', row.provider, row)}>{t('emailTest')}</Button>{row.provider === 'gmail' && <Button size="small" disabled={busy || Boolean(workflow) || !page.gmail_authorization_available} onClick={() => begin('authorize', row.provider, row)}>{t('emailAuthorize')}</Button>}</Stack>}</TableCell>
         </TableRow>)}
       </CompactTable>
-      <Stack direction="row" sx={{ mt: 2, gap: 1, alignItems: 'center', flexWrap: 'wrap' }}><Button disabled={loading || offset === 0} onClick={() => { setOffset(offset - 20); setLoading(true) }}>{t('common:previousPage')}</Button><Typography variant="body2">{t('common:page', { page: formatNumber(offset / 20 + 1, language) })}</Typography><Button disabled={loading || !page || offset + 20 >= page.total || offset >= 100000} onClick={() => { setOffset(offset + 20); setLoading(true) }}>{t('common:nextPage')}</Button></Stack>
+      <NotificationPager offset={offset} total={page?.total || 0} busy={loading || busy} label={t('emailConnectorsTitle')} onChange={(value) => { setOffset(value); setLoading(true) }} />
     </SectionCard>
+    <Menu anchorEl={actionMenu?.anchor} open={Boolean(actionMenu)} onClose={() => setActionMenu(null)}
+      anchorOrigin={{ vertical: 'bottom', horizontal: theme.direction === 'rtl' ? 'left' : 'right' }} transformOrigin={{ vertical: 'top', horizontal: theme.direction === 'rtl' ? 'left' : 'right' }}
+      slotProps={{ list: { id: menuID, 'aria-label': t('emailConnectorActions', { sender: actionMenu?.connector.sender || '' }) } }}>
+      {actionMenu && [
+        <MenuItem key="configure" onClick={() => { begin('configure', actionMenu.connector.provider, actionMenu.connector); setActionMenu(null) }}>{t('emailConfigure')}</MenuItem>,
+        <MenuItem key="test" onClick={() => { begin('test', actionMenu.connector.provider, actionMenu.connector); setActionMenu(null) }}>{t('emailTest')}</MenuItem>,
+        actionMenu.connector.provider === 'gmail' && <MenuItem key="authorize" disabled={!page?.gmail_authorization_available} onClick={() => { begin('authorize', 'gmail', actionMenu.connector); setActionMenu(null) }}>{t('emailAuthorize')}</MenuItem>,
+      ]}
+    </Menu>
     <Dialog open={Boolean(workflow)} onClose={close} fullWidth maxWidth="sm" aria-labelledby="email-connector-title">
       <DialogTitle id="email-connector-title">{title}</DialogTitle>
       <DialogContent dividers><Box component="form" id="email-connector-form" onSubmit={(event) => { event.preventDefault(); void submit() }}><Stack spacing={2}>
         <Alert severity="info">{t(workflow?.kind === 'test' ? 'emailTestExplanation' : 'emailNoDelivery')}</Alert>
         {workflow?.kind === 'add' ? <>
-          <TextField label={t('emailSender')} type="email" value={form.sender} required autoFocus onChange={(event) => update({ sender: event.target.value })} />
-          {workflow.provider === 'ses' && <><TextField label={t('emailRegion')} value={form.region} required onChange={(event) => update({ region: event.target.value })} /><Alert severity="info">{t('emailSESIdentity')}</Alert></>}
+          <TextField sx={administrationFieldSx} label={t('emailSender')} type="email" value={form.sender} required autoFocus onChange={(event) => update({ sender: event.target.value })} />
+          {workflow.provider === 'ses' && <><TextField sx={administrationFieldSx} label={t('emailRegion')} value={form.region} required onChange={(event) => update({ region: event.target.value })} /><Typography variant={typographyRoles.supportingText} color="text.secondary">{t('emailSESIdentity')}</Typography></>}
         </> : <>
           <TwoColumnKeyValue items={[{ label: t('emailSender'), value: <bdi>{form.sender}</bdi> }, { label: t('emailConnectorID'), value: <TechnicalValue label={t('emailConnectorID')} value={workflow?.id || ''} /> }, { label: t('emailReadiness'), value: workflow?.current ? t(statusKeys[workflow.current.readiness.status]) : '' }, { label: t('emailLastError'), value: t(lastErrorKey(workflow?.current)) }]} />
-          {workflow?.kind === 'configure' && <><Alert severity="info">{t('emailImmutableSender')}</Alert><FormControlLabel control={<Checkbox checked={form.enabled} disabled={!form.enabled && workflow.current?.readiness.status !== 'ready'} onChange={(_, enabled) => update({ enabled, defaultConnector: enabled && form.defaultConnector })} />} label={t('emailEnabled')} /><FormControlLabel control={<Checkbox checked={form.defaultConnector} disabled={!form.enabled} onChange={(_, value) => update({ defaultConnector: value })} />} label={t('emailDefault')} /></>}
+          {workflow?.kind === 'configure' && <><Typography variant={typographyRoles.supportingText} color="text.secondary">{t('emailImmutableSender')}</Typography><FormControlLabel control={<Checkbox checked={form.enabled} disabled={!form.enabled && workflow.current?.readiness.status !== 'ready'} onChange={(_, enabled) => update({ enabled, defaultConnector: enabled && form.defaultConnector })} />} label={t('emailEnabled')} /><FormControlLabel control={<Checkbox checked={form.defaultConnector} disabled={!form.enabled} onChange={(_, value) => update({ defaultConnector: value })} />} label={t('emailDefault')} /></>}
         </>}
-        {(workflow?.kind === 'add' || workflow?.kind === 'configure') && <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}><TextField label={t('emailPerMinute')} type="number" value={form.perMinute} required slotProps={{ htmlInput: { min: 1, max: 60 } }} onChange={(event) => update({ perMinute: event.target.value })} /><TextField label={t('emailPerDay')} type="number" value={form.perDay} required slotProps={{ htmlInput: { min: 1, max: 100000 } }} onChange={(event) => update({ perDay: event.target.value })} /></Stack>}
-        {workflow?.kind === 'authorize' && <><TextField label={t('emailMailbox')} type="email" value={form.mailbox} required onChange={(event) => update({ mailbox: event.target.value })} /><Alert severity="warning">{t('emailScopeWarning')}</Alert>{page?.gmail_scopes.map((scope) => <TechnicalValue key={scope} label={t('emailOAuthScope')} value={scope} />)}<FormControlLabel control={<Checkbox checked={form.consent} onChange={(_, consent) => update({ consent })} />} label={t('emailScopeConsent')} /></>}
-        <TextField label={t('emailReason')} value={form.reason} required multiline minRows={2} onChange={(event) => update({ reason: event.target.value })} />
+        {(workflow?.kind === 'add' || workflow?.kind === 'configure') && <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 2, alignItems: 'end' }}><TextField sx={administrationFieldSx} label={t('emailPerMinute')} type="number" value={form.perMinute} required slotProps={{ htmlInput: { min: 1, max: 60 } }} onChange={(event) => update({ perMinute: event.target.value })} /><TextField sx={administrationFieldSx} label={t('emailPerDay')} type="number" value={form.perDay} required slotProps={{ htmlInput: { min: 1, max: 100000 } }} onChange={(event) => update({ perDay: event.target.value })} /></Box>}
+        {workflow?.kind === 'authorize' && <><TextField sx={administrationFieldSx} label={t('emailMailbox')} type="email" value={form.mailbox} required onChange={(event) => update({ mailbox: event.target.value })} /><Alert severity="warning">{t('emailScopeWarning')}</Alert>{page?.gmail_scopes.map((scope) => <TechnicalValue key={scope} label={t('emailOAuthScope')} value={scope} />)}<FormControlLabel control={<Checkbox checked={form.consent} onChange={(_, consent) => update({ consent })} />} label={t('emailScopeConsent')} /></>}
+        <TextField sx={administrationFieldSx} label={t('emailReason')} value={form.reason} required multiline minRows={2} onChange={(event) => update({ reason: event.target.value })} />
         {authorizationURL && <Button component="a" href={authorizationURL} target="_blank" rel="noopener noreferrer" variant="contained">{t('emailContinueGoogle')}</Button>}
-        {error && <Alert severity="error">{t(error)}</Alert>}
+        {error && !form.uncertain && !form.conflict && <Alert severity="error">{t(error)}</Alert>}
         {(form.uncertain || form.conflict) && <Alert severity="warning" action={<Button disabled={busy} onClick={() => void inspect()}>{t('emailInspect')}</Button>}>{t(form.uncertain ? 'emailUncertain' : 'emailConflict')}</Alert>}
         {discard && <Alert severity="warning" action={<Button disabled={busy} onClick={clear}>{t('emailDiscard')}</Button>}>{t('emailUnsaved')}</Alert>}
       </Stack></Box></DialogContent>

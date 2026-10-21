@@ -275,5 +275,16 @@
   "nmCode_lease_expired": "Phiên giữ của tiến trình hết hạn; kiểm tra khả năng đã gửi",
   "nmCode_adapter_unavailable": "Bộ gửi không khả dụng",
   "nmCode_invalid_result": "Kết quả nhà cung cấp không hợp lệ; cần kiểm tra",
-  "nmEmpty": "Không tìm thấy bản ghi"
+  "nmEmpty": "Không tìm thấy bản ghi",
+  "nmPagination": "Phân trang thông báo",
+  "emailEmptyHelp": "Thêm trình kết nối Gmail hoặc Amazon SES để cấu hình người gửi. Kiểm tra kết nối không gửi email.",
+  "nmWorkflowStep": "Bước {{current}} / {{total}} · {{title}}",
+  "nmRecipientsEmpty": "Không có người nhận phù hợp. Điều chỉnh bộ lọc hoặc quản lý lời mời trong Quyền truy cập người dùng.",
+  "nmSelectionLimit": "Đã đạt giới hạn lô. Bỏ chọn một người nhận trước khi thêm người khác.",
+  "nmHistoryEmpty": "Không có thông báo phù hợp. Các lô đã xác nhận xuất hiện tại đây dưới dạng đã xếp hàng; tính năng gửi thực tế đang tắt.",
+  "nmOnboardingEmpty": "Không có đối tượng đã biết phù hợp với chế độ xem này. Hãy thử nhóm khác hoặc điều chỉnh tìm kiếm.",
+  "nmFirstLoginLabel": "Lần đăng nhập đầu tiên được ghi nhận",
+  "nmLastLoginLabel": "Lần đăng nhập gần nhất được ghi nhận",
+  "emailConnectorActions": "Thao tác cho {{sender}}",
+  "nmManage": "Quản lý"
 }

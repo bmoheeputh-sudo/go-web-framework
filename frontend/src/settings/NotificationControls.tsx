@@ -12,14 +12,16 @@ import { notificationErrorKey, validNotificationReason } from './notificationMan
 import { useBeforeUnload } from 'react-router-dom'
 import { useQueryCache } from '../api/queries'
 import type { QueryCache } from '../api/cache'
+import { administrationFieldSx, typographyRoles } from '../design/theme'
 
 const suppressionDrafts = new WeakMap<QueryCache, Map<string, { reason: string; active: boolean; blocked: boolean }>>()
 
-export function NotificationPager({ offset, total, busy, onChange }: { offset: number; total: number; busy: boolean; onChange: (offset: number) => void }) {
-  const { t, i18n } = useTranslation('common')
-  return <Stack direction="row" sx={{ gap: 1, alignItems: 'center', flexWrap: 'wrap', mt: 2 }}>
+export function NotificationPager({ offset, total, busy, onChange, label }: { offset: number; total: number; busy: boolean; onChange: (offset: number) => void; label?: string }) {
+  const { t, i18n } = useTranslation(['common', 'admin'])
+  if (offset === 0 && total <= 20) return null
+  return <Stack component="nav" aria-label={label || t('admin:nmPagination')} direction="row" sx={{ gap: 1, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end', pt: 2 }}>
     <Button disabled={busy || offset === 0} onClick={() => onChange(Math.max(0, offset - 20))}>{t('previousPage')}</Button>
-    <Typography variant="body2">{t('page', { page: formatNumber(offset / 20 + 1, i18n.resolvedLanguage || 'en') })}</Typography>
+    <Typography variant={typographyRoles.supportingText} color="text.secondary" aria-current="page">{t('page', { page: formatNumber(offset / 20 + 1, i18n.resolvedLanguage || 'en') })}</Typography>
     <Button disabled={busy || offset + 20 >= total || offset >= 100000} onClick={() => onChange(offset + 20)}>{t('nextPage')}</Button>
   </Stack>
 }
@@ -52,11 +54,11 @@ export function SuppressionDialog({ target, onClose, onChanged }: { target: { re
   return <Dialog open fullWidth maxWidth="sm" aria-labelledby="notification-suppression-title" onClose={() => { if (!busy) setDiscard(true) }}>
     <DialogTitle id="notification-suppression-title">{t('nmSuppression')}</DialogTitle>
     <DialogContent dividers><Stack component="form" id="notification-suppression-form" spacing={2} onSubmit={(event) => { event.preventDefault(); void save() }}>
-      <Typography><bdi>{target.email}</bdi></Typography>
+      <Typography sx={{ overflowWrap: 'anywhere' }}><bdi>{target.email}</bdi></Typography>
       <TechnicalValue label={t('nmTargetReference')} value={target.ref} />
       <Alert severity="info">{t('nmSuppressionHelp')}</Alert>
       {!record && <Button disabled={busy} onClick={() => void inspect()}>{t('nmInspectSuppression')}</Button>}
-      {record && <><FormControlLabel control={<Checkbox checked={active} onChange={(_, value) => setActive(value)} />} label={t('nmSuppressed')} /><TextField required multiline minRows={2} label={t('nmReason')} value={reason} onChange={(event) => setReason(event.target.value)} /></>}
+      {record && <><FormControlLabel control={<Checkbox checked={active} onChange={(_, value) => setActive(value)} />} label={t('nmSuppressed')} /><TextField sx={administrationFieldSx} required multiline minRows={2} label={t('nmReason')} value={reason} onChange={(event) => setReason(event.target.value)} /></>}
       {error && <Alert severity="error">{t(error)}</Alert>}
       {blocked && <Button disabled={busy} onClick={() => void inspect()}>{t('nmInspectSuppression')}</Button>}
       {discard && <Alert severity="warning" action={<Button disabled={busy} onClick={clear}>{t('nmDiscard')}</Button>}>{t('nmUnsaved')}</Alert>}

@@ -17,23 +17,23 @@ import NotificationSettings from './NotificationSettings'
 const en = resources.en.admin
 const uuid = (n: number) => `${n.toString(16).padStart(8, '0')}-1111-4111-8111-111111111111`
 const connectorID = uuid(1000), jobID = uuid(2000), originalRequestID = uuid(3000)
-type Options = { view?: string; user?: typeof admin; language?: Language; enqueueStatus?: number; malformed?: boolean; missingReceipt?: boolean; expired?: boolean; ready?: boolean; skip?: boolean; receipt?: boolean; needsInspection?: boolean; suppressStatus?: number; cancelStatus?: number }
+type Options = { view?: string; user?: typeof admin; language?: Language; enqueueStatus?: number; malformed?: boolean; missingReceipt?: boolean; expired?: boolean; ready?: boolean; skip?: boolean; receipt?: boolean; needsInspection?: boolean; suppressStatus?: number; cancelStatus?: number; recipientCode?: string; total?: number; connectorTotal?: number; historyEmpty?: boolean; communication?: boolean; accessMode?: string }
 function setup(options: Options = {}) {
   let queuedInput: NotificationEnqueueInput | null = null
   let cancelled = false
   let suppression = { target: `user:${uuid(1)}`, active: false, generation: 0, reason: '' }
-  const row = (n: number, category = 'pending'): OnboardingTarget => ({ target: `${category === 'pending' ? 'invitation' : 'user'}:${uuid(n)}`, email: `employee${n}@vopak.com`, display_name: `Employee ${n}`, category: category as OnboardingTarget['category'], code: '', claim_evidence: category === 'onboarded' && n === 1, ...(category === 'onboarded' && n === 2 ? { first_successful_oidc_login_at: '2026-01-01T00:00:00Z', last_successful_oidc_login_at: '2026-01-02T00:00:00Z' } : {}) })
+  const row = (n: number, category = 'pending'): OnboardingTarget => ({ target: `${category === 'pending' ? 'invitation' : 'user'}:${uuid(n)}`, email: `employee${n}@vopak.com`, display_name: `Employee ${n}`, category: category as OnboardingTarget['category'], code: n === 1 ? options.recipientCode || '' : '', claim_evidence: category === 'onboarded' && n === 1, ...(category === 'onboarded' && n === 2 ? { first_successful_oidc_login_at: '2026-01-01T00:00:00Z', last_successful_oidc_login_at: '2026-01-02T00:00:00Z' } : {}) })
   const historyItem = (): HistoryItem => ({ id: jobID, request_id: queuedInput?.input.request_id || originalRequestID, target: 'invitation:' + uuid(1), recipient: 'employee1@vopak.com', display_name: 'Employee 1', type: 'invitation', connector_id: connectorID, provider: 'ses', sender: 'onboarding@vopak.com', actor_id: uuid(400), actor_name: admin.display_name, status: options.needsInspection ? 'needs_inspection' : cancelled ? 'cancelled' : 'queued', attempt_outcome: options.needsInspection ? 'uncertain' : '', disposition: options.needsInspection ? 'provider_uncertain' : '', created_at: '2026-01-01T00:00:00Z', generation: cancelled ? 2 : 1, attempt_count: options.needsInspection ? 1 : 0 })
-  const historyPage = () => ({ items: [historyItem()], total: 1, offset: 0, limit: 20, delivery_enabled: false })
+  const historyPage = () => ({ items: options.historyEmpty ? [] : [historyItem()], total: options.historyEmpty ? 0 : 1, offset: 0, limit: 20, delivery_enabled: false })
   const receipt = (id: string) => ({ id, actor_id: uuid(400), type: queuedInput?.input.type || 'invitation', connector_id: connectorID, sender: 'onboarding@vopak.com', template_version: 'onboarding.v1', locale: 'en', reason: 'Reviewed employee onboarding', job_count: queuedInput?.selected_targets.length || 1, outcome: 'enqueued', created_at: '2026-01-01T00:00:00Z', jobs: { ...historyPage(), total: queuedInput?.selected_targets.length || 1 }, delivery_enabled: false })
   const fetcher = vi.fn(async (path: string, init?: RequestInit) => {
     const url = new URL(path, 'https://app.test')
     const method = init?.method || 'GET'
-    if (url.pathname.endsWith('/email-connectors')) return Response.json({ items: [{ id: connectorID, provider: 'ses', sender: 'onboarding@vopak.com', region: 'eu-west-1', enabled: true, default: true, per_minute: 30, per_day: 1500, generation: 1, failure_count: 0, last_error: '', readiness: { status: options.ready === false ? 'configured' : 'ready', code: options.ready === false ? 'not_tested' : 'ready', quota_known: true, remaining_24_hours: 5000, max_per_second: 5 }, tested_at: new Date().toISOString(), expires_at: new Date(Date.now() + 60000).toISOString(), has_authorization: false }], total: 1, offset: 0, limit: 20, gmail_authorization_available: false, gmail_callback_url: '', gmail_scopes: [] })
+    if (url.pathname.endsWith('/email-connectors')) return Response.json({ items: [{ id: connectorID, provider: 'ses', sender: 'onboarding@vopak.com', region: 'eu-west-1', enabled: true, default: true, per_minute: 30, per_day: 1500, generation: 1, failure_count: 0, last_error: '', readiness: { status: options.ready === false ? 'configured' : 'ready', code: options.ready === false ? 'not_tested' : 'ready', quota_known: true, remaining_24_hours: 5000, max_per_second: 5 }, tested_at: new Date().toISOString(), expires_at: new Date(Date.now() + 60000).toISOString(), has_authorization: false }], total: options.connectorTotal || 1, offset: Number(url.searchParams.get('offset') || 0), limit: 20, gmail_authorization_available: false, gmail_callback_url: '', gmail_scopes: [] })
     if (url.pathname.endsWith('/onboarding')) {
       const category = url.searchParams.get('category') || 'pending', offset = Number(url.searchParams.get('offset') || 0)
-      const rows = Array.from({ length: url.searchParams.get('import_id') ? 1 : 23 }, (_, index) => row(index + 1, category))
-      return Response.json({ items: rows.slice(offset, offset + 20), counts: { pending: 23, onboarded: 2, unobserved: 3, inactive: 1 }, total: rows.length, offset, limit: 20, communication_configured: true, delivery_enabled: false, max_batch: 100, access_mode: 'approved_users_only' })
+      const rows = Array.from({ length: url.searchParams.get('import_id') ? 1 : options.total ?? 23 }, (_, index) => row(index + 1, category))
+      return Response.json({ items: rows.slice(offset, offset + 20), counts: { pending: 23, onboarded: 2, unobserved: 3, inactive: 1 }, total: rows.length, offset, limit: 20, communication_configured: options.communication !== false, delivery_enabled: false, max_batch: 100, access_mode: options.accessMode || 'approved_users_only' })
     }
     if (url.pathname.endsWith('/preview')) {
       const input = JSON.parse(String(init?.body)) as NotificationPreviewInput
@@ -82,6 +82,10 @@ it('provides all notification views and clearly disables real delivery', async (
   const { fetcher } = setup(); await selectFirst()
   for (const name of [en.emailConnectorsTitle, en.nmInvitations, en.nmReminders, en.nmHistory, en.nmOverview]) expect(screen.getByRole('tab', { name })).toBeTruthy()
   expect(screen.getByText(en.nmDeliveryDisabled)).toBeTruthy(); expect(screen.getByText(en.nmIndependentInvitations)).toBeTruthy()
+  for (const tab of screen.getAllByRole('tab')) {
+    const panel = document.getElementById(tab.getAttribute('aria-controls')!)!
+    expect(panel).toBeTruthy(); expect(panel.hidden).toBe(tab.getAttribute('aria-selected') !== 'true')
+  }
   expect(posts(fetcher, '/enqueue')).toHaveLength(0)
 })
 it('previews an individual email as text and queues only after explicit confirmation', async () => {
@@ -198,4 +202,84 @@ it('opens notification details with the keyboard and mirrors the drawer in Arabi
 })
 it.each(['dark', 'light'])('renders notification history in %s appearance', async (appearance) => {
   localStorage.setItem('gwf.appearance', appearance); setup({ view: 'history' }); await screen.findByText('employee1@vopak.com'); expect(screen.getByRole('table', { name: en.nmHistory })).toBeTruthy()
+})
+
+it.each(['invitations', 'reminders'])('disables ineligible %s recipients and links the visible explanation', async (view) => {
+  const { fetcher } = setup({ view, recipientCode: 'suppressed', total: 2 }); await screen.findByText('employee1@vopak.com')
+  const blocked = screen.getByRole('checkbox', { name: 'Select employee1@vopak.com' }) as HTMLInputElement
+  expect(blocked.disabled).toBe(true)
+  expect(document.getElementById(blocked.getAttribute('aria-describedby')!)?.textContent).toBe(en.nmCode_suppressed)
+  blocked.click(); expect(blocked.checked).toBe(false)
+  await userEvent.click(screen.getByRole('button', { name: en.nmSelectPage }))
+  expect(screen.getByText('Selected: 1 of 100, across pages.')).toBeTruthy()
+  await userEvent.click(screen.getByRole('button', { name: en.nmPreview })); await screen.findByText(en.nmTemplateLanguage)
+  expect(JSON.parse(String(posts(fetcher, '/preview')[0][1]?.body)).targets).toEqual(['invitation:' + uuid(2)])
+})
+it('hides single-page controls while keeping bounded server-side recipient pagination', async () => {
+  const { fetcher } = setup(); await screen.findByText('employee1@vopak.com')
+  expect(screen.getAllByRole('navigation')).toHaveLength(1)
+  expect(screen.getByRole('navigation', { name: en.nmRecipients })).toBeTruthy()
+  expect(screen.queryByRole('navigation', { name: en.nmConnector })).toBeNull()
+  await userEvent.click(screen.getByRole('button', { name: resources.en.common.nextPage })); await screen.findByText('employee21@vopak.com')
+  expect(fetcher.mock.calls.some(([path]) => path.includes('/onboarding?') && path.includes('offset=20') && path.includes('limit=20'))).toBe(true)
+})
+it('retains separate server pagination when connector selection needs multiple pages', async () => {
+  const { fetcher } = setup({ total: 1, connectorTotal: 21 }); await screen.findByText('employee1@vopak.com')
+  const pager = screen.getByRole('navigation', { name: en.nmConnector })
+  await userEvent.click(within(pager).getByRole('button', { name: resources.en.common.nextPage }))
+  await waitFor(() => expect(fetcher.mock.calls.some(([path]) => path.includes('/email-connectors?') && path.includes('offset=20'))).toBe(true))
+  expect(screen.queryByRole('navigation', { name: en.nmRecipients })).toBeNull()
+})
+it('explains an empty recipient list without unnecessary pagination', async () => {
+  setup({ total: 0 }); await screen.findByText(en.nmRecipientsEmpty)
+  expect(screen.queryByRole('navigation')).toBeNull()
+  expect((screen.getByRole('button', { name: en.nmSelectPage }) as HTMLButtonElement).disabled).toBe(true)
+  expect((screen.getByRole('button', { name: en.nmPreview }) as HTMLButtonElement).disabled).toBe(true)
+})
+it('keeps configuration warnings and usable search when no connector is ready', async () => {
+  const { fetcher } = setup({ ready: false, communication: false }); await screen.findByText('employee1@vopak.com')
+  expect(screen.getByText(en.nmCommunicationSetup)).toBeTruthy(); expect(screen.getByText(en.nmReadyConnectorRequired)).toBeTruthy()
+  fireEvent.change(screen.getByLabelText(en.nmSearch), { target: { value: 'employee2' } })
+  await userEvent.click(screen.getByRole('button', { name: en.nmApplyFilters }))
+  await waitFor(() => expect(fetcher.mock.calls.some(([path]) => path.includes('search=employee2'))).toBe(true))
+})
+it('retains confirmation input while navigating back through the workflow', async () => {
+  setup({ total: 1, accessMode: 'allow_all' }); await previewFirst(); await confirm()
+  expect(screen.getByText(en.nmAllowAll)).toBeTruthy()
+  expect(screen.getByRole('heading', { level: 3, name: en.nmConfirm })).toBeTruthy()
+  await userEvent.click(screen.getByRole('button', { name: en.nmBack }))
+  expect(screen.getByRole('heading', { level: 3, name: en.nmEmailPreview })).toBeTruthy()
+  await userEvent.click(screen.getByRole('button', { name: en.nmReviewQueue }))
+  expect((screen.getByLabelText(en.nmReason + ' *') as HTMLInputElement).value).toBe('Reviewed employee onboarding')
+  expect(screen.getByRole('listitem', { current: 'step' }).textContent).toContain(en.nmConfirm)
+})
+it('provides helpful empty history and preserves the delivery warning', async () => {
+  setup({ view: 'history', historyEmpty: true }); await screen.findByText(en.nmHistoryEmpty)
+  expect(screen.getByText(en.nmDeliveryDisabled)).toBeTruthy(); expect(screen.queryByRole('navigation')).toBeNull()
+  expect(screen.getByLabelText(en.nmQueueStatus)).toBeTruthy()
+})
+it('presents onboarding counts and dated positive login evidence with semantic labels', async () => {
+  setup({ view: 'onboarding', total: 2 }); await screen.findByText('employee2@vopak.com')
+  const overview = screen.getByRole('heading', { name: en.nmOverview }).closest('section')!
+  expect(overview.querySelectorAll('dt')).toHaveLength(4); expect(overview.querySelectorAll('dd')).toHaveLength(4)
+  expect(screen.getByText(en.nmFirstLoginLabel)).toBeTruthy(); expect(screen.getByText(en.nmLastLoginLabel)).toBeTruthy()
+  expect(overview.querySelector('time[datetime="2026-01-01T00:00:00Z"]')).toBeTruthy()
+  expect(screen.getByText(en.nmCoverageHelp)).toBeTruthy(); expect(screen.getByText(en.nmUnknownHelp)).toBeTruthy()
+  expect(screen.queryByRole('navigation')).toBeNull()
+})
+it('explains an empty onboarding category and keeps group filtering available', async () => {
+  const { fetcher } = setup({ view: 'onboarding', total: 0 }); await screen.findByText(en.nmOnboardingEmpty)
+  await userEvent.click(screen.getByLabelText(en.nmTargetGroup)); await userEvent.click(screen.getByRole('option', { name: en.nmCategory_inactive }))
+  await waitFor(() => expect(fetcher.mock.calls.some(([path]) => path.includes('category=inactive'))).toBe(true))
+  expect(screen.queryByRole('navigation')).toBeNull()
+})
+
+it('applies history search and status filters without changing inspection semantics', async () => {
+  const { fetcher } = setup({ view: 'history' }); await screen.findByText('employee1@vopak.com')
+  fireEvent.change(screen.getByLabelText(en.nmSearch), { target: { value: 'employee1' } })
+  await userEvent.click(screen.getByRole('button', { name: en.nmApplyFilters }))
+  await waitFor(() => expect(fetcher.mock.calls.some(([path]) => path.includes('/history?') && path.includes('search=employee1'))).toBe(true))
+  await userEvent.click(screen.getByLabelText(en.nmQueueStatus)); await userEvent.click(screen.getByRole('option', { name: en.nmState_needs_inspection }))
+  await waitFor(() => expect(fetcher.mock.calls.some(([path]) => path.includes('status=needs_inspection') && path.includes('offset=0'))).toBe(true))
+  expect(posts(fetcher, '/enqueue')).toHaveLength(0)
 })

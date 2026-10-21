@@ -21,10 +21,10 @@ export default function NotificationSettings() {
     <Tabs value={value} variant="scrollable" scrollButtons="auto" aria-label={t('emailNotifications')} onChange={(_, next: string) => setParams((old) => { const p = new URLSearchParams(old); p.set('notification_view', next); return p }, { preventScrollReset: true })}>
       {views.map((view, index) => <Tab key={view} value={view} id={`notification-${view}-tab`} aria-controls={`notification-${view}-panel`} label={t(labels[index])} />)}
     </Tabs>
-    <Box role="tabpanel" id={`notification-${value}-panel`} aria-labelledby={`notification-${value}-tab`} sx={{ minWidth: 0 }}>
-      <Suspense fallback={<Typography>{t('common:loading')}</Typography>}>
-        {value === 'connectors' ? <EmailConnectors /> : value === 'invitations' ? <NotificationSend key="invitation" kind="invitation" /> : value === 'reminders' ? <NotificationSend key="reminder" kind="reminder" /> : value === 'history' ? <NotificationHistory /> : <OnboardingOverview />}
-      </Suspense>
-    </Box>
+    {views.map((view) => <Box key={view} role="tabpanel" hidden={value !== view} id={`notification-${view}-panel`} aria-labelledby={`notification-${view}-tab`} sx={{ minWidth: 0 }}>
+      {value === view && <Suspense fallback={<Typography>{t('common:loading')}</Typography>}>
+        {view === 'connectors' ? <EmailConnectors embedded /> : view === 'invitations' ? <NotificationSend key="invitation" kind="invitation" /> : view === 'reminders' ? <NotificationSend key="reminder" kind="reminder" /> : view === 'history' ? <NotificationHistory /> : <OnboardingOverview />}
+      </Suspense>}
+    </Box>)}
   </Stack>
 }

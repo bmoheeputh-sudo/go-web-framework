@@ -10,17 +10,17 @@ import NotificationProvider from '../notifications/NotificationProvider'
 import QueryProvider from '../api/QueryProvider'
 import { SessionContext } from '../auth/session'
 import type { Session } from '../auth/session'
-import type { EmailConnector } from '../api/emailConnectors'
+import type { ConnectorStatus, EmailConnector } from '../api/emailConnectors'
 import { emailConnectorsPath } from '../api/emailConnectors'
 import { admin, bob, identity, mockMedia } from '../test/fixtures'
 import EmailConnectors from './EmailConnectors'
 
 const en = resources.en.admin
 const id = '11111111-1111-4111-8111-111111111111'
-function setup(options: { language?: Language; user?: typeof admin; status?: number; provider?: 'gmail' | 'ses'; gmailAvailable?: boolean; malformed?: boolean } = {}) {
-  const row: EmailConnector = { id, provider: options.provider || 'ses', sender: 'onboarding@vopak.com', region: options.provider === 'gmail' ? '' : 'eu-west-1', enabled: false, default: false, per_minute: 30, per_day: 1500, generation: 1, failure_count: 0, last_error: '', readiness: { status: 'ready', code: 'ready', quota_known: false, remaining_24_hours: 0, max_per_second: 0 }, has_authorization: false }
+function setup(options: { language?: Language; user?: typeof admin; status?: number; provider?: 'gmail' | 'ses'; gmailAvailable?: boolean; malformed?: boolean; readiness?: ConnectorStatus; empty?: boolean; total?: number } = {}) {
+  const row: EmailConnector = { id, provider: options.provider || 'ses', sender: 'onboarding@vopak.com', region: options.provider === 'gmail' ? '' : 'eu-west-1', enabled: false, default: false, per_minute: 30, per_day: 1500, generation: 1, failure_count: 0, last_error: '', readiness: { status: options.readiness || 'ready', code: options.readiness || 'ready', quota_known: false, remaining_24_hours: 0, max_per_second: 0 }, has_authorization: false }
   const fetcher = vi.fn(async (path: string, init?: RequestInit) => {
-    if (path.startsWith(emailConnectorsPath + '?')) return Response.json({ items: [row], total: 1, offset: 0, limit: 20, gmail_authorization_available: options.gmailAvailable !== false, gmail_callback_url: 'https://app.test/callback', gmail_scopes: ['https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.settings.basic'] })
+    if (path.startsWith(emailConnectorsPath + '?')) return Response.json({ items: options.empty ? [] : [row], total: options.empty ? 0 : options.total || 1, offset: Number(new URL(path, 'https://app.test').searchParams.get('offset') || 0), limit: 20, gmail_authorization_available: options.gmailAvailable !== false, gmail_callback_url: 'https://app.test/callback', gmail_scopes: ['https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.settings.basic'] })
     if ((init?.method || 'GET') === 'GET') return Response.json({ ...row, generation: row.generation + 1 })
     if (options.status) return Response.json({ error: 'PRIVATE PROVIDER DETAILS' }, { status: options.status })
     if (options.malformed) return Response.json({ status: 'PRIVATE INVALID RESPONSE' })
@@ -120,4 +120,55 @@ it('has all locale keys and preserves edited fields through Arabic RTL changes',
 })
 it.each(['dark', 'light'])('renders connector management in %s appearance', async (appearance) => {
   localStorage.setItem('gwf.appearance', appearance); setup(); await loaded(); expect(screen.getByRole('table', { name: en.emailConnectorsTitle })).toBeTruthy()
+})
+
+it('keeps sender addresses on one line, room for actions and no single-page pagination', async () => {
+  setup(); await loaded()
+  expect(getComputedStyle(screen.getByText('onboarding@vopak.com')).whiteSpace).toBe('nowrap')
+  const table = screen.getByRole('table', { name: en.emailConnectorsTitle })
+  expect(table.querySelectorAll('th')).toHaveLength(4)
+  expect(getComputedStyle(table.querySelector('th:last-child')!).minWidth).toBe('224px')
+  expect(screen.queryByRole('navigation')).toBeNull()
+  expect(screen.getByText(en.emailDisabled)).toBeTruthy()
+})
+it.each([['configured', 'emailConfigured'], ['authentication_failed', 'emailAuthenticationFailed']] as const)('distinguishes %s readiness from disabled configuration', async (readiness, key) => {
+  setup({ readiness }); await loaded()
+  expect(screen.getByText(en[key])).toBeTruthy(); expect(screen.getByText(en.emailDisabled)).toBeTruthy()
+  if (readiness === 'authentication_failed') expect(screen.getByText(en.nmState_failed)).toBeTruthy()
+})
+it('explains empty connector configuration and preserves the missing Gmail warning', async () => {
+  setup({ empty: true, gmailAvailable: false }); await screen.findByText(en.emailEmptyHelp)
+  expect(screen.getByText(en.emailGmailSetup)).toBeTruthy(); expect(screen.queryByRole('navigation')).toBeNull()
+  expect(screen.getByRole('button', { name: en.emailAddSES })).toBeTruthy()
+})
+it('keeps connector pagination for multiple pages', async () => {
+  const { fetcher } = setup({ total: 21 }); await loaded()
+  await userEvent.click(within(screen.getByRole('navigation', { name: en.emailConnectorsTitle })).getByRole('button', { name: resources.en.common.nextPage }))
+  await waitFor(() => expect(fetcher.mock.calls.some(([path]) => path.includes('offset=20'))).toBe(true))
+})
+it('uses full-width, wrapping labels for translated sending-limit fields', async () => {
+  setup({ language: 'fr' }); await loaded(); await userEvent.click(screen.getByRole('button', { name: resources.fr.admin.emailAddSES }))
+  const dialog = screen.getByRole('dialog')
+  for (const key of ['emailPerMinute', 'emailPerDay'] as const) {
+    const input = within(dialog).getByLabelText(resources.fr.admin[key] + ' *')
+    const field = input.closest('.MuiFormControl-root')!
+    expect(getComputedStyle(field.querySelector('label')!).whiteSpace).toBe('normal')
+    expect(getComputedStyle(field.querySelector('label')!).position).toBe('static')
+    expect(input.getAttribute('min')).toBe('1')
+  }
+})
+
+it('opens compact connector actions with the keyboard in Arabic RTL', async () => {
+  vi.stubGlobal('matchMedia', vi.fn((query: string) => ({ matches: query.includes('max-width:599'), media: query, onchange: null, addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn() })))
+  setup({ language: 'ar', provider: 'gmail', gmailAvailable: false }); await loaded()
+  expect(screen.getByRole('columnheader', { name: resources.ar.auth.actions })).toBeTruthy()
+  const button = screen.getByRole('button', { name: resources.ar.admin.emailConnectorActions.replace('{{sender}}', 'onboarding@vopak.com') })
+  button.focus(); await userEvent.keyboard('{Enter}')
+  const menu = await screen.findByRole('menu')
+  expect(document.documentElement.dir).toBe('rtl')
+  expect(within(menu).getByRole('menuitem', { name: resources.ar.admin.emailAuthorize }).getAttribute('aria-disabled')).toBe('true')
+  await userEvent.keyboard('{Enter}')
+  await screen.findByRole('dialog')
+  expect(screen.queryByRole('menu')).toBeNull()
+  expect(screen.getByText(resources.ar.admin.emailImmutableSender)).toBeTruthy()
 })

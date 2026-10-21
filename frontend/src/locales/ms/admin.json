@@ -275,5 +275,16 @@
   "nmCode_lease_expired": "Pajakan pekerja tamat; periksa kemungkinan penghantaran",
   "nmCode_adapter_unavailable": "Penyesuai penghantaran tidak tersedia",
   "nmCode_invalid_result": "Hasil penyedia tidak sah; pemeriksaan diperlukan",
-  "nmEmpty": "Tiada rekod ditemui"
+  "nmEmpty": "Tiada rekod ditemui",
+  "nmPagination": "Penomboran halaman pemberitahuan",
+  "emailEmptyHelp": "Tambah penyambung Gmail atau Amazon SES untuk mengkonfigurasi pengirim. Ujian sambungan tidak menghantar e-mel.",
+  "nmWorkflowStep": "Langkah {{current}} daripada {{total}} · {{title}}",
+  "nmRecipientsEmpty": "Tiada penerima yang sepadan. Laraskan penapis atau urus jemputan dalam Akses Pengguna.",
+  "nmSelectionLimit": "Had kelompok dicapai. Nyahpilih seorang penerima sebelum menambah penerima lain.",
+  "nmHistoryEmpty": "Tiada pemberitahuan yang sepadan. Kelompok yang disahkan dipaparkan di sini sebagai beratur; penghantaran sebenar dinyahdayakan.",
+  "nmOnboardingEmpty": "Tiada sasaran diketahui yang sepadan dengan paparan ini. Cuba kumpulan lain atau laraskan carian.",
+  "nmFirstLoginLabel": "Log masuk pertama yang diperhatikan",
+  "nmLastLoginLabel": "Log masuk terakhir yang diperhatikan",
+  "emailConnectorActions": "Tindakan untuk {{sender}}",
+  "nmManage": "Urus"
 }

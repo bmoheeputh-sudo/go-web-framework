@@ -275,5 +275,16 @@
   "nmCode_lease_expired": "Reserva do executor expirou; inspecione possível envio",
   "nmCode_adapter_unavailable": "Adaptador de envio indisponível",
   "nmCode_invalid_result": "Resultado inválido do provedor; inspeção necessária",
-  "nmEmpty": "Nenhum registro encontrado"
+  "nmEmpty": "Nenhum registro encontrado",
+  "nmPagination": "Paginação de notificações",
+  "emailEmptyHelp": "Adicione um conector do Gmail ou Amazon SES para configurar um remetente. Os testes de conexão não enviam e-mails.",
+  "nmWorkflowStep": "Etapa {{current}} de {{total}} · {{title}}",
+  "nmRecipientsEmpty": "Nenhum destinatário correspondente. Ajuste os filtros ou gerencie convites em Acesso de usuários.",
+  "nmSelectionLimit": "Limite do lote atingido. Desmarque um destinatário antes de adicionar outro.",
+  "nmHistoryEmpty": "Nenhuma notificação correspondente. Os lotes confirmados aparecem aqui na fila; o envio real está desativado.",
+  "nmOnboardingEmpty": "Nenhum destinatário conhecido corresponde a esta visualização. Tente outro grupo ou ajuste a busca.",
+  "nmFirstLoginLabel": "Primeiro login observado",
+  "nmLastLoginLabel": "Último login observado",
+  "emailConnectorActions": "Ações para {{sender}}",
+  "nmManage": "Gerenciar"
 }

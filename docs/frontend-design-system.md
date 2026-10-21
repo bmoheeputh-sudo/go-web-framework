@@ -36,6 +36,10 @@ Keep tables dense enough for ordinary desktop widths and ensure the action colum
 
 Core pages now use these primitives for section headings, tables, statuses, and details. Future modules should use them by default; add a new primitive only when an existing one cannot express the needed structure.
 
+For dense administration forms, the opt-in `administrationFieldSx` keeps labels above outlined inputs so translated labels can wrap. Pair `administrationFilterSx` with a form to stack filters on phones and align them in a grid on larger screens. `administrationEmailSx` keeps mailbox values on one line inside a horizontally scrollable table; detail views retain complete values and copy controls.
+
+`CompactTable` accepts optional `minColumnWidths` to preserve readable column headings and normal word wrapping. Keep action columns visible and use a compact MUI action menu when multiple actions would obscure the row on phones. `StatusBadge` accepts `wrap` for complete translated statuses; `SectionCard` accepts `headingLevel="h3"` for nested workflow sections. These options preserve existing defaults for other screens.
+
 ## Extension checks
 
 Navigation stays in the existing React Router registry. New module pages must declare required permissions, use existing query and mutation hooks, and keep backend RBAC authoritative. Reuse namespace translations for all 12 languages and test both light/dark and Arabic RTL. Never store secrets or activation evidence in browser storage.

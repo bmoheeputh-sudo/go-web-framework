@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Alert, Button, MenuItem, Stack, TableCell, TableRow, TextField, Typography } from '@mui/material'
+import { Alert, Box, Button, MenuItem, Stack, TableCell, TableRow, TextField, Typography } from '@mui/material'
 import { useBeforeUnload, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { AuthConfigurationError } from '../api/authConfiguration'
@@ -16,14 +16,14 @@ import SectionCard from '../components/common/SectionCard'
 import StatusBadge from '../components/common/StatusBadge'
 import TechnicalValue from '../components/common/TechnicalValue'
 import TwoColumnKeyValue from '../components/common/TwoColumnKeyValue'
-import { typographyRoles } from '../design/theme'
+import { administrationEmailSx, administrationFieldSx, administrationFilterSx, typographyRoles } from '../design/theme'
 import { formatDate } from '../i18n'
 import { notificationDiagnostic, notificationErrorKey, queueStates, queueTones, validNotificationReason } from './notificationManagementState'
 import { NotificationPager } from './NotificationControls'
 
 const drafts = new WeakMap<QueryCache, { id: string; reason: string; cancelling: boolean; blocked: boolean }>()
 export default function NotificationHistory() {
-  const { t, i18n } = useTranslation(['admin', 'common'])
+  const { t, i18n } = useTranslation(['admin', 'common', 'auth'])
   const [params, setParams] = useSearchParams()
   const cache = useQueryCache(), session = useSession(), notify = useNotifications()
   const saved = drafts.get(cache)
@@ -77,38 +77,37 @@ export default function NotificationHistory() {
     <PageTools busy={loading || busy} error={error} onRefresh={refresh} />
     <SectionCard title={t('nmHistory')} description={t('nmAcceptanceHelp')}>
       <Stack spacing={2}>
-        <Stack component="form" direction={{ xs: 'column', md: 'row' }} spacing={2} onSubmit={(event) => { event.preventDefault(); if (receiptInput && !notificationUUID.test(receiptInput)) { setError('nmInvalidReceipt'); return } setLoading(true); setRevision((n) => n + 1); setOffset(0); setParams((old) => { const p = new URLSearchParams(old); if (receiptInput) p.set('notification_request', receiptInput); else p.delete('notification_request'); return p }, { preventScrollReset: true }) }}>
-          <TextField label={t('nmRequestID')} value={receiptInput} onChange={(event) => setReceiptInput(event.target.value)} /><Button disabled={loading || busy} type="submit">{t('nmInspectResult')}</Button>
+        <Box component="form" sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', md: 'minmax(0, 1fr) auto auto' }, gap: 2, alignItems: 'end' }} onSubmit={(event) => { event.preventDefault(); if (receiptInput && !notificationUUID.test(receiptInput)) { setError('nmInvalidReceipt'); return } setLoading(true); setRevision((n) => n + 1); setOffset(0); setParams((old) => { const p = new URLSearchParams(old); if (receiptInput) p.set('notification_request', receiptInput); else p.delete('notification_request'); return p }, { preventScrollReset: true }) }}>
+          <TextField sx={administrationFieldSx} label={t('nmRequestID')} value={receiptInput} onChange={(event) => setReceiptInput(event.target.value)} /><Button disabled={loading || busy} type="submit">{t('nmInspectResult')}</Button>
           {receiptID && <Button disabled={busy} onClick={() => { setReceiptInput(''); setLoading(true); setRevision((n) => n + 1); setOffset(0); setParams((old) => { const p = new URLSearchParams(old); p.delete('notification_request'); return p }, { preventScrollReset: true }) }}>{t('nmAllHistory')}</Button>}
-        </Stack>
+        </Box>
         {receipt && <TwoColumnKeyValue items={[{ label: t('nmRequestID'), value: <TechnicalValue label={t('nmRequestID')} value={receipt.id} /> }, { label: t('nmReason'), value: receipt.reason }, { label: t('nmConfirmedJobs'), value: receipt.job_count }]} />}
-        {!receiptID && <Stack component="form" direction={{ xs: 'column', sm: 'row' }} spacing={2} onSubmit={(event) => { event.preventDefault(); setLoading(true); setRevision((n) => n + 1); setQuery(search); setOffset(0) }}><TextField label={t('nmSearch')} value={search} onChange={(event) => setSearch(event.target.value)} /><TextField select label={t('nmQueueStatus')} value={status} onChange={(event) => { setLoading(true); setStatus(event.target.value); setOffset(0) }}><MenuItem value="">{t('nmAllStates')}</MenuItem>{queueStates.map((state) => <MenuItem key={state} value={state}>{t(`nmState_${state}`)}</MenuItem>)}</TextField><Button type="submit" disabled={loading}>{t('nmApplyFilters')}</Button></Stack>}
-        <CompactTable label={t('nmHistory')} headers={[t('nmEmployee'), t('nmType'), t('nmConnector'), t('nmRequestedBy'), t('nmQueueStatus'), t('nmCreated'), t('actions')]} empty={!page?.items.length} emptyMessage={t('nmEmpty')} stickyActions minWidth={780}>
+        {!receiptID && <Box component="form" sx={administrationFilterSx} onSubmit={(event) => { event.preventDefault(); setLoading(true); setRevision((n) => n + 1); setQuery(search); setOffset(0) }}><TextField sx={administrationFieldSx} label={t('nmSearch')} value={search} onChange={(event) => setSearch(event.target.value)} /><TextField sx={administrationFieldSx} select label={t('nmQueueStatus')} value={status} onChange={(event) => { setLoading(true); setStatus(event.target.value); setOffset(0) }}><MenuItem value="">{t('nmAllStates')}</MenuItem>{queueStates.map((state) => <MenuItem key={state} value={state}>{t(`nmState_${state}`)}</MenuItem>)}</TextField><Button type="submit" disabled={loading}>{t('nmApplyFilters')}</Button></Box>}
+        <CompactTable label={t('nmHistory')} headers={[t('nmEmployee'), t('nmType'), t('nmRequestedBy'), t('nmQueueStatus'), t('nmCreated'), t('auth:actions')]} empty={!page?.items.length && !loading} emptyMessage={t('nmHistoryEmpty')} stickyActions minWidth={900} minColumnWidths={[240, 140, 140, 180, 144, 112]}>
           {page?.items.map((row) => <TableRow key={row.id}>
-            <TableCell><Typography variant={typographyRoles.primaryValue}>{row.display_name}</Typography><bdi>{row.recipient}</bdi></TableCell>
-            <TableCell>{t(row.type === 'invitation' ? 'nmInvitationType' : 'nmReminderType')}</TableCell>
-            <TableCell>{row.provider === 'gmail' ? 'Gmail' : 'Amazon SES'}<Typography variant={typographyRoles.supportingText}><bdi>{row.sender}</bdi></Typography></TableCell>
+            <TableCell><Typography variant={typographyRoles.primaryValue}>{row.display_name}</Typography><Typography component="bdi" variant={typographyRoles.supportingText} sx={administrationEmailSx}>{row.recipient}</Typography></TableCell>
+            <TableCell><Typography variant={typographyRoles.supportingText}>{t(row.type === 'invitation' ? 'nmInvitationType' : 'nmReminderType')}</Typography><Typography variant={typographyRoles.supportingText} color="text.secondary">{row.provider === 'gmail' ? 'Gmail' : 'Amazon SES'}</Typography></TableCell>
             <TableCell>{row.actor_name || t('nmAdministrator')}</TableCell>
-            <TableCell><StatusBadge label={t(`nmState_${row.status}`)} tone={queueTones[row.status]} /><Typography variant={typographyRoles.supportingText}>{t(`nmAttempt_${row.attempt_outcome || 'none'}`)}</Typography></TableCell>
-            <TableCell>{formatDate(row.created_at, language)}</TableCell>
-            <TableCell><Button disabled={busy} onClick={() => { setDetail(null); setDetailID(row.id) }} aria-label={t('nmViewRecipient', { email: row.recipient })}>{t('nmView')}</Button></TableCell>
+            <TableCell><StatusBadge label={t(`nmState_${row.status}`)} tone={queueTones[row.status]} wrap /><Typography variant={typographyRoles.detailLabel} color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>{t(`nmAttempt_${row.attempt_outcome || 'none'}`)}</Typography></TableCell>
+            <TableCell><Typography component="time" dateTime={row.created_at} variant={typographyRoles.supportingText}>{formatDate(row.created_at, language)}</Typography></TableCell>
+            <TableCell><Button size="small" variant="outlined" disabled={busy} onClick={() => { setDetail(null); setDetailID(row.id) }} aria-label={t('nmViewRecipient', { email: row.recipient })}>{t('nmView')}</Button></TableCell>
           </TableRow>)}
         </CompactTable>
-        <NotificationPager offset={offset} total={page?.total || 0} busy={loading || busy} onChange={(value) => { setLoading(true); setOffset(value) }} />
+        <NotificationPager label={t('nmHistory')} offset={offset} total={page?.total || 0} busy={loading || busy} onChange={(value) => { setLoading(true); setOffset(value) }} />
       </Stack>
     </SectionCard>
     <DetailDrawer open={Boolean(detailID)} title={t('nmEmailDetails')} onClose={close} actions={<><Button disabled={busy} onClick={close}>{t('common:close')}</Button>{blocked ? <Button disabled={busy} onClick={() => void inspect()}>{t('nmInspectResult')}</Button> : canCancel && <Button color="error" disabled={busy || cancelling && !validNotificationReason(reason)} onClick={() => { if (cancelling) void cancel(); else setCancelling(true) }}>{t(cancelling ? 'nmConfirmCancel' : 'nmCancelJob')}</Button>}</>}>
       <Stack spacing={2}>
         {detail && <>
-          <StatusBadge label={t(`nmState_${detail.item.status}`)} tone={queueTones[detail.item.status]} />
-          <TwoColumnKeyValue items={[{ label: t('nmTo'), value: <bdi>{detail.item.recipient}</bdi> }, { label: t('nmFrom'), value: <bdi>{detail.item.sender}</bdi> }, { label: t('nmCreated'), value: formatDate(detail.item.created_at, language) }, { label: t('nmDiagnostic'), value: detail.item.disposition ? t(notificationDiagnostic(detail.item.disposition)) : t('nmNoDiagnostic') }, { label: t('nmRequestedBy'), value: detail.item.actor_name || t('nmAdministrator') }]} />
+          <StatusBadge label={t(`nmState_${detail.item.status}`)} tone={queueTones[detail.item.status]} wrap />
+          <TwoColumnKeyValue items={[{ label: t('nmTo'), value: <TechnicalValue label={t('nmTo')} value={detail.item.recipient} /> }, { label: t('nmFrom'), value: <TechnicalValue label={t('nmFrom')} value={detail.item.sender} /> }, { label: t('nmCreated'), value: formatDate(detail.item.created_at, language) }, { label: t('nmDiagnostic'), value: detail.item.disposition ? t(notificationDiagnostic(detail.item.disposition)) : t('nmNoDiagnostic') }, { label: t('nmRequestedBy'), value: detail.item.actor_name || t('nmAdministrator') }]} />
           <TechnicalValue label={t('nmJobID')} value={detail.item.id} /><TechnicalValue label={t('nmRequestID')} value={detail.item.request_id} /><TechnicalValue label={t('nmAdministratorID')} value={detail.item.actor_id} /><TechnicalValue label={t('nmConnectorID')} value={detail.item.connector_id} /><TechnicalValue label={t('nmTargetReference')} value={detail.item.target} />
           <Alert severity={detail.item.status === 'needs_inspection' ? 'warning' : 'info'}>{t(detail.item.status === 'needs_inspection' ? 'nmNeedsInspectionHelp' : 'nmAcceptanceHelp')}</Alert>
-          <SectionCard title={t('nmAttempts')}>
+          <SectionCard title={t('nmAttempts')} headingLevel="h3">
             {!detail.attempts.length && <Typography>{t('nmAttempt_none')}</Typography>}
             {detail.attempts.map((attempt) => <Stack key={attempt.number} spacing={1} sx={{ mb: 2 }}><Typography>{t(`nmAttempt_${attempt.outcome}`)}</Typography><Typography variant="body2">{formatDate(attempt.started_at, language)}</Typography>{attempt.code && <Typography>{t(notificationDiagnostic(attempt.code))}</Typography>}{attempt.provider_message_id && <TechnicalValue label={t('nmProviderMessageID')} value={attempt.provider_message_id} />}</Stack>)}
           </SectionCard>
-          {cancelling && <><Alert severity="warning">{t('nmCancelHelp')}</Alert><TextField required multiline minRows={2} label={t('nmReason')} value={reason} onChange={(event) => setReason(event.target.value)} /></>}
+          {cancelling && <><Alert severity="warning">{t('nmCancelHelp')}</Alert><TextField sx={administrationFieldSx} required multiline minRows={2} label={t('nmReason')} value={reason} onChange={(event) => setReason(event.target.value)} /></>}
         </>}
         {error && <Alert severity="error">{t(error)}</Alert>}
         {discard && <Alert severity="warning" action={<Button onClick={clear}>{t('nmDiscard')}</Button>}>{t('nmUnsaved')}</Alert>}
