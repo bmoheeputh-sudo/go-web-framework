@@ -175,60 +175,71 @@ func (r *AccessPolicyRepository) CreateInvitation(ctx context.Context, expected 
 		if err != nil {
 			return err
 		}
-		// This checks policy domains only, not proof of mailbox ownership. That proof is required by a future claim operation.
-		if !policyEmailAllowed(b.policy.AllowedEmailDomains, key, true) {
-			return ErrInvalid
-		}
-		var now time.Time
-		if err = tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
-			return err
-		}
-		expires := now.Add(7 * 24 * time.Hour)
-		if input.ExpiresAt != nil {
-			expires = *input.ExpiresAt
-		}
-		if !expires.After(now) || expires.After(now.Add(30*24*time.Hour)) {
-			return ErrInvalid
-		}
-		// Retire elapsed pending records and audit each transition in the same transaction.
-		rows, err := tx.Query(ctx, `UPDATE framework.oidc_invitations SET status='expired',generation=generation+1,updated_by=$5,reason=$6
-   WHERE deployment_id=$1 AND environment=$2 AND revision_id=$3 AND lower(email_key COLLATE "C")=lower($4 COLLATE "C")
-   AND status='pending' AND expires_at<=clock_timestamp() RETURNING `+invitationColumns, r.scope.DeploymentID, r.scope.Environment, b.revision, key, actor.ID, input.Reason)
-		if err != nil {
-			return err
-		}
-		expired := []Invitation{}
-		for rows.Next() {
-			i, e := scanInvitation(rows, b)
-			if e != nil {
-				rows.Close()
-				return e
-			}
-			expired = append(expired, i)
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return err
-		}
-		for _, i := range expired {
-			if err = invitationAudit(ctx, tx, actor, i, "oidc_access.invitation_expired"); err != nil {
-				return err
-			}
-		}
-		result, err = scanInvitation(tx.QueryRow(ctx, `INSERT INTO framework.oidc_invitations
-   (deployment_id,environment,issuer,revision_id,revision_generation,activation_generation,client_id,email,email_key,display_name,expires_at,created_by,updated_by,reason)
-   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12,$13) RETURNING `+invitationColumns,
-			r.scope.DeploymentID, r.scope.Environment, b.issuer, b.revision, b.revisionGeneration, b.activationGeneration, b.client, input.Email, key, input.DisplayName, expires, actor.ID, input.Reason), b)
-		if err != nil {
-			return err
-		}
-		return invitationAudit(ctx, tx, actor, result, "oidc_access.invitation_created")
+		result, err = r.createInvitationTx(ctx, tx, actor, b, input, key, "manual", "")
+		return err
 	})
 	if err != nil {
 		return Invitation{}, err
 	}
 	return result, nil
+}
+
+func (r *AccessPolicyRepository) createInvitationTx(ctx context.Context, tx pgx.Tx, actor access.User, b invitationBinding, input InvitationInput, key, source, importID string) (Invitation, error) {
+	var result Invitation
+	var err error
+	var importRef *string
+	if importID != "" {
+		importRef = &importID
+	}
+	// This checks policy domains only, not proof of mailbox ownership. That proof is required by a future claim operation.
+	if !policyEmailAllowed(b.policy.AllowedEmailDomains, key, true) {
+		return Invitation{}, ErrInvalid
+	}
+	var now time.Time
+	if err = tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		return Invitation{}, err
+	}
+	expires := now.Add(7 * 24 * time.Hour)
+	if input.ExpiresAt != nil {
+		expires = *input.ExpiresAt
+	}
+	if !expires.After(now) || expires.After(now.Add(30*24*time.Hour)) {
+		return Invitation{}, ErrInvalid
+	}
+	// Retire elapsed pending records and audit each transition in the same transaction.
+	rows, err := tx.Query(ctx, `UPDATE framework.oidc_invitations SET status='expired',generation=generation+1,updated_by=$5,reason=$6
+   WHERE deployment_id=$1 AND environment=$2 AND revision_id=$3 AND lower(email_key COLLATE "C")=lower($4 COLLATE "C")
+   AND status='pending' AND expires_at<=clock_timestamp() RETURNING `+invitationColumns, r.scope.DeploymentID, r.scope.Environment, b.revision, key, actor.ID, input.Reason)
+	if err != nil {
+		return Invitation{}, err
+	}
+	expired := []Invitation{}
+	for rows.Next() {
+		i, e := scanInvitation(rows, b)
+		if e != nil {
+			rows.Close()
+			return Invitation{}, e
+		}
+		expired = append(expired, i)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return Invitation{}, err
+	}
+	for _, i := range expired {
+		if err = invitationAudit(ctx, tx, actor, i, "oidc_access.invitation_expired"); err != nil {
+			return Invitation{}, err
+		}
+	}
+	result, err = scanInvitation(tx.QueryRow(ctx, `INSERT INTO framework.oidc_invitations
+   (deployment_id,environment,issuer,revision_id,revision_generation,activation_generation,client_id,email,email_key,display_name,expires_at,created_by,updated_by,reason,source,import_id)
+   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12,$13,$14,$15) RETURNING `+invitationColumns,
+		r.scope.DeploymentID, r.scope.Environment, b.issuer, b.revision, b.revisionGeneration, b.activationGeneration, b.client, input.Email, key, input.DisplayName, expires, actor.ID, input.Reason, source, importRef), b)
+	if err != nil {
+		return Invitation{}, err
+	}
+	return result, invitationAudit(ctx, tx, actor, result, "oidc_access.invitation_created")
 }
 
 func (r *AccessPolicyRepository) ReadInvitation(ctx context.Context, id string) (Invitation, error) {
@@ -246,8 +257,18 @@ func (r *AccessPolicyRepository) ReadInvitation(ctx context.Context, id string) 
 	})
 	return result, err
 }
-func (r *AccessPolicyRepository) ListInvitations(ctx context.Context, search, status string, offset, limit int) (Invitations, error) {
+func (r *AccessPolicyRepository) ListInvitations(ctx context.Context, search, status string, offset, limit int, importIDs ...string) (Invitations, error) {
 	result := Invitations{Items: []Invitation{}, Offset: offset, Limit: limit}
+	var importID *string
+	if len(importIDs) > 1 {
+		return result, ErrInvalid
+	}
+	if len(importIDs) == 1 && importIDs[0] != "" {
+		if !validID(importIDs[0]) {
+			return result, ErrInvalid
+		}
+		importID = &importIDs[0]
+	}
 	if !utf8.ValidString(search) || len(search) > 200 || strings.ContainsFunc(search, unicode.IsControl) || offset < 0 || offset > 100000 || limit < 1 || limit > 100 || (status != "" && status != "pending" && status != "claimed" && status != "revoked" && status != "expired") {
 		return result, ErrInvalid
 	}
@@ -263,11 +284,11 @@ func (r *AccessPolicyRepository) ListInvitations(ctx context.Context, search, st
 			return err
 		}
 		where := ` WHERE deployment_id=$1 AND environment=$2 AND strpos(lower(email||' '||display_name),lower($3))>0
-   AND ($4='' OR (CASE WHEN status='pending' AND expires_at<=$5 THEN 'expired' ELSE status END)=$4)`
-		if err = tx.QueryRow(ctx, `SELECT count(*) FROM framework.oidc_invitations`+where, r.scope.DeploymentID, r.scope.Environment, search, status, now).Scan(&result.Total); err != nil {
+   AND ($4='' OR (CASE WHEN status='pending' AND expires_at<=$5 THEN 'expired' ELSE status END)=$4) AND ($8::uuid IS NULL OR import_id=$8)`
+		if err = tx.QueryRow(ctx, `SELECT count(*) FROM framework.oidc_invitations`+strings.ReplaceAll(where, "$8", "$6"), r.scope.DeploymentID, r.scope.Environment, search, status, now, importID).Scan(&result.Total); err != nil {
 			return err
 		}
-		rows, err := tx.Query(ctx, `SELECT `+strings.ReplaceAll(invitationColumns, "clock_timestamp()", "$5")+` FROM framework.oidc_invitations`+where+` ORDER BY created_at DESC,id LIMIT $6 OFFSET $7`, r.scope.DeploymentID, r.scope.Environment, search, status, now, limit, offset)
+		rows, err := tx.Query(ctx, `SELECT `+strings.ReplaceAll(invitationColumns, "clock_timestamp()", "$5")+` FROM framework.oidc_invitations`+where+` ORDER BY created_at DESC,id LIMIT $6 OFFSET $7`, r.scope.DeploymentID, r.scope.Environment, search, status, now, limit, offset, importID)
 		if err != nil {
 			return err
 		}

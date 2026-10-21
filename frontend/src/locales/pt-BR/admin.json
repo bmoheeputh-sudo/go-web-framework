@@ -86,5 +86,6 @@
   "permissionAssignment": "{{permission}} — {{role}}",
   "permissionExampleRead": "Ler o módulo de exemplo",
   "actionPermissionRegistered": "Permissão registrada",
-  "actionPermissionChanged": "Permissão de papel alterada"
+  "actionPermissionChanged": "Permissão de papel alterada",
+  "actionInvitationImported": "Convites CSV importados"
 }

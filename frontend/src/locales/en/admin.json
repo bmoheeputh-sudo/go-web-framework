@@ -86,5 +86,6 @@
   "permissionAssignment": "{{permission}} — {{role}}",
   "permissionExampleRead": "Read the example module",
   "actionPermissionRegistered": "Permission registered",
-  "actionPermissionChanged": "Role permission changed"
+  "actionPermissionChanged": "Role permission changed",
+  "actionInvitationImported": "CSV invitations imported"
 }

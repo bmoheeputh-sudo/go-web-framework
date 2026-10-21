@@ -86,5 +86,6 @@
   "permissionAssignment": "{{permission}} — {{role}}",
   "permissionExampleRead": "De voorbeeldmodule lezen",
   "actionPermissionRegistered": "Recht geregistreerd",
-  "actionPermissionChanged": "Rolrecht gewijzigd"
+  "actionPermissionChanged": "Rolrecht gewijzigd",
+  "actionInvitationImported": "CSV-uitnodigingen geïmporteerd"
 }

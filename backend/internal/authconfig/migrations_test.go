@@ -52,6 +52,12 @@ func TestOIDCInvitationApprovalMigrationRollbackPolicy(t *testing.T) {
 	}
 }
 
+func TestOIDCInvitationImportMigrationRollbackPolicy(t *testing.T) {
+	for _, name := range []string{"empty", "populated"} {
+		t.Run(name, func(t *testing.T) { testAuthConfigurationRollbackPolicy(t, name == "populated", 11) })
+	}
+}
+
 func testAuthConfigurationRollbackPolicy(t *testing.T, populated bool, targetVersion int) {
 	t.Helper()
 	cli, err := exec.LookPath("migrate")
@@ -228,6 +234,16 @@ func testAuthConfigurationRollbackPolicy(t *testing.T, populated bool, targetVer
 			t.Fatal("invitation approval migration changed existing authentication state", err)
 		}
 	}
+	if targetVersion >= 11 {
+		oldSnapshot := snapshot()
+		if err := run("up", "1"); err != nil {
+			t.Fatal("isolated version 11 migration failed", err)
+		}
+		if err := pool.QueryRow(ctx, `SELECT version,dirty,'public.schema_migrations'::regclass::oid FROM public.schema_migrations`).Scan(&version, &dirty, &after); err != nil || version != 11 || dirty || after != journal || snapshot() != oldSnapshot {
+			t.Fatal("import migration changed existing authentication history", err)
+		}
+	}
+
 	before := snapshot()
 	for _, args := range [][]string{{"down", "1"}, {"down"}, {"goto", "4"}, {"force", "4"}, {"drop", "-f"}, {"up", "-1"}} {
 		if err = run(args...); err == nil {

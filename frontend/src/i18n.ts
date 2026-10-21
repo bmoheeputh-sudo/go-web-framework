@@ -76,6 +76,7 @@ export const permissionKeys: Record<string, string> = {
   'admin.manage': 'permissionAdmin', 'accounts.read': 'permissionRead', 'accounts.write': 'permissionWrite', 'example.read': 'permissionExampleRead',
 }
 export const actionKeys: Record<string, string> = {
+  'oidc_access.invitation_imported': 'actionInvitationImported',
   'admin.bootstrap': 'actionBootstrap', 'user.roles': 'actionRoles', 'user.active': 'actionActive',
   'user.accounts': 'actionAssociations', 'account.save': 'actionSave', 'account.rename': 'actionRename', 'permission.register': 'actionPermissionRegistered', 'role.permission': 'actionPermissionChanged',
 }

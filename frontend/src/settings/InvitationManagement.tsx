@@ -17,6 +17,7 @@ import TwoColumnKeyValue from '../components/common/TwoColumnKeyValue'
 import { typographyRoles } from '../design/theme'
 import { formatDate, formatNumber } from '../i18n'
 import { useNotifications } from '../notifications/notifications'
+import CSVInvitationImport from './CSVInvitationImport'
 
 const statuses: InvitationStatus[] = ['pending', 'claimed', 'revoked', 'expired']
 const tone = { pending: 'info', claimed: 'success', revoked: 'error', expired: 'neutral' } as const
@@ -40,6 +41,7 @@ export default function InvitationManagement({ mode, refresh, disabled, onChange
   const [restored] = useState(() => invitationDrafts.get(cache))
   const [writing, setWriting] = useState(false)
   const [now, setNow] = useState(() => Date.now())
+  const [importID, setImportID] = useState('')
   const [page, setPage] = useState<InvitationPage | null>(null)
   const [search, setSearch] = useState(''), [status, setStatus] = useState(''), [offset, setOffset] = useState(0), [reload, setReload] = useState(0)
   const [loading, setLoading] = useState(true), [readError, setReadError] = useState('')
@@ -56,7 +58,7 @@ export default function InvitationManagement({ mode, refresh, disabled, onChange
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; detailRequest.current?.abort() } }, [])
   useEffect(() => {
     const controller = new AbortController()
-    void listInvitations(search, status, offset, controller.signal).then((next) => {
+    void listInvitations(search, status, offset, controller.signal, importID).then((next) => {
       if (!controller.signal.aborted) { setPage(next); setReadError('') }
     }).catch((failure: unknown) => {
       if (controller.signal.aborted) return
@@ -65,7 +67,7 @@ export default function InvitationManagement({ mode, refresh, disabled, onChange
       if (failure instanceof AuthConfigurationError && failure.status === 403) { setReadError('common:accessDenied'); setPage(null); refreshAccess() }
     }).finally(() => { if (!controller.signal.aborted) setLoading(false) })
     return () => controller.abort()
-  }, [search, status, offset, refresh, reload, expire, refreshAccess])
+  }, [search, status, offset, importID, refresh, reload, expire, refreshAccess])
   // Re-evaluate local expiry without polling or making another write.
   useEffect(() => {
     const items = [...(page?.items || []), ...(detail ? [detail] : []), ...(workflow?.kind === 'revoke' ? [workflow.item] : [])]
@@ -104,7 +106,7 @@ export default function InvitationManagement({ mode, refresh, disabled, onChange
     if (!workflow || busy || uncertain || inFlight.current) return
     inFlight.current = true; setBusy(true)
     try {
-      const next = await listInvitations(search, status, offset)
+      const next = await listInvitations(search, status, offset, undefined, importID)
       const item = workflow.kind === 'revoke' ? await readInvitation(workflow.item.id) : null
       if (!mounted.current) return
       setPage(next)
@@ -130,8 +132,9 @@ export default function InvitationManagement({ mode, refresh, disabled, onChange
     finally { inFlight.current = false; if (mounted.current) { setBusy(false); setWriting(false) } }
   }
   return <SectionCard title={t('invitationsTitle')} description={t('invitationNoEmail')} busy={loading || busy}
-    actions={<Button variant="contained" disabled={blocked} onClick={() => begin('create')}>{t('invitationAddUser')}</Button>}>
+    actions={<Stack direction="row" sx={{ gap: 1, flexWrap: 'wrap' }}><Button variant="contained" disabled={blocked} onClick={() => begin('create')}>{t('invitationAddUser')}</Button><CSVInvitationImport expected={page ? expectation(page) : null} disabled={blocked} mode={mode} onImported={(id) => { setImportID(id); setSearch(''); setStatus(''); setOffset(0); refreshList(); onChanged() }} /></Stack>}>
     <Stack spacing={2}>
+      {importID && <Alert severity="info" action={<Button onClick={() => { setImportID(''); setOffset(0); refreshList() }}>{t('csvShowAll')}</Button>}>{t('csvFiltered')}</Alert>}
       <Alert severity="info">{t(mode === 'approved_users_only' ? 'invitationApprovedOnly' : 'invitationAllowAll')}</Alert>
       {readError && <Alert severity="warning">{t(readError)}</Alert>}
       {uncertain && <Alert severity="warning" role="alert">{t('invitationUncertain')}</Alert>}
@@ -190,6 +193,7 @@ export default function InvitationManagement({ mode, refresh, disabled, onChange
         <Typography component="h3" variant={typographyRoles.sectionTitle}>{t('detailConfiguration')}</Typography>
         <TwoColumnKeyValue items={[
           ...[[t('invitationID'), detail.id], [t('accessIssuer'), detail.issuer], [t('clientID'), detail.client_id], [t('revisionID'), detail.revision_id]].map(([label, value]) => ({ label, value: <TechnicalValue label={label} value={value} /> })),
+          ...(detail.import_id ? [{ label: t('csvReceiptID'), value: <TechnicalValue label={t('csvReceiptID')} value={detail.import_id} /> }] : []),
           { label: t('revisionGeneration'), value: formatNumber(detail.revision_generation, language) },
           { label: t('invitationActivation'), value: formatNumber(detail.activation_generation, language) },
         ]} />

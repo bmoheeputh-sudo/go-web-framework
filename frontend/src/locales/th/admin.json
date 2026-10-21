@@ -86,5 +86,6 @@
   "permissionAssignment": "{{permission}} — {{role}}",
   "permissionExampleRead": "อ่านโมดูลตัวอย่าง",
   "actionPermissionRegistered": "ลงทะเบียนสิทธิ์แล้ว",
-  "actionPermissionChanged": "เปลี่ยนสิทธิ์ของบทบาทแล้ว"
+  "actionPermissionChanged": "เปลี่ยนสิทธิ์ของบทบาทแล้ว",
+  "actionInvitationImported": "นำเข้าคำเชิญ CSV"
 }

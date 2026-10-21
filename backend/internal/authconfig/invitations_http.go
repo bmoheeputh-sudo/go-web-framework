@@ -3,6 +3,7 @@ package authconfig
 import (
 	"errors"
 	"net/http"
+	"net/url"
 
 	"github.com/bmoheeputh-sudo/go-web-framework/backend/internal/access"
 )
@@ -37,14 +38,22 @@ func invitationError(w http.ResponseWriter, err error) {
 // Routes reuse precisely the same authentication, administrator and Origin/JSON
 // middleware as policy management. There is intentionally no claim endpoint.
 func registerInvitationRoutes(route func(string, http.HandlerFunc), repo *AccessPolicyRepository) {
+	registerInvitationImportRoutes(route, repo)
 	base := accessPolicyPath + "/invitations"
 	route("GET "+base, func(w http.ResponseWriter, r *http.Request) {
-		search, status, offset, limit, err := accessListQuery(r.URL.RawQuery)
+		values, parseErr := url.ParseQuery(r.URL.RawQuery)
+		importID := values.Get("import_id")
+		if parseErr != nil || len(values["import_id"]) > 1 || (importID != "" && !validID(importID)) {
+			invitationError(w, ErrInvalid)
+			return
+		}
+		values.Del("import_id")
+		search, status, offset, limit, err := accessListQuery(values.Encode())
 		if err != nil {
 			invitationError(w, err)
 			return
 		}
-		result, err := repo.ListInvitations(r.Context(), search, status, offset, limit)
+		result, err := repo.ListInvitations(r.Context(), search, status, offset, limit, importID)
 		if err != nil {
 			invitationError(w, err)
 			return

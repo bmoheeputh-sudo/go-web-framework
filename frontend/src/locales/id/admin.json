@@ -86,5 +86,6 @@
   "permissionAssignment": "{{permission}} — {{role}}",
   "permissionExampleRead": "Baca modul contoh",
   "actionPermissionRegistered": "Izin didaftarkan",
-  "actionPermissionChanged": "Izin peran diubah"
+  "actionPermissionChanged": "Izin peran diubah",
+  "actionInvitationImported": "Undangan CSV diimpor"
 }

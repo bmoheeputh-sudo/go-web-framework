@@ -86,5 +86,6 @@
   "permissionAssignment": "{{permission}} — {{role}}",
   "permissionExampleRead": "قراءة الوحدة النموذجية",
   "actionPermissionRegistered": "تم تسجيل الصلاحية",
-  "actionPermissionChanged": "تم تغيير صلاحية الدور"
+  "actionPermissionChanged": "تم تغيير صلاحية الدور",
+  "actionInvitationImported": "استيراد دعوات CSV"
 }

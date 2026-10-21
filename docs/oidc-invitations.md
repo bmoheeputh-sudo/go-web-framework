@@ -4,7 +4,8 @@ Phase 10.3B provides storage and administrator-only manual-invitation APIs.
 Phase 10.3C claims eligible invitations during verified normal OIDC login, inside
 the existing admission/provisioning/session transaction. Phase 10.3D adds manual
 invitation management in Settings → Authentication → User Access. There is no public
-claim endpoint, CSV import, email delivery or SCIM integration. The supported
+claim endpoint, email delivery or SCIM integration. Phase 10.3E adds bounded CSV
+bulk invitations through the same repository and verified login claiming. The supported
 topology remains one security deployment per database because users/RBAC are global.
 
 ## Manual administration UI
@@ -31,6 +32,88 @@ automatically. Closing an edited form requires an explicit discard decision.
 Unsent drafts survive internal navigation in identity-scoped memory, without browser
 storage. Leaving during a pending write preserves the inspection-required block.
 The interface supports all twelve locales, Arabic RTL, and both appearance modes.
+
+## CSV bulk invitations (Phase 10.3E)
+
+Use Import CSV → Preview → Review import → Confirm Import → Import result in the
+Invitations section. Files may contain 500 logical data records and 1 MiB of valid
+UTF-8, including an optional BOM. Headers are exactly `email` and optionally
+`display_name`, in either order. Quoted fields and CRLF/LF are supported. Unknown
+columns, malformed quoting and invalid Unicode are rejected. Empty records are
+invalid emails. Duplicates and case variants are all excluded. Dots, plus tags and
+local-part case are preserved; mailbox equality never proves identity.
+
+All paths below are relative to `/api/admin/auth/access-policy/invitations`:
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/import/preview` | Read-only validation and signed preview |
+| POST | `/import` | Explicitly confirmed atomic import and receipt |
+| GET | `/imports/{id}` | Authoritative receipt inspection |
+| GET | `?import_id={id}` | Existing paginated list filtered to this import |
+
+CSV endpoints require verified OIDC authentication, active-user `admin.manage`,
+trusted scope and the existing same-origin/JSON middleware. Only the two CSV POST
+routes accept a larger JSON envelope: six times the CSV bound plus 32 KiB, for
+JSON escaping. The decoded CSV limit remains 1 MiB; other endpoint limits remain
+unchanged. Duplicate/unknown JSON keys and invalid surrogate escapes are rejected.
+
+Preview accepts `csv`, `expiration_days` (1–30, default 7), the four authoritative
+policy/configuration expectations, and optional `selected_rows`. It returns row
+numbers, reason codes, counts, current expectations, selected rows,
+`content_digest`, `preview_digest` and `preview_expires_at`. It writes no records.
+Existing users always require exact-identity review. Claimed history, pending
+invitations, stale bindings, disallowed domains and invalid rows cannot be selected.
+Expired pending rows can be replaced using the existing retirement/audit lifecycle.
+A stale initial expectation returns non-importable rows and current metadata for
+an explicit new preview. Selection is re-previewed before confirmation.
+
+A five-minute HMAC covers exact CSV bytes, selection, expiration, scope,
+administrator, configuration generations and eligibility classifications. Migration
+000011 adds an installation-local signing seed generated from native random UUIDs.
+Instances share it through PostgreSQL. It is never returned or audited and reuses
+no authentication credential. Runtime seed access is SELECT only; guards prohibit
+updates, deletion and truncation. Rotation needs a reviewed forward migration and
+invalidates outstanding previews.
+
+Import adds independent UUIDs `import_id` and `idempotency_key`, the preview digest
+and expiry, required audit `reason` (at least 8 Unicode characters and at most
+512 UTF-8 bytes, without control characters) and `confirm=true`. The existing five-second
+administrator transaction/shared advisory lock covers re-authorization, current
+binding, reparsing, selection/signature validation, all invitation and expiry
+audits, batch audit and receipt. A local race test processes 500 rows with audits
+and receipt in roughly 1–1.5 seconds; security timeouts are unchanged. Measure target
+latency before broad rollout. No users, roles, approvals or sessions are created
+or changed at import time. Existing verified-login claiming remains authoritative.
+
+Migration 000011 stores immutable completed receipts: scope/administrator,
+SHA-256 idempotency/content/payload digests, expectations, selected row numbers,
+created/skipped/rejected counts, invitation IDs, timestamps and outcome. Raw CSV
+and raw idempotency keys are not retained. A deferred constraint trigger requires
+new CSV invitations to have the matching atomic receipt; the receipt verifies its
+complete invitation set. Historical pre-11 CSV records are not rewritten or
+retrospectively constrained.
+
+Identical retries return the existing receipt without another write, even after
+preview expiration or configuration changes. Changed payloads with reused keys are
+rejected. The UI never retries uncertain writes: it offers Inspect Import Result. A 2xx
+response without a validated receipt contract also requires inspection.
+CSV/drafts remain in identity-scoped memory only. The non-secret receipt UUID alone
+is retained in the `invitation_import` SPA query parameter for refresh/reopen
+recovery; result URLs make protected reads only. Missing receipts are not proof of
+failure: retain the reference, inspect again and review audit history before a new
+write. Failed/rolled-back transactions leave no completed receipt. Results can
+filter the existing invitation list to this import.
+
+Apply migration 000011 through the reviewed operator process before serving CSV
+endpoints: from clean version 10 advance one step, or from 9 advance two. It is
+forward-only, never automatic. The optional production-role proposal includes
+SELECT/INSERT receipt and SELECT signing-seed grants; this does not assert that
+role separation is deployed. Migrations 000001–000010 are unchanged. Implementation
+applies migrations only to disposable test databases.
+
+CSV values render as text. There is no CSV export or spreadsheet-formula output
+path. No email, targeted reminders or SCIM are implemented.
 
 ## Storage and lifecycle
 
@@ -248,8 +331,8 @@ last-administrator eligibility.
 
 Invitations retain personal data for auditability. Establish a reviewed retention
 and redaction policy before a broad rollout; this phase deliberately supplies no
-history-deletion endpoint. Future CSV import needs bounded authoritative parsing,
-preview, idempotency receipts and atomic batch auditing. CSV import, email delivery
-and targeted reminders are not included. This implementation does not prove the live Auth0
+history-deletion endpoint. Phase 10.3E provides bounded CSV parsing, previews,
+idempotency receipts and atomic batch auditing. Email delivery and targeted
+reminders are not included. This implementation does not prove the live Auth0
 tenant's upstream-email trust configuration or automatically approve a deployment
 for production onboarding.
