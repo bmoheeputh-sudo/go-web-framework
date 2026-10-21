@@ -177,26 +177,33 @@ func RevokeIneligibleOIDCSessions(ctx context.Context, tx pgx.Tx, deployment, en
 	return dbError(err)
 }
 
-func (p *OIDCAdmission) eligible(ctx context.Context, tx querier, identity auth.Identity) (oidcPolicy, error) {
+// Common checks may never be overridden by an invitation. The missing approval
+// decision is separate so only a verified normal login can supply a claim.
+func (p *OIDCAdmission) eligibility(ctx context.Context, tx querier, identity auth.Identity) (oidcPolicy, string, error) {
 	if identity.Provider != auth.OIDC || identity.Validate() != nil {
-		return oidcPolicy{}, auth.ErrUnauthenticated
+		return oidcPolicy{}, "", auth.ErrUnauthenticated
 	}
 	policy, err := readOIDCPolicy(ctx, tx, p.deployment, p.environment)
 	if err != nil {
-		return policy, err
+		return policy, "", err
 	}
 	var status string
 	err = tx.QueryRow(ctx, `SELECT status FROM framework.oidc_identity_approvals
- WHERE deployment_id=$1 AND environment=$2 AND issuer=$3 COLLATE "C" AND subject=$4 COLLATE "C"`,
-		p.deployment, p.environment, identity.Issuer, identity.Subject).Scan(&status)
+ WHERE deployment_id=$1 AND environment=$2 AND issuer=$3 COLLATE "C" AND subject=$4 COLLATE "C"`, p.deployment, p.environment, identity.Issuer, identity.Subject).Scan(&status)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return policy, ErrUnavailable
+		return policy, "", ErrUnavailable
 	}
-	if status == "revoked" || (policy.mode == "approved_users_only" && status != "approved") ||
-		!EmailDomainAllowed(policy.domains, identity.Email, identity.EmailVerified) {
-		return policy, auth.ErrUnauthenticated
+	if status == "revoked" || !EmailDomainAllowed(policy.domains, identity.Email, identity.EmailVerified) {
+		return policy, status, auth.ErrUnauthenticated
 	}
-	return policy, nil
+	return policy, status, nil
+}
+func (p *OIDCAdmission) eligible(ctx context.Context, tx querier, identity auth.Identity) (oidcPolicy, error) {
+	policy, status, err := p.eligibility(ctx, tx, identity)
+	if err == nil && policy.mode == "approved_users_only" && status != "approved" {
+		err = auth.ErrUnauthenticated
+	}
+	return policy, err
 }
 
 // Recheck initialized policy during authorization too, notably after waiting for
@@ -244,11 +251,15 @@ func admissionError(err error) error {
 	return auth.ErrStoreUnavailable
 }
 
-func (p *OIDCAdmission) Login(ctx context.Context, identity auth.Identity, write func(context.Context, pgx.Tx) error) error {
+func (p *OIDCAdmission) Login(ctx context.Context, identity auth.Identity, binding auth.Binding, write func(context.Context, pgx.Tx) error) error {
+	if (binding.Purpose != "" && binding.Purpose != "login") ||
+		(binding.Source == "database" && (!binding.MatchesDatabase(binding) || binding.DeploymentID != p.deployment || binding.Environment != p.environment || binding.Issuer != identity.Issuer)) {
+		return auth.ErrUnauthenticated
+	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	err := p.store.withMutation(ctx, func(tx pgx.Tx) error { return nil }, func(tx pgx.Tx) error {
-		policy, err := p.eligible(ctx, tx, identity)
+		policy, approval, err := p.eligibility(ctx, tx, identity)
 		if err != nil {
 			return err
 		}
@@ -256,7 +267,21 @@ func (p *OIDCAdmission) Login(ctx context.Context, identity auth.Identity, write
 		var active bool
 		err = tx.QueryRow(ctx, `SELECT id::text,active,provider FROM framework.users
  WHERE issuer=$1 COLLATE "C" AND subject=$2 COLLATE "C"`, identity.Issuer, identity.Subject).Scan(&id, &active, &provider)
-		if errors.Is(err, pgx.ErrNoRows) {
+		missing := errors.Is(err, pgx.ErrNoRows)
+		if err != nil && !missing {
+			return ErrUnavailable
+		}
+		if !missing && (!active || provider != "oidc") {
+			return auth.ErrUnauthenticated
+		}
+		invitation, err := p.loginInvitation(ctx, tx, identity, binding)
+		if err != nil {
+			return err
+		}
+		if policy.mode == "approved_users_only" && approval != "approved" && invitation == nil {
+			return auth.ErrUnauthenticated
+		}
+		if missing {
 			err = tx.QueryRow(ctx, `INSERT INTO framework.users(issuer,subject,email,email_verified,display_name,provider)
  VALUES($1,$2,$3,$4,$5,'oidc') RETURNING id::text`, identity.Issuer, identity.Subject, identity.Email, identity.EmailVerified, identity.DisplayName).Scan(&id)
 			if err != nil {
@@ -273,15 +298,14 @@ func (p *OIDCAdmission) Login(ctx context.Context, identity auth.Identity, write
 				return err
 			}
 		} else {
-			if err != nil {
-				return ErrUnavailable
-			}
-			if !active || provider != "oidc" {
-				return auth.ErrUnauthenticated
-			}
 			if _, err = tx.Exec(ctx, `UPDATE framework.users SET email=$2,email_verified=$3,display_name=$4,verified_at=clock_timestamp()
  WHERE id=$1`, id, identity.Email, identity.EmailVerified, identity.DisplayName); err != nil {
 				return ErrUnavailable
+			}
+		}
+		if invitation != nil {
+			if err := p.claimInvitation(ctx, tx, identity, id, *invitation, approval == ""); err != nil {
+				return err
 			}
 		}
 		return write(ctx, tx)

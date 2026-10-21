@@ -1,17 +1,24 @@
-# OIDC invitation foundation
+# OIDC invitations and verified login claiming
 
-Phase 10.3B adds storage and administrator-only manual-invitation APIs. It does
-not claim invitations during login, send email, import CSV, create users, change
-approvals or roles, or change authentication/session admission. A pending
-invitation currently grants no access. The supported topology remains one
-security deployment per database because framework users and RBAC are global.
+Phase 10.3B provides storage and administrator-only manual-invitation APIs.
+Phase 10.3C claims eligible invitations during verified normal OIDC login, inside
+the existing admission/provisioning/session transaction. There is no public claim
+endpoint, frontend, CSV import, email delivery or SCIM integration. The supported
+topology remains one security deployment per database because users/RBAC are global.
 
 ## Storage and lifecycle
 
 Migration 000009 creates `framework.oidc_invitations`, a conservative mailbox
 canonicalization function, lifecycle/retention triggers and indexes. No records
 are backfilled. Apply it only through a separately reviewed operator deployment;
-it is not applied at startup. Historical migrations are unchanged.
+it is not applied at startup. Migration 000010 adds invitation-based approval
+provenance. It allows source `invitation`, adds nullable `invitation_id`, and uses
+a composite foreign key to the permanently claimed scope/issuer/subject. A trigger
+requires a claimed invitation and the original inviting administrator for initial
+approval attribution, and prevents changing the invitation reference. Existing
+approvals retain their source and receive only a NULL provenance column. There
+is no backfill, new administrator, provider activation or role change. Historical
+migrations remain unchanged.
 
 An invitation is bound to the server-configured deployment/environment and the
 currently active database-managed OIDC revision, lifecycle generation, activation
@@ -32,16 +39,17 @@ expiration must be future and no more than 30 days away. Reads and status filter
 report elapsed pending rows as expired using database time, without writes or a
 worker. A replacement creation retires a matching elapsed pending row, advances
 its generation and audits that transition atomically before inserting a new UUID.
-The old invitation is never reset. No renewal/edit endpoint exists.
+The old invitation is never reset. No renewal/edit endpoint exists. Expiration is
+a deadline for claiming, not an employment-access expiry: after a claim, remove
+access through the existing exact-identity approval revocation/user controls.
 
 Creation provenance, configuration binding and invitation contents are immutable.
-Only pending rows can transition to revoked, expired or (in a future phase)
-claimed, with generation advancing exactly once. Terminal rows cannot be changed,
+Only pending rows can transition to revoked, expired or claimed, with generation
+advancing exactly once. Terminal rows cannot be changed,
 deleted or truncated through normal SQL. Claim fields must be complete and match
 an active OIDC framework user; claimed identity is permanent. These structural
-constraints do not implement claim authorization: no claim repository method or
-HTTP endpoint is provided in this phase. Approval-source changes are deliberately
-deferred until the claim transaction is implemented.
+constraints complement the access layer's verified-login claim transaction;
+there is deliberately no administrator or public HTTP claim endpoint.
 
 Revoking a pending invitation is not user deactivation or identity-approval
 revocation. In particular, it does not deny someone otherwise eligible under
@@ -114,8 +122,8 @@ has uniqueness protection but no client idempotency receipts yet. A subsequent
 
 ## Deployment
 
-On a separately approved target, check the clean migration version and advance
-one step from version 8 using the existing wrapper:
+On a separately approved target, check the clean migration version. From version
+9, advance one step using the existing wrapper (from version 8, advance two steps):
 
 ```sh
 bash scripts/migrate-framework.sh version
@@ -123,8 +131,9 @@ bash scripts/migrate-framework.sh up 1
 bash scripts/migrate-framework.sh version
 ```
 
-These are operator instructions, not actions performed by implementation/tests.
-Migration 000009 is forward-only. The wrapper refuses rollback before touching
+These are operator instructions, not live actions performed by implementation.
+Tests apply migrations only to disposable PostgreSQL clusters. Migrations 000009
+and 000010 are forward-only. The wrapper refuses rollback before touching
 the journal. Direct `migrate down` is unsupported and deliberately fails, which
 can leave a dirty journal. Use compatible application versions or a reviewed
 forward corrective migration; do not remove invitation/authentication history.
@@ -135,13 +144,73 @@ proposed production-role script also inventories these rights for its restricted
 runtime role; do not infer that privilege separation is already deployed. No
 security-definer functions or request-specific search paths are introduced.
 
+Apply migration 000010 before deploying claim-enabled binaries. The prior
+application remains compatible with its nullable provenance addition; existing
+approved Auth0 administrators keep their exact approvals and roles. Deploy the
+new binaries to every instance before relying on invitations: older instances
+cannot onboard an unapproved invited identity. Restart/redeploy is required to
+load the code, but no provider activation, configuration revision, policy
+bootstrap or session reset is required. There is no automatic migration or
+fallback when storage is unavailable. Missing required invitation infrastructure
+fails the affected login closed; it is not treated as no invitation.
+
+## Normal-login admission
+
+`PostgresStore.policyLogin` passes the private prepared authenticator's immutable
+`auth.Binding` into `OIDCAdmission.Login`. It never guesses a database binding for
+an environment/legacy flow. The existing transaction and advisory lock cover:
+
+1. Verified OIDC identity shape, current policy/domain restrictions and exact
+   issuer/subject approval. Explicit revocation is always a denial.
+2. Exact user lookup. Inactive users and provider collisions are denied before
+   any invitation can help.
+3. Optional invitation lookup, only for verified email on a normal database-bound
+   flow. Scope, issuer, client, revision, activation generation and active revision
+   lifecycle generation must match PostgreSQL's current head. Match the existing
+   conservative mailbox key exactly; local-part case variants and aliases do not
+   match. Elapsed, revoked, claimed, ambiguous and stale invitations cannot help.
+4. Admission: Approved Users Only requires either an existing exact approval or
+   an eligible invitation. Allow All uses its existing eligibility rules without
+   requiring an invitation. An unusable invitation does not independently revoke
+   otherwise eligible access. Domain restrictions apply in both modes.
+5. Create a missing user and assign the current Viewer/User default once. Preserve
+   existing users' roles, including explicit Admin grants. Use verified OIDC profile
+   data, not the invitation's suggested display name.
+6. Permanently claim the invitation to the exact issuer, subject and user ID using
+   a conditional update and database-time expiration. If no approval exists, insert
+   an exact approved identity with source `invitation` and its immutable reference.
+   The original inviting administrator remains the approval's authorization
+   provenance; the verified claimant is the claim/provisioning audit actor.
+   Existing approved records are never overwritten.
+7. Write the normal hashed, revision-bound session using the existing authority,
+   flow-expiration, idle/absolute timeout and transition-deadline safeguards.
+8. Commit once. Audit, claim, provisioning, approval and session failures roll
+   everything back. No automatic retries occur. An indeterminate commit issues
+   no session cookie and returns the existing safe login failure; investigate
+   authoritative records instead of assuming the write did not persist.
+
+Concurrent instances share the advisory lock. Repeated logins find the same exact
+user/approval and do not repeat the role grant or claim. Approval revocation uses
+the same lock and deletes sessions. Existing-session policy enforcement remains
+unchanged: sessions cannot claim invitations to repair a missing/revoked approval.
+
+Verification-only OIDC tests never invoke normal session admission. Explicit
+verification flow purposes are rejected by Login as defense in depth. Failed,
+expired and replayed callbacks cannot claim or provision. A draining provider
+may complete an already-authorized normal login within its original bounds but
+cannot use an invitation bound to the current or retired revision. No initial
+cutover, recovery, last-administrator or provider-transition rules are changed.
+
 ## Trust, privacy and next phase
 
-A CSV/manual mailbox is never proof of identity. Future claiming must require a
-verified email from the trusted active OIDC issuer and bind permanently to its
-exact subject inside the existing provisioning/audit/session transaction. It must
-not run during isolated tests, readiness callbacks, or retired-provider callbacks,
-override revoked approvals, reactivate users, merge by email, or grant Admin.
+A CSV/manual mailbox is never proof of identity. Claiming requires a verified
+mailbox assertion from the trusted active OIDC issuer; identity is permanently
+issuer plus subject. Mailbox equality never selects or merges an existing user.
+A matching mailbox belonging to a different existing subject, or permanently
+claimed by a different subject, blocks the invitation claim and requires an
+identity-specific administrative review. Allow All may still admit a separate
+identity under its independent policy; it never attaches it to the original user.
+This safeguard also survives changes to the original user's current email.
 
 Email reassignment remains a risk even with `email_verified=true`. Before enabling
 claims, review Auth0 tenant/upstream connection verification and mailbox uniqueness
@@ -154,6 +223,7 @@ last-administrator eligibility.
 Invitations retain personal data for auditability. Establish a reviewed retention
 and redaction policy before a broad rollout; this phase deliberately supplies no
 history-deletion endpoint. Future CSV import needs bounded authoritative parsing,
-preview, idempotency receipts and atomic batch auditing. Future claim work must
-add explicit approval provenance and race/revocation tests before invitations can
-authorize onboarding. No frontend or CSV workflow is included here.
+preview, idempotency receipts and atomic batch auditing. No frontend or CSV
+workflow is included here. This implementation does not prove the live Auth0
+tenant's upstream-email trust configuration or automatically approve a deployment
+for production onboarding.

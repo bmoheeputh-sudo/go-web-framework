@@ -11,7 +11,7 @@ import (
 // configuration. Its transaction includes admission and the credential write.
 // Verification-only flows never call addSession and therefore never provision.
 type OIDCAccessPolicy interface {
-	Login(context.Context, Identity, func(context.Context, pgx.Tx) error) error
+	Login(context.Context, Identity, Binding, func(context.Context, pgx.Tx) error) error
 	Session(context.Context, func(context.Context, pgx.Tx) (Identity, error)) (Identity, error)
 }
 
@@ -30,7 +30,13 @@ func (s *PostgresStore) transactionStore(tx pgx.Tx) *PostgresStore {
 
 func (s *PostgresStore) policyLogin(ctx context.Context, identity Identity, expires time.Time, previous string, bound *databaseBoundStore) (string, error) {
 	var token string
-	err := s.policy.Login(ctx, identity, func(ctx context.Context, tx pgx.Tx) error {
+	// Only the private prepared database store supplies this binding. Never
+	// infer one from the current head or request parameters for legacy logins.
+	var binding Binding
+	if bound != nil {
+		binding = bound.binding
+	}
+	err := s.policy.Login(ctx, identity, binding, func(ctx context.Context, tx pgx.Tx) error {
 		var err error
 		store := s.transactionStore(tx)
 		if bound == nil {

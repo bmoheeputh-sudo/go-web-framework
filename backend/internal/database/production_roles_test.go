@@ -122,7 +122,7 @@ func TestProposedProductionRolesInDisposableCluster(t *testing.T) {
  (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='framework' AND c.relkind='S')`).Scan(&functionCount, &triggerCount, &sequenceCount); err != nil {
 		t.Fatal(err)
 	}
-	if functionCount != 11 || triggerCount != 25 || sequenceCount != 1 {
+	if functionCount != 12 || triggerCount != 26 || sequenceCount != 1 {
 		t.Fatalf("review framework functions/triggers/sequences: %d/%d/%d", functionCount, triggerCount, sequenceCount)
 	}
 	var actor string

@@ -227,7 +227,7 @@ func TestOIDCAdmissionAtomicProvisioning(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results <- admission.Login(context.Background(), identity, func(context.Context, pgx.Tx) error { return nil })
+			results <- admission.Login(context.Background(), identity, auth.Binding{}, func(context.Context, pgx.Tx) error { return nil })
 		}()
 	}
 	wg.Wait()
@@ -242,7 +242,7 @@ func TestOIDCAdmissionAtomicProvisioning(t *testing.T) {
 		t.Fatal("concurrent provisioning", err)
 	}
 	identity.Subject = "rollback"
-	if err := admission.Login(context.Background(), identity, func(context.Context, pgx.Tx) error { return errors.New("synthetic session failure") }); err == nil {
+	if err := admission.Login(context.Background(), identity, auth.Binding{}, func(context.Context, pgx.Tx) error { return errors.New("synthetic session failure") }); err == nil {
 		t.Fatal("failed session accepted")
 	}
 	if err := f.owner.QueryRow(context.Background(), `SELECT count(*) FROM framework.users WHERE subject='rollback'`).Scan(&users); err != nil || users != 0 {
@@ -252,7 +252,7 @@ func TestOIDCAdmissionAtomicProvisioning(t *testing.T) {
 		t.Fatal(err)
 	}
 	called := false
-	if err := admission.Login(context.Background(), identity, func(context.Context, pgx.Tx) error { called = true; return nil }); err == nil || called {
+	if err := admission.Login(context.Background(), identity, auth.Binding{}, func(context.Context, pgx.Tx) error { called = true; return nil }); err == nil || called {
 		t.Fatal("audit failure did not block session")
 	}
 	if err := f.owner.QueryRow(context.Background(), `SELECT count(*) FROM framework.users WHERE subject='rollback'`).Scan(&users); err != nil || users != 0 {
@@ -338,7 +338,7 @@ func TestOIDCAdmissionSerializesRevocationAndSessionCreation(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	loginDone := make(chan error, 1)
 	go func() {
-		loginDone <- admission.Login(context.Background(), identity, func(ctx context.Context, tx pgx.Tx) error {
+		loginDone <- admission.Login(context.Background(), identity, auth.Binding{}, func(ctx context.Context, tx pgx.Tx) error {
 			close(entered)
 			<-release
 			hash := sha256.Sum256([]byte(oauth2.GenerateVerifier()))
@@ -382,7 +382,7 @@ func TestOIDCAdmissionSerializesRevocationAndSessionCreation(t *testing.T) {
 		t.Fatal("revocation retained session", err)
 	}
 	called := false
-	if err := admission.Login(context.Background(), identity, func(context.Context, pgx.Tx) error { called = true; return nil }); !errors.Is(err, auth.ErrUnauthenticated) || called {
+	if err := admission.Login(context.Background(), identity, auth.Binding{}, func(context.Context, pgx.Tx) error { called = true; return nil }); !errors.Is(err, auth.ErrUnauthenticated) || called {
 		t.Fatal("revoked login reached credential write", err)
 	}
 }

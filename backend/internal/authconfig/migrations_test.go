@@ -46,6 +46,12 @@ func TestOIDCInvitationMigrationRollbackPolicy(t *testing.T) {
 	}
 }
 
+func TestOIDCInvitationApprovalMigrationRollbackPolicy(t *testing.T) {
+	for _, name := range []string{"empty", "populated"} {
+		t.Run(name, func(t *testing.T) { testAuthConfigurationRollbackPolicy(t, name == "populated", 10) })
+	}
+}
+
 func testAuthConfigurationRollbackPolicy(t *testing.T, populated bool, targetVersion int) {
 	t.Helper()
 	cli, err := exec.LookPath("migrate")
@@ -211,6 +217,15 @@ func testAuthConfigurationRollbackPolicy(t *testing.T, populated bool, targetVer
 		var invitations int
 		if err := pool.QueryRow(ctx, `SELECT version,dirty,'public.schema_migrations'::regclass::oid,(SELECT count(*) FROM framework.oidc_invitations) FROM public.schema_migrations`).Scan(&version, &dirty, &after, &invitations); err != nil || version != 9 || dirty || after != journal || invitations != 0 || snapshot() != oldSnapshot {
 			t.Fatal("invitation migration changed existing state or migration history", err)
+		}
+	}
+	if targetVersion >= 10 {
+		oldSnapshot := snapshot()
+		if err := run("up", "1"); err != nil {
+			t.Fatal("isolated version 10 migration failed", err)
+		}
+		if err := pool.QueryRow(ctx, `SELECT version,dirty,'public.schema_migrations'::regclass::oid FROM public.schema_migrations`).Scan(&version, &dirty, &after); err != nil || version != 10 || dirty || after != journal || snapshot() != oldSnapshot {
+			t.Fatal("invitation approval migration changed existing authentication state", err)
 		}
 	}
 	before := snapshot()
